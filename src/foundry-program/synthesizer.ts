@@ -8,7 +8,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
@@ -90,6 +90,7 @@ export interface DelegationChildrenValidationContext {
   actionNames: Iterable<string>;
   channelNames: Iterable<string>;
   schemaPaths: Iterable<string>;
+  documents?: DocumentsDescriptor;
 }
 
 export interface DocumentsValidationContext {
@@ -320,6 +321,7 @@ export function synthesizeProgramSpecFromDomain(
       actionNames: collectGeneratedActionNamesForDelegationValidation(transitions, completion, stages[0]?.slug ?? ''),
       channelNames: collectGeneratedChannelNamesForDelegationValidation(entryChannel),
       schemaPaths: collectParentSchemaPathsForDelegationValidation(stages, entryChannel, initialEntryPath, transitions, completion, documents),
+      documents,
     });
   }
   if (rawDocuments !== undefined && documents !== undefined) {
@@ -539,7 +541,7 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsProjection(projection, documents, modeNames);
-  applyDelegationProjection(projection, delegationChildren, modeNames);
+  applyDelegationProjection(projection, delegationChildren, modeNames, documents);
   spec.projection = projection;
 
   const prompts: MutableRecord = {
@@ -555,7 +557,7 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsPromptsGuidance(prompts, documents);
-  applyDelegationPrompts(prompts, delegationChildren);
+  applyDelegationPrompts(prompts, delegationChildren, documents);
   spec.prompts = prompts;
 
   spec.ingestion = {
@@ -579,7 +581,7 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
   applyDocumentsReactions(recordField(spec, 'reactions'), documents);
-  applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren);
+  applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren, documents);
 
   spec.channels = {
     ...recordField(spec, 'channels'),
@@ -614,7 +616,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsActions(actionMap, documents);
   applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
-  applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource);
+  applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource, documents);
   applyConfirmationLoopPairing(spec, confirmationLoops);
 
   const schema = recordField(spec, 'schema');
@@ -659,12 +661,12 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsSchema(schema, documents);
-  applyDelegationSchema(schema, delegationChildren);
+  applyDelegationSchema(schema, delegationChildren, documents);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
-  applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren);
+  applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -1041,6 +1043,7 @@ function applyDelegationChannel(
 function applyDelegationSchema(
   schema: MutableRecord,
   children: DelegationChildDescriptor[],
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
     const base = delegationStateBase(child);
@@ -1064,6 +1067,27 @@ function applyDelegationSchema(
     schema[`${base}.degrade_reason`] = 'string';
     schema[`${base}.requested`] = 'boolean';
     schema[`${base}.request`] = 'object';
+    const fanOut = documentFanOutDescriptor(child, documents);
+    if (fanOut) {
+      const indexPath = fanOut.index_path ?? `${child.stage}.fan_out.index`;
+      schema[indexPath] = 'number';
+      schema[fanOut.completion_guard] = 'boolean';
+      schema[fanOut.result_path] = 'object';
+      schema[`${fanOut.result_path}.*`] = 'object';
+      schema[`${fanOut.result_path}.*.document_id`] = 'string';
+      schema[`${fanOut.result_path}.*.document_name`] = 'string';
+      schema[`${fanOut.result_path}.*.source_index`] = 'number';
+      schema[`${fanOut.result_path}.*.status`] = 'string';
+      schema[`${fanOut.result_path}.*.sessionId`] = 'string';
+      schema[`${fanOut.result_path}.*.rounds`] = 'number';
+      schema[`${fanOut.result_path}.*.mode`] = 'string';
+      schema[`${fanOut.result_path}.*.reason`] = 'string';
+      schema[`${fanOut.result_path}.*.optional`] = 'boolean';
+      schema[`${fanOut.result_path}.*.result`] = 'object';
+      for (const [field, type] of delegationResultFields(child)) {
+        schema[`${fanOut.result_path}.*.${field}`] = type;
+      }
+    }
   }
   // Base paths for the `system_query_result` continuation payload. The skeleton
   // declares sub-paths (inputs.query_meta.*, inputs.query_result.*); the ingestion
@@ -1116,19 +1140,28 @@ function applyDelegationActionPreconditions(
   modes: MutableRecord,
   children: DelegationChildDescriptor[],
   transitionActionsBySource: Map<string, TransitionAction[]>,
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
     const mode = recordField(modes, child.stage);
+    const fanOut = documentFanOutDescriptor(child, documents);
     appendModePrecondition(
       mode,
       delegationRequestActionName(child),
       { kind: 'FieldFalsy', path: `${delegationStateBase(child)}.requested` },
     );
+    if (fanOut) {
+      appendModePrecondition(
+        mode,
+        delegationRequestActionName(child),
+        { kind: 'FieldFalsy', path: fanOut.completion_guard },
+      );
+    }
     for (const action of transitionActionsBySource.get(child.stage) ?? []) {
       appendModePrecondition(
         mode,
         action.name,
-        { kind: 'FieldTruthy', path: `${delegationStateBase(child)}.settled` },
+        { kind: 'FieldTruthy', path: fanOut?.completion_guard ?? `${delegationStateBase(child)}.settled` },
       );
     }
   }
@@ -1137,8 +1170,42 @@ function applyDelegationActionPreconditions(
 function applyDelegationReactions(
   reactions: MutableRecord,
   children: DelegationChildDescriptor[],
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
+    const fanOut = documentFanOutDescriptor(child, documents);
+    if (fanOut) {
+      const base = delegationStateBase(child);
+      reactions[documentFanOutAdvanceReactionName(child)] = {
+        event: 'AfterRound',
+        watch: [],
+        write_scope: [
+          fanOut.index_path ?? `${child.stage}.fan_out.index`,
+          fanOut.completion_guard,
+          `${fanOut.result_path}.*`,
+          `${base}.settled`,
+          `${base}.degraded`,
+          `${base}.degrade_reason`,
+          `${base}.requested`,
+          fanOut.current_document,
+          `${fanOut.current_document}.id`,
+          `${fanOut.current_document}.name`,
+          `${fanOut.current_document}.mime_type`,
+          `${fanOut.current_document}.size`,
+          `${fanOut.current_document}.text`,
+          `${fanOut.current_document}.char_count`,
+          `${fanOut.current_document}.source_index`,
+          `${fanOut.current_document}.extraction_kind`,
+          `${fanOut.current_document}.provenance`,
+          `${fanOut.current_document}.provenance.file_id`,
+          `${fanOut.current_document}.provenance.name`,
+          `${fanOut.current_document}.provenance.mime_type`,
+          `${fanOut.current_document}.provenance.size`,
+          `${fanOut.current_document}.provenance.source_index`,
+        ],
+      };
+      continue;
+    }
     const base = delegationStateBase(child);
     reactions[delegationSettleReactionName(child)] = {
       event: 'AfterRound',
@@ -1183,12 +1250,15 @@ function applyDelegationProjection(
   projection: MutableRecord,
   children: DelegationChildDescriptor[],
   modeNames: string[],
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
     const hostIndex = modeNames.indexOf(child.stage);
     const resultPaths = delegationResultProjectionPaths(child);
+    const fanOutPaths = documentFanOutProjectionPaths(child, documents);
     const hostPaths = [
       ...resultPaths,
+      ...fanOutPaths,
       `${delegationStateBase(child)}.settled`,
       `${delegationStateBase(child)}.degraded`,
       `${delegationStateBase(child)}.degrade_reason`,
@@ -1202,7 +1272,7 @@ function applyDelegationProjection(
     for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
       const downstreamProjection = recordField(projection, modeName);
       const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
-      downstreamProjection.include = unique([...include, ...resultPaths]);
+      downstreamProjection.include = unique([...include, ...resultPaths, ...fanOutPaths]);
       if (!Array.isArray(downstreamProjection.exclude)) {
         downstreamProjection.exclude = [];
       }
@@ -1213,10 +1283,14 @@ function applyDelegationProjection(
 function applyDelegationPrompts(
   prompts: MutableRecord,
   children: DelegationChildDescriptor[],
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
-    prompts[child.stage] = isManifestReusedDelegationChild(child)
+    const fanOut = documentFanOutDescriptor(child, documents);
+    prompts[child.stage] = fanOut
+      ? `${existing}For each uploaded document, call ${delegationRequestActionName(child)} once for ${fanOut.current_document}. The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
+      : isManifestReusedDelegationChild(child)
       ? `${existing}Call ${delegationRequestActionName(child)} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
       : `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
   }
@@ -1225,16 +1299,24 @@ function applyDelegationPrompts(
 function applyDelegationGuidance(
   guidance: MutableRecord,
   children: DelegationChildDescriptor[],
+  documents?: DocumentsDescriptor,
 ): void {
   for (const child of children) {
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
+    const fanOut = documentFanOutDescriptor(child, documents);
     guidance[child.stage] = [
       ...existing,
-      isManifestReusedDelegationChild(child)
+      ...(fanOut ? [
+        `Call ${delegationRequestActionName(child)} once for the projected ${fanOut.current_document}; deterministic payload enrichment supplies only that document slice.`,
+        `Repeat ${delegationRequestActionName(child)} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
+        `When ${fanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
+      ] : [
+        isManifestReusedDelegationChild(child)
         ? `Call ${delegationRequestActionName(child)} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
         : `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
-      `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
-      `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
+        `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
+        `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
+      ]),
     ];
   }
 }
@@ -1445,18 +1527,20 @@ function applyDocumentsReactions(
   reactions[documentsSettleReactionName()] = {
     event: 'AfterRound',
     watch: [],
-    write_scope: [
-      documentsSourceReadyPath(documents),
-      `${documents.result_path}.status`,
-      `${documents.result_path}.full_text`,
-      `${documents.result_path}.documents`,
-      `${documents.result_path}.current_document`,
-      `${documents.result_path}.char_count`,
-      `${documents.result_path}.file_count`,
-      `${documents.result_path}.document_count`,
-      `${documents.result_path}.files_json`,
-      `${documents.result_path}.extraction_kind`,
-    ],
+    write_scope: documents.required
+      ? [documentsSourceReadyPath(documents)]
+      : [
+          documentsSourceReadyPath(documents),
+          `${documents.result_path}.status`,
+          `${documents.result_path}.full_text`,
+          `${documents.result_path}.documents`,
+          `${documents.result_path}.current_document`,
+          `${documents.result_path}.char_count`,
+          `${documents.result_path}.file_count`,
+          `${documents.result_path}.document_count`,
+          `${documents.result_path}.files_json`,
+          `${documents.result_path}.extraction_kind`,
+        ],
   };
 }
 
@@ -1614,6 +1698,62 @@ function documentsIndexedDocumentPath(documents: DocumentsDescriptor, index: num
   return `${documentsCollectionPath(documents)}.${String(index)}`;
 }
 
+function documentFanOutDescriptor(
+  child: DelegationChildDescriptor,
+  documents?: DocumentsDescriptor,
+): DelegationDocumentFanOutDescriptor | undefined {
+  if (!documents || !child.fan_out) {
+    return undefined;
+  }
+  return {
+    ...child.fan_out,
+    index_path: child.fan_out.index_path ?? `${child.stage}.fan_out.index`,
+  };
+}
+
+function childHasDocumentFanOut(child: DelegationChildDescriptor, documents?: DocumentsDescriptor): boolean {
+  return documentFanOutDescriptor(child, documents) !== undefined;
+}
+
+function documentFanOutCandidateSupported(
+  child: Record<string, unknown>,
+  documents?: DocumentsDescriptor,
+): boolean {
+  if (!documents || documents.required !== true || !isRecord(child.fan_out)) {
+    return false;
+  }
+  return child.fan_out.source === documentsCollectionPath(documents) &&
+    child.fan_out.current_document === documentsCurrentDocumentPath(documents) &&
+    typeof child.fan_out.result_path === 'string' &&
+    child.fan_out.result_path.length > 0 &&
+    typeof child.fan_out.completion_guard === 'string' &&
+    child.fan_out.completion_guard.length > 0;
+}
+
+function documentFanOutProjectionPaths(child: DelegationChildDescriptor, documents?: DocumentsDescriptor): string[] {
+  const fanOut = documentFanOutDescriptor(child, documents);
+  if (!fanOut) {
+    return [];
+  }
+  return unique([
+    fanOut.index_path ?? `${child.stage}.fan_out.index`,
+    fanOut.completion_guard,
+    fanOut.result_path,
+    `${fanOut.result_path}.*`,
+    `${fanOut.result_path}.*.document_id`,
+    `${fanOut.result_path}.*.document_name`,
+    `${fanOut.result_path}.*.source_index`,
+    `${fanOut.result_path}.*.status`,
+    `${fanOut.result_path}.*.sessionId`,
+    `${fanOut.result_path}.*.rounds`,
+    `${fanOut.result_path}.*.mode`,
+    `${fanOut.result_path}.*.reason`,
+    `${fanOut.result_path}.*.optional`,
+    `${fanOut.result_path}.*.result`,
+    ...delegationResultFields(child).map(([field]) => `${fanOut.result_path}.*.${field}`),
+  ]);
+}
+
 function normalizeDocumentSliceDelegation(
   delegation: DelegationDescriptor,
   documents: DocumentsDescriptor | undefined,
@@ -1665,7 +1805,9 @@ function applyDocumentSliceTransitionActions(
   if (!documents) {
     return;
   }
-  const slicedChildren = children.filter((child) => childUsesCurrentDocumentSlice(child, documents));
+  const slicedChildren = children.filter((child) =>
+    !childHasDocumentFanOut(child, documents) &&
+    childUsesCurrentDocumentSlice(child, documents));
   for (const [index, child] of slicedChildren.entries()) {
     const transition = transitionActions.find((action) => action.target === child.stage);
     if (!transition) {
@@ -1769,6 +1911,10 @@ function delegationRequestActionName(child: DelegationChildDescriptor): string {
 
 function delegationSettleReactionName(child: DelegationChildDescriptor): string {
   return `settle_${child.id}_delegation`;
+}
+
+function documentFanOutAdvanceReactionName(child: DelegationChildDescriptor): string {
+  return `advance_${safeIdentifier(child.id)}_document_fan_out`;
 }
 
 function delegationStateBase(child: DelegationChildDescriptor): string {
@@ -2716,6 +2862,9 @@ function renderHandlersSource(
   const usesDelegationHandlers = options.includeReactionHandlers && options.delegationChildren.length > 0;
   const usesDocumentHandlers = options.documents !== undefined;
   const usesDocumentReactionHandlers = options.includeReactionHandlers && options.documents !== undefined;
+  const usesDocumentFanOutHandlers = options.includeReactionHandlers &&
+    options.documents !== undefined &&
+    options.delegationChildren.some((child) => childHasDocumentFanOut(child, options.documents));
   const usesDocxExtractor = documentsDemandsSelfContainedDocx(options.documents);
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
@@ -2801,9 +2950,9 @@ ${fieldResolvers}
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
   const reactionImport = options.includeReactionHandlers
-    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers ? 'ReactionResult, ' : ''}`
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers || usesDocumentFanOutHandlers ? 'ReactionResult, ' : ''}`
     : '';
-  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers || usesDocumentFanOutHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
@@ -2811,7 +2960,7 @@ ${fieldResolvers}
     ? renderConfirmationLoopReactionEntries(confirmationLoops, options.collectionLifecycle)
     : '';
   const delegationReactionEntries = usesDelegationHandlers
-    ? renderDelegationReactionEntries(options.delegationChildren)
+    ? renderDelegationReactionEntries(options.delegationChildren, options.documents)
     : '';
   const documentReactionEntries = usesDocumentReactionHandlers && options.documents
     ? renderDocumentReactionEntries(options.documents)
@@ -2885,7 +3034,7 @@ function reasoningOutputConformant(
     : '';
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
-${usesIndexedCollectionLifecycle || usesConfirmationLoopHandlers ? "import { reconstructArray } from '@simodelne/pgas-server/plugin.js';\n" : ''}import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
+${usesIndexedCollectionLifecycle || usesConfirmationLoopHandlers || usesDelegationHandlers ? "import { reconstructArray } from '@simodelne/pgas-server/plugin.js';\n" : ''}import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
 ${contractsImport}
 ${docxExtractorImportBlock}${stageImports ? `${stageImports}\n` : ''}
 
@@ -3616,9 +3765,33 @@ function renderConfirmationLoopReactionEntries(
   }).join('');
 }
 
-function renderDelegationReactionEntries(children: DelegationChildDescriptor[]): string {
+function renderDelegationReactionEntries(children: DelegationChildDescriptor[], documents?: DocumentsDescriptor): string {
   return children.map((child) => {
     const base = delegationStateBase(child);
+    const fanOut = documentFanOutDescriptor(child, documents);
+    if (fanOut) {
+      return `,
+  [${tsString(documentFanOutAdvanceReactionName(child))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return advanceDocumentDelegationFanOut(
+      snapshot,
+      {
+        documentsPath: ${tsString(fanOut.source)},
+        currentDocumentPath: ${tsString(fanOut.current_document)},
+        readyPath: ${tsString(documentsSourceReadyPath(documents as DocumentsDescriptor))},
+        resultPath: ${tsString(child.result_path)},
+        requestedPath: ${tsString(`${base}.requested`)},
+        settledPath: ${tsString(`${base}.settled`)},
+        degradedPath: ${tsString(`${base}.degraded`)},
+        degradeReasonPath: ${tsString(`${base}.degrade_reason`)},
+        indexPath: ${tsString(fanOut.index_path ?? `${child.stage}.fan_out.index`)},
+        completePath: ${tsString(fanOut.completion_guard)},
+        resultsPath: ${tsString(fanOut.result_path)},
+      },
+    );
+  }]`;
+    }
     return `,
   [${tsString(delegationSettleReactionName(child))}, (snapshot, trigger, mode) => {
     void trigger;
@@ -3636,6 +3809,20 @@ function renderDelegationReactionEntries(children: DelegationChildDescriptor[]):
 
 function renderDelegationReactionHelper(): string {
   return `
+
+interface DocumentDelegationFanOutConfig {
+  documentsPath: string;
+  currentDocumentPath: string;
+  readyPath: string;
+  resultPath: string;
+  requestedPath: string;
+  settledPath: string;
+  degradedPath: string;
+  degradeReasonPath: string;
+  indexPath: string;
+  completePath: string;
+  resultsPath: string;
+}
 
 function settleDelegationResult(
   snapshot: ReadonlyMap<string, unknown>,
@@ -3679,6 +3866,143 @@ function settleDelegationResult(
       { op: 'MSet' as const, path: degradeReasonPath, value: typeof reason === 'string' && reason.length > 0 ? reason : status },
     ],
   };
+}
+
+function advanceDocumentDelegationFanOut(
+  snapshot: ReadonlyMap<string, unknown>,
+  config: DocumentDelegationFanOutConfig,
+): ReactionResult | undefined {
+  if (snapshot.get(config.completePath) === true) {
+    return undefined;
+  }
+  if (snapshot.get(config.readyPath) !== true) {
+    return undefined;
+  }
+  let documents: unknown[];
+  try {
+    documents = reconstructArray(Object.fromEntries(snapshot), config.documentsPath);
+  } catch {
+    documents = [];
+  }
+  const index = fanOutIndex(snapshot.get(config.indexPath));
+  if (documents.length === 0 || index >= documents.length) {
+    return { mutations: [{ op: 'MSet' as const, path: config.completePath, value: true }] };
+  }
+  if (snapshot.get(config.requestedPath) !== true) {
+    const current = snapshotRecord(snapshot, config.currentDocumentPath);
+    if (!current || current.source_index !== index) {
+      return {
+        mutations: documentSliceMutations(config.currentDocumentPath, documentAt(documents, index) ?? {}),
+      };
+    }
+    return undefined;
+  }
+  const result = snapshotRecord(snapshot, config.resultPath);
+  const status = typeof result?.status === 'string'
+    ? result.status
+    : snapshot.get(\`\${config.resultPath}.status\`);
+  if (status !== 'complete' && status !== 'failed' && status !== 'declined') {
+    return undefined;
+  }
+  const document = snapshotRecord(snapshot, config.currentDocumentPath) ?? documentAt(documents, index) ?? {};
+  const documentId = stringField(document, 'id') || \`doc\${String(index + 1)}\`;
+  const key = safeFanOutKey(documentId, index);
+  const nextIndex = index + 1;
+  const nextDocument = documentAt(documents, nextIndex);
+  const degraded = status === 'failed' || status === 'declined';
+  const reason = typeof result?.reason === 'string' && result.reason.length > 0 ? result.reason : String(status);
+  const stored = {
+    ...(result ?? {}),
+    document_id: documentId,
+    document_name: stringField(document, 'name'),
+    source_index: index,
+    degraded,
+  };
+  const mutations: ReactionResult['mutations'] = [
+    { op: 'MSet' as const, path: \`\${config.resultsPath}.\${key}\`, value: stored },
+    { op: 'MSet' as const, path: config.indexPath, value: nextIndex },
+    { op: 'MSet' as const, path: config.requestedPath, value: false },
+    { op: 'MSet' as const, path: config.settledPath, value: nextDocument === undefined },
+    { op: 'MSet' as const, path: config.degradedPath, value: degraded },
+    { op: 'MSet' as const, path: config.degradeReasonPath, value: degraded ? reason : '' },
+  ];
+  if (nextDocument === undefined) {
+    mutations.push({ op: 'MSet' as const, path: config.completePath, value: true });
+  } else {
+    mutations.push(
+      ...documentSliceMutations(config.currentDocumentPath, nextDocument),
+      { op: 'MSet' as const, path: config.completePath, value: false },
+    );
+  }
+  return { mutations };
+}
+
+function documentSliceMutations(path: string, document: Record<string, unknown>): ReactionResult['mutations'] {
+  const provenance = snapshotLikeRecord(document.provenance);
+  return [
+    { op: 'MSet' as const, path, value: document },
+    { op: 'MSet' as const, path: \`\${path}.id\`, value: stringField(document, 'id') },
+    { op: 'MSet' as const, path: \`\${path}.name\`, value: stringField(document, 'name') },
+    { op: 'MSet' as const, path: \`\${path}.mime_type\`, value: stringField(document, 'mime_type') },
+    { op: 'MSet' as const, path: \`\${path}.size\`, value: numberField(document, 'size') },
+    { op: 'MSet' as const, path: \`\${path}.text\`, value: stringField(document, 'text') },
+    { op: 'MSet' as const, path: \`\${path}.char_count\`, value: numberField(document, 'char_count') },
+    { op: 'MSet' as const, path: \`\${path}.source_index\`, value: numberField(document, 'source_index') },
+    { op: 'MSet' as const, path: \`\${path}.extraction_kind\`, value: stringField(document, 'extraction_kind') },
+    { op: 'MSet' as const, path: \`\${path}.provenance\`, value: provenance },
+    { op: 'MSet' as const, path: \`\${path}.provenance.file_id\`, value: stringField(provenance, 'file_id') },
+    { op: 'MSet' as const, path: \`\${path}.provenance.name\`, value: stringField(provenance, 'name') },
+    { op: 'MSet' as const, path: \`\${path}.provenance.mime_type\`, value: stringField(provenance, 'mime_type') },
+    { op: 'MSet' as const, path: \`\${path}.provenance.size\`, value: numberField(provenance, 'size') },
+    { op: 'MSet' as const, path: \`\${path}.provenance.source_index\`, value: numberField(provenance, 'source_index') },
+  ];
+}
+
+function fanOutIndex(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function documentAt(documents: unknown[], index: number): Record<string, unknown> | undefined {
+  const document = documents[index];
+  return document && typeof document === 'object' && !Array.isArray(document)
+    ? document as Record<string, unknown>
+    : undefined;
+}
+
+function snapshotRecord(snapshot: ReadonlyMap<string, unknown>, path: string): Record<string, unknown> | undefined {
+  const direct = snapshot.get(path);
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct as Record<string, unknown>;
+  }
+  const prefix = \`\${path}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of snapshot) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function stringField(record: Record<string, unknown>, field: string): string {
+  const value = record[field];
+  return typeof value === 'string' ? value : '';
+}
+
+function numberField(record: Record<string, unknown>, field: string): number {
+  const value = record[field];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function snapshotLikeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function safeFanOutKey(documentId: string, index: number): string {
+  const normalized = documentId.replace(/[^A-Za-z0-9_-]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return normalized.length > 0 ? normalized : \`doc\${String(index + 1)}\`;
 }`;
 }
 
@@ -4333,6 +4657,14 @@ function renderSmokeTestSource(
   delegationChildren: DelegationChildDescriptor[] = [],
   documents?: DocumentsDescriptor,
 ): string {
+  const documentFanOutSmokeChild = documents
+    ? delegationChildren.find((child) =>
+      childHasDocumentFanOut(child, documents) &&
+      (child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent'))
+    : undefined;
+  if (documents && documentFanOutSmokeChild) {
+    return renderDocumentFanOutDelegationSmokeTestSource(slug, name, entryChannel, documents, documentFanOutSmokeChild, transitionActions);
+  }
   if (documents) {
     return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions);
   }
@@ -4432,6 +4764,289 @@ ${hasContractResponses
     : `function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }`}
+`;
+}
+
+function renderDocumentFanOutDelegationSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  documents: DocumentsDescriptor,
+  child: DelegationChildDescriptor,
+  transitionActions: TransitionAction[],
+): string {
+  const parentPascal = toPascalCase(slug);
+  const childSlug = delegationTargetSpec(child);
+  const childPascal = toPascalCase(childSlug);
+  const childStage = childResultStage(child);
+  const childCompleteAction = `complete_${childStage}`;
+  const backedResearch = child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector';
+  const childCompleteChannel = backedResearch ? 'stage_output' : 'widget_output';
+  const childCompletePayload = backedResearch
+    ? `{ __stage_runtime: { now_iso: '2026-07-26T00:00:00.000Z', random: 0.25 } }`
+    : `{
+          result_json: JSON.stringify({ summary: 'reviewed current document', seeded_topic: doc.content, document_id: doc.id }),
+          items_json: JSON.stringify(['reviewed-' + doc.id]),
+          summary: 'reviewed current document',
+          seeded_topic: doc.content,
+          document_id: doc.id,
+        }`;
+  const uploadTransition = transitionActions.find((action) => action.source === documents.stage);
+  const uploadTransitionAction = uploadTransition?.name ?? `complete_${safeIdentifier(documents.stage)}`;
+  const uploadTransitionChannel = uploadTransition?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const uploadTransitionPayload = uploadTransition?.archetype === 'llm-reasoning'
+    ? `{
+          result_json: JSON.stringify({ document_source_ready: true }),
+          items_json: JSON.stringify(['document-source-ready']),
+        }`
+    : `{ __stage_runtime: { now_iso: '2026-07-26T00:00:00.000Z', random: 0.25 } }`;
+  const fanOutTransition = transitionActions.find((action) => action.source === child.stage);
+  const fanOutTransitionAction = fanOutTransition?.name ?? `complete_${safeIdentifier(child.stage)}`;
+  const fanOutTransitionChannel = fanOutTransition?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const fanOutTransitionPayload = fanOutTransition?.archetype === 'llm-reasoning'
+    ? `{
+          result_json: JSON.stringify({ reviewed_document_count: 5, status: 'complete' }),
+          items_json: JSON.stringify(['five document review delegations']),
+        }`
+    : `{ __stage_runtime: { now_iso: '2026-07-26T00:00:00.000Z', random: 0.25 } }`;
+  const fanOut = documentFanOutDescriptor(child, documents);
+  if (!fanOut) {
+    throw new Error('document fan-out smoke requires a document fan_out child');
+  }
+  const base = delegationStateBase(child);
+  const scriptEntries = `scripted(effect('begin_work', {})),
+        scripted(effect('${DOCUMENT_REQUEST_ACTION}', {})),
+        scripted(effect('${DOCUMENT_INGEST_ACTION}', {}, 'stage_output')),
+        scripted(effect(${tsString(uploadTransitionAction)}, ${uploadTransitionPayload}, ${tsString(uploadTransitionChannel)})),
+        ...fixtures.flatMap((doc) => [
+          scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'review-current-document' } }, ${tsString(delegationChannelName(child))})),
+          scripted(effect('begin_work', {}), doc.content),
+          scripted(effect(${tsString(childCompleteAction)}, ${childCompletePayload}, ${tsString(childCompleteChannel)}), doc.content),
+        ]),
+        scripted(effect(${tsString(fanOutTransitionAction)}, ${fanOutTransitionPayload}, ${tsString(fanOutTransitionChannel)})),`;
+  return `import { File } from 'node:buffer';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${childPascal}ProgramEntry } from '../src/programs/${childSlug}/registration.js';
+
+describe('generated document fan-out review smoke', () => {
+  it('runs five document review delegations through the route for ${name}', async () => {
+    const fixtures = [
+      { id: 'doc1', name: 'doc-1.txt', content: 'Document one material contract text.' },
+      { id: 'doc2', name: 'doc-2.txt', content: 'Document two diligence exhibit text.' },
+      { id: 'doc3', name: 'doc-3.txt', content: 'Document three lease schedule text.' },
+      { id: 'doc4', name: 'doc-4.txt', content: 'Document four financial statement text.' },
+      { id: 'doc5', name: 'doc-5.txt', content: 'Document five board consent text.' },
+    ];
+    const result = await runDocumentFanOutScenario(fixtures, [
+      ${scriptEntries}
+    ]);
+
+    const fanOutResults = fanOutResultsAt(result.final.domain, ${tsString(fanOut.result_path)});
+    if (Object.keys(fanOutResults).length === 0) {
+      throw new Error(\`empty fan-out results: \${JSON.stringify(result.final.domain)}\`);
+    }
+    expect(Object.keys(fanOutResults).sort()).toEqual(fixtures.map((fixture) => fixture.id).sort());
+    const sessionIds = new Set<string>();
+    for (const fixture of fixtures) {
+      const review = fanOutResults[fixture.id];
+      expect(isRecord(review)).toBe(true);
+      expect(review.document_id).toBe(fixture.id);
+      expect(review.document_name).toBe(fixture.name);
+      expect(review.seeded_topic).toBe(fixture.content);
+      expect(review.status).toBe('complete');
+      expect(typeof review.sessionId).toBe('string');
+      sessionIds.add(String(review.sessionId));
+    }
+    expect(sessionIds.size).toBe(5);
+    expect(result.final.domain[${tsString(fanOut.index_path ?? `${child.stage}.fan_out.index`)}]).toBe(5);
+    expect(result.final.domain[${tsString(fanOut.completion_guard)}]).toBe(true);
+    expect(result.final.domain[${tsString(`${base}.requested`)}]).toBe(false);
+    expect(result.final.mode).toBe('complete');
+  });
+});
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+  awaiting?: Record<string, unknown>;
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+  expectPromptIncludes?: string;
+}
+
+interface Fixture {
+  id: string;
+  name: string;
+  content: string;
+}
+
+async function runDocumentFanOutScenario(
+  fixtures: Fixture[],
+  script: ScriptedAuthorResponse[],
+): Promise<{ final: Snapshot }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-document-fanout-smoke-'));
+  const server = await createPgasServer({
+    programs: [
+      { name: ${tsString(slug)}, entry: create${parentPascal}ProgramEntry() },
+      { name: ${tsString(childSlug)}, entry: create${childPascal}ProgramEntry() },
+    ],
+    drivers: {
+      authorHandle: scriptedAuthor(script),
+      observerHandle: {
+        modelId: 'generated-document-fanout-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    storage: { uploadsDir: join(tempDir, 'uploads') },
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated document fan-out review smoke' });
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'request generated document upload' });
+    const afterRequest = await readSnapshot(client, sessionId);
+    expect(afterRequest.mode).toBe(${tsString(documents.stage)});
+    expect(afterRequest.awaiting?.channelId).toBe('${DOCUMENT_UPLOAD_CHANNEL}');
+    const upload = await uploadTextFiles(client, sessionId, fixtures);
+    const refs = refsFromUpload(upload);
+    expect(refs).toHaveLength(fixtures.length);
+    await client.sessions.trigger(sessionId, {
+      channel: '${DOCUMENT_UPLOAD_CHANNEL}',
+      payload: { ['${DOCUMENT_INTAKE_ROOT}.file_refs']: refs.map((ref) => ({ fileId: ref.fileId, name: ref.name })) },
+    });
+    for (let attempt = 0; attempt < fixtures.length + 4; attempt += 1) {
+      const snapshot = await readSnapshot(client, sessionId);
+      if (snapshot.mode === 'complete' || snapshot.domain[${tsString(fanOut.completion_guard)}] === true) {
+        return { final: snapshot };
+      }
+      try {
+        await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated document fan-out review smoke \${String(attempt + 1)}\` });
+      } catch (error) {
+        if (!String((error as Error).message).includes('terminal')) {
+          throw error;
+        }
+        return { final: await readSnapshot(client, sessionId) };
+      }
+    }
+    return { final: await readSnapshot(client, sessionId) };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function uploadTextFiles(client: PgasClient, sessionId: string, fixtures: Fixture[]): Promise<unknown> {
+  const form = new FormData();
+  for (const fixture of fixtures) {
+    const file = new File([fixture.content], fixture.name, { type: 'text/plain' });
+    form.append('files', file as unknown as Blob, file.name);
+  }
+  return client.files.upload(sessionId, form);
+}
+
+function refsFromUpload(response: unknown): Array<Record<string, unknown>> {
+  if (isRecord(response) && Array.isArray(response.files)) {
+    return response.files.filter(isRecord);
+  }
+  return [];
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+    awaiting: isRecord(state?.awaitingUserDecision) ? state.awaitingUserDecision : undefined,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (isRecord(direct)) {
+    return direct;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function fanOutResultsAt(domain: Record<string, unknown>, pathKey: string): Record<string, Record<string, unknown>> {
+  const raw = resultAt(domain, pathKey);
+  const grouped: Record<string, Record<string, unknown>> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const [documentId, ...fieldParts] = key.split('.');
+    if (!documentId) {
+      continue;
+    }
+    const record = grouped[documentId] ?? {};
+    if (fieldParts.length === 0 && isRecord(value)) {
+      grouped[documentId] = { ...record, ...value };
+    } else if (fieldParts.length > 0) {
+      record[fieldParts.join('.')] = value;
+      grouped[documentId] = record;
+    }
+  }
+  return grouped;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-document-fanout-smoke-author',
+    async complete(prompt: string) {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated document fan-out smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
+        throw new Error(\`expected generated document fan-out prompt to include \${response.expectPromptIncludes}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: string): ScriptedAuthorResponse {
+  return { response, ...(expectPromptIncludes ? { expectPromptIncludes } : {}) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 `;
 }
 
@@ -8141,13 +8756,10 @@ export function assertDelegationChildrenDescriptor(
     throw new Error('delegation.children must declare at least one child');
   }
 
-  // Slice B (multi-child static delegation): validate EACH of N children. N ≥ 2 distinct
-  // STATIC children are now in scope (contract-draft parity — the emitters already fan out
-  // over every child). assertDelegationV1Scope still refuses per-child fan_out / dynamic
-  // targeting / continue-mode / strict, so a *single child fanning to many targets* stays
-  // refuses; only *N distinct static children* is unlocked here. Cross-child uniqueness on
-  // id / channel / stage / result_path / target_spec guarantees no request_${id} or
-  // ${id}_call collision and no shared delegation stage between children.
+  // Validate EACH of N children. N distinct static children are in scope, and the
+  // single dynamic fan-out shape now accepted here is the document-collection loop:
+  // one static child channel repeatedly dispatched over work.source.documents with
+  // work.source.current_document as the child isolation slice.
   const actionNames = new Set(context.actionNames);
   const channelNames = new Set(context.channelNames);
   const schemaPaths = new Set(context.schemaPaths);
@@ -8155,6 +8767,7 @@ export function assertDelegationChildrenDescriptor(
   const seenStages = new Set<string>();
   const seenResultPaths = new Set<string>();
   const seenTargetSpecs = new Set<string>();
+  let documentFanOutChildren = 0;
 
   // A later child's payload_map may source from an earlier child's landed result
   // (delegation result-chaining — e.g. review-service consuming the document-ingest
@@ -8169,7 +8782,16 @@ export function assertDelegationChildrenDescriptor(
 
   for (const [i, rawChild] of children.entries()) {
     const child = requiredRecord(rawChild, `delegation.children[${i}]`);
-    assertDelegationV1Scope(delegation, child);
+    assertDelegationV1Scope(delegation, child, context.documents);
+    if (child.fan_out !== undefined) {
+      documentFanOutChildren += 1;
+      if (documentFanOutChildren > 1) {
+        throw new CapabilityRefusalError([{
+          capability: 'delegation_research_agent',
+          evidence: 'document fan_out synthesis supports exactly one child loop per host stage today; multiple concurrent fan_out children require an engine batch or scheduler surface',
+        }]);
+      }
+    }
 
     const id = requiredString(child.id, `delegation.children[${i}].id`);
     if (!/^[a-z][a-z0-9_]*$/u.test(id)) {
@@ -8281,6 +8903,7 @@ export function assertDelegationChildrenDescriptor(
       throw new Error(`delegation.children[${i}].result_path must be unique across children; ${resultPath} is used by more than one child`);
     }
     seenResultPaths.add(resultPath);
+    assertDocumentFanOutDescriptor(child, context.documents, i, stage);
 
     const maxDelegatedRounds = child.max_delegated_rounds;
     if (
@@ -8304,16 +8927,20 @@ export function assertDelegationChildrenDescriptor(
 function assertDelegationV1Scope(
   delegation: Record<string, unknown>,
   child: Record<string, unknown>,
+  documents?: DocumentsDescriptor,
 ): void {
   const refusals: Array<{ capability: string; evidence: string }> = [];
-  const note = 'v1 delegation is N distinct static/synthesized children, degrade-only (optional:true); single-child fan-out (one child fanning to many targets) / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
+  const note = 'v1 delegation is N distinct static/synthesized children plus one sequential document fan_out child, degrade-only (optional:true); generic fan_out / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
   const add = (capability: string, reason: string): void => {
     refusals.push({
       capability,
       evidence: `${note} — ${capability} stays refuses (${reason})`,
     });
   };
-  if (delegation.fan_out !== undefined || child.fan_out !== undefined) {
+  if (delegation.fan_out !== undefined) {
+    add('delegation_research_agent', 'fan_out');
+  }
+  if (child.fan_out !== undefined && !documentFanOutCandidateSupported(child, documents)) {
     add('delegation_research_agent', 'fan_out');
   }
   if (delegation.dynamic_target_arg !== undefined || child.dynamic_target_arg !== undefined) {
@@ -8332,6 +8959,48 @@ function assertDelegationV1Scope(
   }
   if (refusals.length > 0) {
     throw new CapabilityRefusalError(refusals);
+  }
+}
+
+function assertDocumentFanOutDescriptor(
+  child: Record<string, unknown>,
+  documents: DocumentsDescriptor | undefined,
+  childIndex: number,
+  stage: string,
+): void {
+  if (child.fan_out === undefined) {
+    return;
+  }
+  if (!documents) {
+    throw new Error(`delegation.children[${childIndex}].fan_out requires intake.documents_json`);
+  }
+  if (documents.required !== true) {
+    throw new Error(`delegation.children[${childIndex}].fan_out requires documents.required: true`);
+  }
+  const fanOut = requiredRecord(child.fan_out, `delegation.children[${childIndex}].fan_out`);
+  const source = requiredString(fanOut.source, `delegation.children[${childIndex}].fan_out.source`);
+  const expectedSource = documentsCollectionPath(documents);
+  if (source !== expectedSource) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.source must equal ${expectedSource}`);
+  }
+  const currentDocument = requiredString(fanOut.current_document, `delegation.children[${childIndex}].fan_out.current_document`);
+  const expectedCurrentDocument = documentsCurrentDocumentPath(documents);
+  if (currentDocument !== expectedCurrentDocument) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.current_document must equal ${expectedCurrentDocument}`);
+  }
+  const resultPath = requiredString(fanOut.result_path, `delegation.children[${childIndex}].fan_out.result_path`);
+  if (!resultPath.startsWith(`${stage}.`)) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.result_path must be under ${stage}.`);
+  }
+  const completionGuard = requiredString(fanOut.completion_guard, `delegation.children[${childIndex}].fan_out.completion_guard`);
+  if (!completionGuard.startsWith(`${stage}.`)) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.completion_guard must be under ${stage}.`);
+  }
+  if (fanOut.index_path !== undefined) {
+    const indexPath = requiredString(fanOut.index_path, `delegation.children[${childIndex}].fan_out.index_path`);
+    if (!indexPath.startsWith(`${stage}.`)) {
+      throw new Error(`delegation.children[${childIndex}].fan_out.index_path must be under ${stage}.`);
+    }
   }
 }
 

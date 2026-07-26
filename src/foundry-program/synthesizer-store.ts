@@ -6,6 +6,14 @@ export interface DelegationChildSynthesizeDescriptor {
   slug?: string;
 }
 
+export interface DelegationDocumentFanOutDescriptor {
+  source: string;
+  current_document: string;
+  result_path: string;
+  completion_guard: string;
+  index_path?: string;
+}
+
 export interface CapabilityGap {
   capability: string;
   stage: string;
@@ -19,6 +27,7 @@ export interface DelegationChildDescriptor {
   target_spec?: string;
   registered_name?: string;
   synthesize_child?: DelegationChildSynthesizeDescriptor;
+  fan_out?: DelegationDocumentFanOutDescriptor;
   payload_map: Record<string, string>;
   result_path: string;
   max_delegated_rounds: number;
