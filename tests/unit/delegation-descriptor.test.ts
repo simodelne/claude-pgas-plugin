@@ -433,17 +433,21 @@ describe('delegation children descriptor synthesis gate', () => {
       ],
     });
     expect(parsed.projection.dispatch_research.include).toEqual(expect.arrayContaining([
-      'dispatch_research.delegation.research.result',
       'dispatch_research.delegation.research.result.status',
-      'dispatch_research.delegation.research.result.seeded_topic',
+      'dispatch_research.delegation.research.result.summary',
       'dispatch_research.delegation.research.settled',
       'dispatch_research.delegation.research.degraded',
       'dispatch_research.delegation.research.degrade_reason',
     ]));
+    expect(parsed.projection.dispatch_research.include).not.toContain('dispatch_research.delegation.research.result');
+    expect(parsed.projection.dispatch_research.include).not.toContain('dispatch_research.delegation.research.result.result');
+    expect(parsed.projection.dispatch_research.include).not.toContain('dispatch_research.delegation.research.result.seeded_topic');
     expect(parsed.projection.complete.include).toEqual(expect.arrayContaining([
-      'dispatch_research.delegation.research.result',
-      'dispatch_research.delegation.research.result.seeded_topic',
+      'dispatch_research.delegation.research.result.summary',
     ]));
+    expect(parsed.projection.complete.include).not.toContain('dispatch_research.delegation.research.result');
+    expect(parsed.projection.complete.include).not.toContain('dispatch_research.delegation.research.result.result');
+    expect(parsed.projection.complete.include).not.toContain('dispatch_research.delegation.research.result.seeded_topic');
     expect(parsed.schema).toMatchObject({
       'dispatch_research.delegation.research.result': 'object',
       'dispatch_research.delegation.research.result.status': 'string',

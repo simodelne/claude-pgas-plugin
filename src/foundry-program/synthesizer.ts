@@ -539,9 +539,10 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleProjection(projection, completion.collection_lifecycle);
   }
-  applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle);
+  applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
+  applyScaleSafeProjectionPolicy(projection);
   spec.projection = projection;
 
   const prompts: MutableRecord = {
@@ -1254,6 +1255,7 @@ function applyDelegationProjection(
 ): void {
   for (const child of children) {
     const hostIndex = modeNames.indexOf(child.stage);
+    const fanOut = documentFanOutDescriptor(child, documents);
     const resultPaths = delegationResultProjectionPaths(child);
     const fanOutPaths = documentFanOutProjectionPaths(child, documents);
     const hostPaths = [
@@ -1269,10 +1271,11 @@ function applyDelegationProjection(
     if (!Array.isArray(hostProjection.exclude)) {
       hostProjection.exclude = [];
     }
+    const downstreamDelegationPaths = fanOut ? [] : resultPaths;
     for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
       const downstreamProjection = recordField(projection, modeName);
       const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
-      downstreamProjection.include = unique([...include, ...resultPaths, ...fanOutPaths]);
+      downstreamProjection.include = unique([...include, ...downstreamDelegationPaths]);
       if (!Array.isArray(downstreamProjection.exclude)) {
         downstreamProjection.exclude = [];
       }
@@ -1589,49 +1592,23 @@ function applyDocumentsProjection(
   const hostProjection = recordField(projection, documents.stage);
   const hostInclude = Array.isArray(hostProjection.include) ? hostProjection.include as string[] : [];
   const hostPaths = [
-    DOCUMENT_INTAKE_ROOT,
     `${DOCUMENT_INTAKE_ROOT}.status`,
     `${DOCUMENT_INTAKE_ROOT}.documents_requested`,
     `${DOCUMENT_INTAKE_ROOT}.file_refs`,
     `${DOCUMENT_INTAKE_ROOT}.file_refs.0`,
     `${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.0.name`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.0.mimeType`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.0.size`,
     DOCUMENTS_RECEIVED_PATH,
-    documents.result_path,
-    `${documents.result_path}.status`,
-    `${documents.result_path}.full_text`,
-    `${documents.result_path}.documents`,
-    `${documents.result_path}.current_document`,
-    `${documents.result_path}.current_document.id`,
-    `${documents.result_path}.current_document.name`,
-    `${documents.result_path}.current_document.text`,
-    `${documents.result_path}.char_count`,
-    `${documents.result_path}.file_count`,
-    `${documents.result_path}.document_count`,
-    `${documents.result_path}.files_json`,
-    `${documents.result_path}.extraction_kind`,
-    documentsSourceReadyPath(documents),
+    ...documentSummaryProjectionPaths(documents),
   ];
   hostProjection.include = unique([...hostInclude, ...hostPaths]);
   if (!Array.isArray(hostProjection.exclude)) {
     hostProjection.exclude = [];
   }
 
-  const downstreamPaths = [
-    documents.result_path,
-    `${documents.result_path}.status`,
-    `${documents.result_path}.full_text`,
-    `${documents.result_path}.documents`,
-    `${documents.result_path}.current_document`,
-    `${documents.result_path}.current_document.id`,
-    `${documents.result_path}.current_document.name`,
-    `${documents.result_path}.current_document.text`,
-    `${documents.result_path}.char_count`,
-    `${documents.result_path}.file_count`,
-    `${documents.result_path}.document_count`,
-    `${documents.result_path}.files_json`,
-    `${documents.result_path}.extraction_kind`,
-    documentsSourceReadyPath(documents),
-  ];
+  const downstreamPaths = documentSummaryProjectionPaths(documents);
   for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
     const downstreamProjection = recordField(projection, modeName);
     const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
@@ -1640,6 +1617,21 @@ function applyDocumentsProjection(
       downstreamProjection.exclude = [];
     }
   }
+}
+
+function documentSummaryProjectionPaths(documents: DocumentsDescriptor): string[] {
+  const resultPath = documents.result_path;
+  return [
+    `${resultPath}.status`,
+    `${resultPath}.char_count`,
+    `${resultPath}.file_count`,
+    `${resultPath}.document_count`,
+    `${resultPath}.extraction_kind`,
+    `${resultPath}.current_document.id`,
+    `${resultPath}.current_document.name`,
+    `${resultPath}.current_document.char_count`,
+    documentsSourceReadyPath(documents),
+  ];
 }
 
 function applyDocumentsPromptsGuidance(
@@ -1738,19 +1730,12 @@ function documentFanOutProjectionPaths(child: DelegationChildDescriptor, documen
   return unique([
     fanOut.index_path ?? `${child.stage}.fan_out.index`,
     fanOut.completion_guard,
-    fanOut.result_path,
-    `${fanOut.result_path}.*`,
     `${fanOut.result_path}.*.document_id`,
     `${fanOut.result_path}.*.document_name`,
     `${fanOut.result_path}.*.source_index`,
     `${fanOut.result_path}.*.status`,
-    `${fanOut.result_path}.*.sessionId`,
-    `${fanOut.result_path}.*.rounds`,
-    `${fanOut.result_path}.*.mode`,
     `${fanOut.result_path}.*.reason`,
-    `${fanOut.result_path}.*.optional`,
-    `${fanOut.result_path}.*.result`,
-    ...delegationResultFields(child).map(([field]) => `${fanOut.result_path}.*.${field}`),
+    ...boundedDelegationResultFields(child).map((field) => `${fanOut.result_path}.*.${field}`),
   ]);
 }
 
@@ -1939,19 +1924,93 @@ function delegationResultFields(child: DelegationChildDescriptor): Array<[string
 
 function delegationResultProjectionPaths(child: DelegationChildDescriptor): string[] {
   return unique([
-    child.result_path,
     `${child.result_path}.status`,
     `${child.result_path}.reason`,
-    `${child.result_path}.optional`,
-    `${child.result_path}.mode`,
-    `${child.result_path}.rounds`,
-    `${child.result_path}.sessionId`,
-    `${child.result_path}.result`,
     ...(child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector'
-      ? [`${child.result_path}.result_json`, `${child.result_path}.adapter_kind`]
+      ? [`${child.result_path}.adapter_kind`]
       : []),
-    ...delegationResultFields(child).map(([field]) => `${child.result_path}.${field}`),
+    ...boundedDelegationResultFields(child).map((field) => `${child.result_path}.${field}`),
   ]);
+}
+
+function boundedDelegationResultFields(child: DelegationChildDescriptor): string[] {
+  return delegationResultFields(child)
+    .map(([field]) => field)
+    .filter(isBoundedProjectionResultField);
+}
+
+function isBoundedProjectionResultField(field: string): boolean {
+  const normalized = field.toLowerCase().replace(/[-\s]+/gu, '_');
+  if (
+    normalized.includes('full_text') ||
+    normalized.includes('raw') ||
+    normalized.includes('body') ||
+    normalized.includes('content') ||
+    normalized.includes('transcript') ||
+    normalized.includes('source_text') ||
+    normalized.includes('document_text') ||
+    normalized === 'seeded_topic' ||
+    normalized === 'topic' ||
+    normalized === 'query'
+  ) {
+    return false;
+  }
+  return normalized.includes('summary') ||
+    normalized.includes('finding') ||
+    normalized.includes('flag') ||
+    normalized.includes('risk') ||
+    normalized.includes('count') ||
+    normalized.includes('score') ||
+    normalized.includes('status') ||
+    normalized.includes('decision') ||
+    normalized.includes('rationale') ||
+    normalized.includes('recommendation') ||
+    normalized === 'document_id' ||
+    normalized === 'document_name' ||
+    normalized === 'section_id' ||
+    normalized === 'section_title';
+}
+
+function applyScaleSafeProjectionPolicy(projection: MutableRecord): void {
+  for (const rawModeProjection of Object.values(projection)) {
+    if (!rawModeProjection || typeof rawModeProjection !== 'object' || Array.isArray(rawModeProjection)) {
+      continue;
+    }
+    const modeProjection = rawModeProjection as MutableRecord;
+    const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+    modeProjection.include = unique(include.filter((path) => !isUnsafeModelProjectionInclude(path)));
+    const exclude = Array.isArray(modeProjection.exclude) ? modeProjection.exclude as string[] : [];
+    modeProjection.exclude = unique(exclude);
+  }
+}
+
+function isUnsafeModelProjectionInclude(path: string): boolean {
+  if (path.endsWith('.full_text')) {
+    return true;
+  }
+  if (path.endsWith('.documents') || path.endsWith('.documents.*') || path.endsWith('.documents.*.text')) {
+    return true;
+  }
+  if (path.endsWith('.current_document.text')) {
+    return true;
+  }
+  if (/\.fan_out\.results$/u.test(path) || /\.fan_out\.results\.\*$/u.test(path) || /\.fan_out\.results\.\*\.result$/u.test(path)) {
+    return true;
+  }
+  if (/\.fan_out\.results\.\*\.[^.]+$/u.test(path)) {
+    const field = path.split('.').at(-1) ?? '';
+    return !isBoundedProjectionResultField(field) &&
+      !['document_id', 'document_name', 'source_index', 'status', 'reason'].includes(field);
+  }
+  if (/\.delegation\.[^.]+\.result$/u.test(path) || /\.delegation\.[^.]+\.result\.result$/u.test(path)) {
+    return true;
+  }
+  if (/\.delegation\.[^.]+\.result\.[^.]+$/u.test(path)) {
+    const field = path.split('.').at(-1) ?? '';
+    return !isBoundedProjectionResultField(field) &&
+      !['status', 'reason', 'adapter_kind'].includes(field);
+  }
+  return false;
 }
 
 function applyCollectionLifecycleIntentActions(
@@ -2071,6 +2130,7 @@ function applyConfirmationLoopProjection(
   projection: MutableRecord,
   loops: ConfirmationLoopDescriptor[],
   lifecycle?: CollectionLifecycleDescriptor,
+  modeNames: string[] = [],
 ): void {
   if (!lifecycle) {
     return;
@@ -2078,17 +2138,14 @@ function applyConfirmationLoopProjection(
   for (const loop of loops) {
     const modeProjection = recordField(projection, loop.stage);
     const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
-    const idField = loop.item_id_field ?? lifecycle.item.id_field;
-    const titleField = loop.item_title_field ?? 'title';
+    const collectionPaths = confirmationLoopCollectionProjectionPaths(loop, lifecycle);
     modeProjection.include = unique([
       ...include.filter((path) => path !== loop.collection),
       'inputs.user_decision.target_item_index',
       'inputs.user_decision.target_item_id',
       'inputs.user_decision.target_item_title',
       'inputs.user_decision.target_item_status',
-      `${loop.collection}.*.${idField}`,
-      `${loop.collection}.*.${titleField}`,
-      `${loop.collection}.*.${lifecycle.item.status_field}`,
+      ...collectionPaths,
       loop.aggregate.guard_field,
       confirmationLoopSummaryPath(loop),
       `${loop.seed.source_stage}.items_json`,
@@ -2096,7 +2153,41 @@ function applyConfirmationLoopProjection(
     if (!Array.isArray(modeProjection.exclude)) {
       modeProjection.exclude = [];
     }
+    const loopIndex = modeNames.indexOf(loop.stage);
+    if (loopIndex < 0) {
+      continue;
+    }
+    for (const modeName of modeNames.slice(loopIndex + 1)) {
+      const downstreamProjection = recordField(projection, modeName);
+      const downstreamInclude = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
+      downstreamProjection.include = unique([
+        ...downstreamInclude.filter((path) => path !== loop.collection),
+        ...collectionPaths,
+        loop.aggregate.guard_field,
+        confirmationLoopSummaryPath(loop),
+      ]);
+      if (!Array.isArray(downstreamProjection.exclude)) {
+        downstreamProjection.exclude = [];
+      }
+    }
   }
+}
+
+function confirmationLoopCollectionProjectionPaths(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
+  const idField = loop.item_id_field ?? lifecycle.item.id_field;
+  const titleField = loop.item_title_field ?? 'title';
+  const instructionFields = confirmationLoopInstructionFields(loop);
+  const visibleFields = Object.keys(lifecycle.item.schema)
+    .filter((field) => !instructionFields.has(field) && isBoundedProjectionResultField(field));
+  return unique([
+    `${loop.collection}.*.${idField}`,
+    `${loop.collection}.*.${titleField}`,
+    `${loop.collection}.*.${lifecycle.item.status_field}`,
+    ...visibleFields.map((field) => `${loop.collection}.*.${field}`),
+  ]);
 }
 
 function applyConfirmationLoopPrompts(
