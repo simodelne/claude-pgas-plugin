@@ -1744,12 +1744,14 @@ function applyConfirmationLoopIntentModeWiring(
 ): void {
   loops.forEach((loop, index) => {
     const mode = recordField(modes, loop.stage);
+    const proposeAction = confirmationLoopProposeActionName(loop, index, loops.length);
     mode.vocabulary = [
-      confirmationLoopProposeActionName(loop, index, loops.length),
+      proposeAction,
       ...CONTROL_PLANE_ACTIONS,
     ];
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
+    appendModePrecondition(mode, proposeAction, { kind: 'FieldFalsy', path: loop.aggregate.guard_field });
   });
 }
 
@@ -1797,7 +1799,7 @@ function applyConfirmationLoopPrompts(
     const itemLabel = lifecycle.item_label;
     const itemLabelPlural = `${itemLabel}s`;
     const existing = typeof prompts[loop.stage] === 'string' ? `${prompts[loop.stage]}\n` : '';
-    prompts[loop.stage] = `${existing}Work through the ${itemLabelPlural} one at a time. The projected ${loop.collection}.* entries show each item and its status. Call ${confirmationLoopProposeActionName(loop, 0, loops.length)} with the proposal content for the item under review; the runtime selects the target item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the item; call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved and the session advances.`;
+    prompts[loop.stage] = `${existing}Work through the ${itemLabelPlural} one at a time. The projected ${loop.collection}.* entries show each item and its status. Call ${confirmationLoopProposeActionName(loop, 0, loops.length)} with the proposal content for the item under review; the runtime selects the target item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the item; call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`;
   }
 }
 
@@ -1815,7 +1817,7 @@ function applyConfirmationLoopGuidance(
       ...existing,
       `Work through the ${lifecycle.item_label}s one at a time; the runtime selects the target item for ${confirmationLoopProposeActionName(loop, 0, loops.length)}.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
-      `When ${loop.aggregate.guard_field} is true, all items are resolved and the session advances.`,
+      `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`,
     ];
   }
 }

@@ -62,3 +62,7 @@ tests/sota/scorecard/verify-closegap*.md
 
 # Foundry domain-synthesis cache written into cwd when run from repo root
 .pgas-new-domain-synthesis-cache/
+
+# DD-report-class synthesis experiment scratch (generated programs, live-drive
+# logs, verdicts). Per-run measurement output, never committed.
+.dd-report-exp/
