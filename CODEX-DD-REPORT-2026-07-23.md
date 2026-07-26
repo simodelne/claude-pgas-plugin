@@ -1108,3 +1108,87 @@ Final local status evidence after the live pass:
 /home/simone/pgas-new before this handoff-doc branch:
 ## main...origin/main
 ```
+
+### Post-Merge Final State - 2026-07-26
+
+The final SimoneOS implementation PR was merged and staging was repromoted to
+the merge commit after the live VDR UAT pass.
+
+SimoneOS PR:
+
+- PR: `https://github.com/simodelne/simoneos/pull/2170`
+- Title: `fix(due-diligence-report): harden live VDR batching`
+- Head SHA before merge: `01bfe71946f9a42ed3b5210560661d0503503cdf`
+- Merge SHA: `bfd6df1467938691ba192431a2fed1cc8da00030`
+- Merged at: `2026-07-26T02:09:53Z`
+
+PR #2170 required checks were green before merge:
+
+- `static-gates`: success
+- `Lint coverage matrix`: success
+- `Form widget smoke (#527 regression guard)`: success
+- `product-tests`: success
+- `verify`: success
+- `check-override`: success
+- `light-rebase`: success
+
+The previously failing `product-tests` line-budget failure was fixed by
+`01bfe71946f9a42ed3b5210560661d0503503cdf`; local proof before push:
+
+```bash
+cd server && npm test -- tests/architecture-boundary.test.ts -t "program_imperative_handlers_in_registration"
+cd server && npm test
+npm run typecheck
+npm test -- programs/simoneos/due-diligence-report/__tests__
+npm run qc:gate
+npm test
+```
+
+Observed local results:
+
+- Server architecture regression: PASS.
+- Server product suite: 29 files, 392 tests passed.
+- Typecheck: PASS.
+- DD-report suite: 4 files, 71 tests passed.
+- `npm run qc:gate`: PASS; only existing advisory warnings and local
+  live-provider skip.
+- Full root tests: 282 files, 3113 tests passed.
+
+Post-merge main checks for
+`bfd6df1467938691ba192431a2fed1cc8da00030` were all success:
+
+- Cheap gates: run `30184113490`
+- Playwright smoke: run `30184113497`
+- SimoneOS CI: run `30184113512`
+- Zero-internals guard: run `30184113467`
+- E2E coverage matrix lint: run `30184113468`
+- Build & push container images: run `30184113481`
+
+Final staging promotion:
+
+```bash
+SIMONEOS_STAGING_REQUIRED_PROGRAMS="router telegram-router draft-policy contract-draft contract-review contract-review-service contract-revision review-service research document-ingest document-due-diligence document-due-diligence-service due-diligence-report legal-memo minutes-drafter fee-proposal-drafter user-surrogate" \
+bash deploy/scripts/promote-staging.sh --ref bfd6df1467938691ba192431a2fed1cc8da00030 --tag dd-report-live-vdr-bfd6df14 --llm-provider openai
+```
+
+Final staging evidence:
+
+- `/api/version` consumer SHA:
+  `bfd6df1467938691ba192431a2fed1cc8da00030`
+- Backend image: `sha256:abc824026969aeec015bd4e11394d6c83ac504fee67220fea0c632a8715619fd`
+- Frontend image: `sha256:9aaf1412ac7c23146f2f18b06dae6afec4abd5e9dbe1f4c129442455f07ada5f`
+- Health gates passed with 17 required programs present, including
+  `due-diligence-report`; edge/public API ok; registration 403; PGAS-RAG health
+  200.
+
+Final local status:
+
+```text
+/home/simone/simoneos:
+## feat/dd-report-live-vdr-uat...origin/feat/dd-report-live-vdr-uat
+01bfe71946f9a42ed3b5210560661d0503503cdf
+
+/home/simone/pgas-new before this addendum branch:
+## main...origin/main
+de3803a3ce78f60c4f0b9b67c02534cfb2fa0a6c
+```
