@@ -296,12 +296,13 @@ export function synthesizeProgramSpecFromDomain(
   const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
-  const delegation = resolveDelegationChildrenAgainstManifest(
+  const rawDelegation = resolveDelegationChildrenAgainstManifest(
     parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json'),
     options.availablePrograms ?? [],
   );
   const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
   const documents = normalizeDocumentsDescriptor(rawDocuments);
+  const delegation = normalizeDocumentSliceDelegation(rawDelegation, documents);
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
@@ -318,7 +319,7 @@ export function synthesizeProgramSpecFromDomain(
       stages,
       actionNames: collectGeneratedActionNamesForDelegationValidation(transitions, completion, stages[0]?.slug ?? ''),
       channelNames: collectGeneratedChannelNamesForDelegationValidation(entryChannel),
-      schemaPaths: collectParentSchemaPathsForDelegationValidation(stages, entryChannel, initialEntryPath, transitions, completion),
+      schemaPaths: collectParentSchemaPathsForDelegationValidation(stages, entryChannel, initialEntryPath, transitions, completion, documents),
     });
   }
   if (rawDocuments !== undefined && documents !== undefined) {
@@ -605,6 +606,7 @@ export function synthesizeProgramSpecFromDomain(
     }
     actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source));
   }
+  applyDocumentSliceTransitionActions(actionMap, documents, delegationChildren, transitionActions);
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
@@ -1280,8 +1282,40 @@ function applyDocumentsSchema(
   schema[DOCUMENTS_RECEIVED_PATH] = 'boolean';
   schema[resultPath] = 'object';
   schema[`${resultPath}.full_text`] = 'string';
+  schema[`${resultPath}.documents`] = 'array';
+  schema[`${resultPath}.documents.*`] = 'object';
+  schema[`${resultPath}.documents.*.id`] = 'string';
+  schema[`${resultPath}.documents.*.name`] = 'string';
+  schema[`${resultPath}.documents.*.mime_type`] = 'string';
+  schema[`${resultPath}.documents.*.size`] = 'number';
+  schema[`${resultPath}.documents.*.text`] = 'string';
+  schema[`${resultPath}.documents.*.char_count`] = 'number';
+  schema[`${resultPath}.documents.*.source_index`] = 'number';
+  schema[`${resultPath}.documents.*.extraction_kind`] = 'string';
+  schema[`${resultPath}.documents.*.provenance`] = 'object';
+  schema[`${resultPath}.documents.*.provenance.file_id`] = 'string';
+  schema[`${resultPath}.documents.*.provenance.name`] = 'string';
+  schema[`${resultPath}.documents.*.provenance.mime_type`] = 'string';
+  schema[`${resultPath}.documents.*.provenance.size`] = 'number';
+  schema[`${resultPath}.documents.*.provenance.source_index`] = 'number';
+  schema[`${resultPath}.current_document`] = 'object';
+  schema[`${resultPath}.current_document.id`] = 'string';
+  schema[`${resultPath}.current_document.name`] = 'string';
+  schema[`${resultPath}.current_document.mime_type`] = 'string';
+  schema[`${resultPath}.current_document.size`] = 'number';
+  schema[`${resultPath}.current_document.text`] = 'string';
+  schema[`${resultPath}.current_document.char_count`] = 'number';
+  schema[`${resultPath}.current_document.source_index`] = 'number';
+  schema[`${resultPath}.current_document.extraction_kind`] = 'string';
+  schema[`${resultPath}.current_document.provenance`] = 'object';
+  schema[`${resultPath}.current_document.provenance.file_id`] = 'string';
+  schema[`${resultPath}.current_document.provenance.name`] = 'string';
+  schema[`${resultPath}.current_document.provenance.mime_type`] = 'string';
+  schema[`${resultPath}.current_document.provenance.size`] = 'number';
+  schema[`${resultPath}.current_document.provenance.source_index`] = 'number';
   schema[`${resultPath}.char_count`] = 'number';
   schema[`${resultPath}.file_count`] = 'number';
+  schema[`${resultPath}.document_count`] = 'number';
   schema[`${resultPath}.files_json`] = 'string';
   schema[`${resultPath}.extraction_kind`] = 'string';
   schema[`${resultPath}.status`] = 'string';
@@ -1321,8 +1355,10 @@ function applyDocumentsActions(
       mutations: [
         { op: 'MSet', path: `${documents.result_path}.status`, value: 'skipped_no_documents' },
         { op: 'MSet', path: `${documents.result_path}.full_text`, value: '' },
+        { op: 'MSet', path: `${documents.result_path}.current_document`, value: {} },
         { op: 'MSet', path: `${documents.result_path}.char_count`, value: 0 },
         { op: 'MSet', path: `${documents.result_path}.file_count`, value: 0 },
+        { op: 'MSet', path: `${documents.result_path}.document_count`, value: 0 },
         { op: 'MSet', path: `${documents.result_path}.files_json`, value: '[]' },
         { op: 'MSet', path: `${documents.result_path}.extraction_kind`, value: 'skipped_no_documents' },
         { op: 'MSet', path: documentsSourceReadyPath(documents), value: true },
@@ -1413,8 +1449,11 @@ function applyDocumentsReactions(
       documentsSourceReadyPath(documents),
       `${documents.result_path}.status`,
       `${documents.result_path}.full_text`,
+      `${documents.result_path}.documents`,
+      `${documents.result_path}.current_document`,
       `${documents.result_path}.char_count`,
       `${documents.result_path}.file_count`,
+      `${documents.result_path}.document_count`,
       `${documents.result_path}.files_json`,
       `${documents.result_path}.extraction_kind`,
     ],
@@ -1476,8 +1515,14 @@ function applyDocumentsProjection(
     documents.result_path,
     `${documents.result_path}.status`,
     `${documents.result_path}.full_text`,
+    `${documents.result_path}.documents`,
+    `${documents.result_path}.current_document`,
+    `${documents.result_path}.current_document.id`,
+    `${documents.result_path}.current_document.name`,
+    `${documents.result_path}.current_document.text`,
     `${documents.result_path}.char_count`,
     `${documents.result_path}.file_count`,
+    `${documents.result_path}.document_count`,
     `${documents.result_path}.files_json`,
     `${documents.result_path}.extraction_kind`,
     documentsSourceReadyPath(documents),
@@ -1491,8 +1536,14 @@ function applyDocumentsProjection(
     documents.result_path,
     `${documents.result_path}.status`,
     `${documents.result_path}.full_text`,
+    `${documents.result_path}.documents`,
+    `${documents.result_path}.current_document`,
+    `${documents.result_path}.current_document.id`,
+    `${documents.result_path}.current_document.name`,
+    `${documents.result_path}.current_document.text`,
     `${documents.result_path}.char_count`,
     `${documents.result_path}.file_count`,
+    `${documents.result_path}.document_count`,
     `${documents.result_path}.files_json`,
     `${documents.result_path}.extraction_kind`,
     documentsSourceReadyPath(documents),
@@ -1533,6 +1584,121 @@ function documentsSourceReadyPath(documents: DocumentsDescriptor): string {
   const parts = documents.result_path.split('.');
   const leaf = parts.pop() ?? 'source';
   return [...parts, `${leaf}_ready`].join('.');
+}
+
+function documentsFullTextPath(documents: DocumentsDescriptor): string {
+  return `${documents.result_path}.full_text`;
+}
+
+function documentsCollectionPath(documents: DocumentsDescriptor): string {
+  return `${documents.result_path}.documents`;
+}
+
+function documentsCurrentDocumentPath(documents: DocumentsDescriptor): string {
+  return `${documents.result_path}.current_document`;
+}
+
+function documentsCurrentDocumentTextPath(documents: DocumentsDescriptor): string {
+  return `${documentsCurrentDocumentPath(documents)}.text`;
+}
+
+function documentsCurrentDocumentIdPath(documents: DocumentsDescriptor): string {
+  return `${documentsCurrentDocumentPath(documents)}.id`;
+}
+
+function documentsCurrentDocumentNamePath(documents: DocumentsDescriptor): string {
+  return `${documentsCurrentDocumentPath(documents)}.name`;
+}
+
+function documentsIndexedDocumentPath(documents: DocumentsDescriptor, index: number): string {
+  return `${documentsCollectionPath(documents)}.${String(index)}`;
+}
+
+function normalizeDocumentSliceDelegation(
+  delegation: DelegationDescriptor,
+  documents: DocumentsDescriptor | undefined,
+): DelegationDescriptor {
+  if (!documents || !Array.isArray(delegation.children) || delegation.children.length === 0) {
+    return delegation;
+  }
+  let mutated = false;
+  const fullTextPath = documentsFullTextPath(documents);
+  const children = delegation.children.map((child) => {
+    const payloadMap = { ...child.payload_map };
+    let childMutated = false;
+    for (const [target, source] of Object.entries(child.payload_map)) {
+      if (source !== fullTextPath || !isDocumentSlicePayloadTarget(target)) {
+        continue;
+      }
+      payloadMap[target] = documentsCurrentDocumentTextPath(documents);
+      childMutated = true;
+    }
+    if (!childMutated) {
+      return child;
+    }
+    if (payloadMap['request.document_id'] === undefined) {
+      payloadMap['request.document_id'] = documentsCurrentDocumentIdPath(documents);
+    }
+    if (payloadMap['request.document_name'] === undefined) {
+      payloadMap['request.document_name'] = documentsCurrentDocumentNamePath(documents);
+    }
+    mutated = true;
+    return { ...child, payload_map: payloadMap };
+  });
+  return mutated ? { ...delegation, children } : delegation;
+}
+
+function isDocumentSlicePayloadTarget(target: string): boolean {
+  return target === 'request.topic' ||
+    target === 'request.query' ||
+    target === 'request.document_text' ||
+    target === 'document_intake.work_product' ||
+    target === 'document_intake.text';
+}
+
+function applyDocumentSliceTransitionActions(
+  actionMap: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+  children: DelegationChildDescriptor[],
+  transitionActions: TransitionAction[],
+): void {
+  if (!documents) {
+    return;
+  }
+  const slicedChildren = children.filter((child) => childUsesCurrentDocumentSlice(child, documents));
+  for (const [index, child] of slicedChildren.entries()) {
+    const transition = transitionActions.find((action) => action.target === child.stage);
+    if (!transition) {
+      continue;
+    }
+    const entry = actionMap[transition.name];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const actionEntry = entry as MutableRecord;
+    const mutations = Array.isArray(actionEntry.mutations)
+      ? actionEntry.mutations as MutableRecord[]
+      : [];
+    const documentSource = documentsIndexedDocumentPath(documents, index);
+    if (!mutations.some((mutation) =>
+      mutation.path === documentsCurrentDocumentPath(documents) &&
+      mutation.from_state === documentSource)) {
+      mutations.push({
+        op: 'MSet',
+        path: documentsCurrentDocumentPath(documents),
+        value: '',
+        from_arg: `document_slice_${child.id}`,
+        from_state: documentSource,
+      });
+    }
+    actionEntry.mutations = mutations;
+  }
+}
+
+function childUsesCurrentDocumentSlice(child: DelegationChildDescriptor, documents: DocumentsDescriptor): boolean {
+  const currentPath = documentsCurrentDocumentPath(documents);
+  return Object.values(child.payload_map).some((source) =>
+    source === currentPath || source.startsWith(`${currentPath}.`));
 }
 
 function documentsSaveReactionName(): string {
@@ -2825,8 +2991,10 @@ function settleDocumentSource(
       mutations: [
         { op: 'MSet' as const, path: \`\${resultPath}.status\`, value: 'skipped_no_documents' },
         { op: 'MSet' as const, path: \`\${resultPath}.full_text\`, value: '' },
+        { op: 'MSet' as const, path: \`\${resultPath}.current_document\`, value: {} },
         { op: 'MSet' as const, path: \`\${resultPath}.char_count\`, value: 0 },
         { op: 'MSet' as const, path: \`\${resultPath}.file_count\`, value: 0 },
+        { op: 'MSet' as const, path: \`\${resultPath}.document_count\`, value: 0 },
         { op: 'MSet' as const, path: \`\${resultPath}.files_json\`, value: '[]' },
         { op: 'MSet' as const, path: \`\${resultPath}.extraction_kind\`, value: 'skipped_no_documents' },
         { op: 'MSet' as const, path: readyPath, value: true },
@@ -2881,7 +3049,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
   const rawDocuments = Array.isArray(request?.documents) ? request.documents : [];
   const documentRecords = rawDocuments.filter(isDocumentRecord);
   const allowedMimeTypes = new Set<string>(${allowedTypes});
-  const summaries = documentRecords.map(documentSummary);
+  const summaries = documentRecords.map((document, index) => documentSummaryWithIndex(document, index));
   const eligible: Array<{ document: Record<string, unknown>; text: string; extraction_kind: string }> = [];
   for (const document of documentRecords) {
     if (!documentMimeAllowed(document, allowedMimeTypes)) {
@@ -2898,8 +3066,11 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
         return {
           status: 'blocked_extraction_failed',
           full_text: '',
+          documents: [],
+          current_document: {},
           char_count: 0,
           file_count: 0,
+          document_count: 0,
           files_json: JSON.stringify(summaries),
           extraction_kind: docxExtractionKind(bytes),
           reason: extracted.reason,
@@ -2916,8 +3087,11 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
     return {
       status: sawUnsupported ? 'blocked_unsupported_type' : 'blocked_no_content',
       full_text: '',
+      documents: [],
+      current_document: {},
       char_count: 0,
       file_count: 0,
+      document_count: 0,
       files_json: JSON.stringify(summaries),
       extraction_kind: 'none',
       reason: sawUnsupported ? ${docxExtractionEnabled ? "'uploaded documents were not supported content_text or DOCX content_base64 documents'" : "'uploaded documents were not text/markdown content_text documents'"} : 'no engine-injected document content_text was available',
@@ -2929,13 +3103,17 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
     : eligible.map((entry, index) => \`--- file: \${documentName(entry.document, index)} ---\\n\\n\${entry.text}\`).join('\\n\\n');
   const charCount = fullText.length;
   const extractionKind = combinedExtractionKind(eligible.map((entry) => entry.extraction_kind));
+  const documents = eligible.map((entry, index) => documentSlice(entry.document, entry.text, entry.extraction_kind, index));
   if (charCount < ${String(minChars)}) {
     return {
       status: 'blocked_low_fidelity',
       full_text: fullText,
+      documents,
+      current_document: documents[0] ?? {},
       char_count: charCount,
       file_count: eligible.length,
-      files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
+      document_count: documents.length,
+      files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
       extraction_kind: extractionKind,
       reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
     };
@@ -2943,9 +3121,12 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
   return {
     status: 'extracted',
     full_text: fullText,
+    documents,
+    current_document: documents[0] ?? {},
     char_count: charCount,
     file_count: eligible.length,
-    files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
+    document_count: documents.length,
+    files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
     extraction_kind: extractionKind,
   };
 }
@@ -2954,8 +3135,11 @@ function skippedDocumentSource(): Record<string, unknown> {
   return {
     status: 'skipped_no_documents',
     full_text: '',
+    documents: [],
+    current_document: {},
     char_count: 0,
     file_count: 0,
+    document_count: 0,
     files_json: '[]',
     extraction_kind: 'skipped_no_documents',
   };
@@ -3044,6 +3228,8 @@ ${docxExtractionEnabled ? `function docxExtractionKind(bytes: Uint8Array): strin
 
 function documentSummary(document: Record<string, unknown>): Record<string, unknown> {
   return {
+    id: documentId(document, 0),
+    file_id: documentFileId(document),
     name: typeof document.name === 'string' ? document.name : undefined,
     mime_type: typeof document.mime_type === 'string'
       ? document.mime_type
@@ -3054,6 +3240,63 @@ function documentSummary(document: Record<string, unknown>): Record<string, unkn
     has_content_text: typeof document.content_text === 'string',
     has_content_base64: typeof document.content_base64 === 'string',
   };
+}
+
+function documentSlice(
+  document: Record<string, unknown>,
+  text: string,
+  extractionKind: string,
+  index: number,
+): Record<string, unknown> {
+  const summary = documentSummaryWithIndex(document, index);
+  return {
+    id: summary.id,
+    name: summary.name,
+    mime_type: summary.mime_type,
+    size: summary.size,
+    text,
+    char_count: text.length,
+    source_index: index,
+    extraction_kind: extractionKind,
+    provenance: {
+      file_id: summary.file_id,
+      name: summary.name,
+      mime_type: summary.mime_type,
+      size: summary.size,
+      source_index: index,
+    },
+  };
+}
+
+function documentSummaryWithIndex(document: Record<string, unknown>, index: number): Record<string, unknown> {
+  return {
+    ...documentSummary(document),
+    id: documentId(document, index),
+  };
+}
+
+function documentId(document: Record<string, unknown>, index: number): string {
+  if (typeof document.id === 'string' && document.id.length > 0) {
+    return document.id;
+  }
+  if (typeof document.document_id === 'string' && document.document_id.length > 0) {
+    return document.document_id;
+  }
+  const fileId = documentFileId(document);
+  if (fileId.length > 0) {
+    return fileId;
+  }
+  return \`doc\${String(index + 1)}\`;
+}
+
+function documentFileId(document: Record<string, unknown>): string {
+  if (typeof document.fileId === 'string' && document.fileId.length > 0) {
+    return document.fileId;
+  }
+  if (typeof document.file_id === 'string' && document.file_id.length > 0) {
+    return document.file_id;
+  }
+  return '';
 }
 
 function isDocumentRecord(value: unknown): value is Record<string, unknown> {
@@ -4852,7 +5095,7 @@ function workerChildDomain(
         slug: 'receive',
         is_bootstrap: true,
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.domain_context.source_program'],
+          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program'],
           produces: {},
           rules: ['Accept the delegated request seeded by the parent session.'],
           invariants: ['Do not invent a different request topic.'],
@@ -4861,7 +5104,7 @@ function workerChildDomain(
       {
         slug: 'work',
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
           produces: {
             result_json: Object.fromEntries(Object.keys(resultFields).map((field) => [field, 'string'])),
             items_json: [`${child.id}:<seeded_topic>`],
@@ -4913,7 +5156,7 @@ function workerChildReasoningContract(child: DelegationChildDescriptor): Reasoni
   return {
     contract_version: REASONING_CONTRACT_VERSION,
     stage: 'work',
-    reasoning_prompt: `Complete delegated worker request ${child.id}. Use the projected inputs.request.topic and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    reasoning_prompt: `Complete delegated worker request ${child.id}. Use the projected inputs.request.topic, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
     result_schema: {
       fields,
       allow_extra_fields: true,
@@ -4952,7 +5195,7 @@ function researchAgentChildDomain(
         slug: 'receive',
         is_bootstrap: true,
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.domain_context.source_program'],
+          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program'],
           produces: {},
           rules: ['Accept the delegated research request seeded by the parent session.'],
           invariants: ['Do not invent a different request topic.'],
@@ -4961,7 +5204,7 @@ function researchAgentChildDomain(
       {
         slug: 'research',
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.request.query', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          reads: ['inputs.request.topic', 'inputs.request.query', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
           produces: {
             result_json: backend === 'host_connector'
               ? { ...resultSchema, adapter_kind: 'string' }
@@ -5034,7 +5277,7 @@ function researchAgentChildReasoningContract(child: DelegationChildDescriptor): 
   return {
     contract_version: REASONING_CONTRACT_VERSION,
     stage: 'research',
-    reasoning_prompt: `Complete delegated research request ${child.id}. Use the projected inputs.request.topic, inputs.request.query, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    reasoning_prompt: `Complete delegated research request ${child.id}. Use the projected inputs.request.topic, inputs.request.query, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
     result_schema: {
       fields,
       allow_extra_fields: true,
@@ -5062,6 +5305,8 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
   schema['inputs.request.intent'] = 'string';
   schema['inputs.request.query'] = 'string';
   schema['inputs.request.topic'] = 'string';
+  schema['inputs.request.document_id'] = 'string';
+  schema['inputs.request.document_name'] = 'string';
   schema['inputs.domain_context'] = 'object';
   schema['inputs.domain_context.source_program'] = 'string';
   schema['inputs.domain_context.source_session_id'] = 'string';
@@ -5080,6 +5325,8 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
       'inputs.request.intent',
       'inputs.request.query',
       'inputs.request.topic',
+      'inputs.request.document_id',
+      'inputs.request.document_name',
       'inputs.domain_context',
       'inputs.domain_context.source_program',
       'inputs.domain_context.original_request',
@@ -5088,7 +5335,7 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
 
   const prompts = recordField(spec, 'prompts');
   prompts.receive = `${String(prompts.receive ?? '')}\nAccept the delegated request; inputs.request and inputs.domain_context are seeded by the parent delegation.`;
-  prompts[middleStage] = `${String(prompts[middleStage] ?? '')}\nUse inputs.request.topic as the delegated topic. The seeded_topic result field, when present, must echo that exact value.`;
+  prompts[middleStage] = `${String(prompts[middleStage] ?? '')}\nUse inputs.request.topic as the delegated topic. For document-slice delegations, inputs.request.document_id and inputs.request.document_name identify the only target document. The seeded_topic result field, when present, must echo inputs.request.topic exactly.`;
 
   const actionMap = recordField(spec, 'action_map');
   const completeStage = recordField(actionMap, `complete_${middleStage}`);
@@ -5375,14 +5622,24 @@ function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
   allowedTargetPrograms: string[];
   inputEnrichment: Array<{ source: string; target: string }>;
 } {
+  const inputEnrichment: Array<{ source: string; target: string }> = [];
+  const seenEnrichment = new Set<string>();
+  for (const child of children) {
+    for (const [target, source] of Object.entries(child.payload_map)) {
+      const key = `${source}\u0000${target}`;
+      if (seenEnrichment.has(key)) {
+        continue;
+      }
+      seenEnrichment.add(key);
+      inputEnrichment.push({ source, target });
+    }
+  }
   return {
     allowedTargetPrograms: unique(children.flatMap((child) => [
       delegationTargetSpec(child),
       ...(child.registered_name ? [child.registered_name] : []),
     ])),
-    inputEnrichment: children.flatMap((child) =>
-      Object.entries(child.payload_map).map(([target, source]) => ({ source, target })),
-    ),
+    inputEnrichment,
   };
 }
 
@@ -8127,11 +8384,15 @@ function collectParentSchemaPathsForDelegationValidation(
   initialEntryPath: string,
   transitions: IntakeTransition[],
   completion: Completion,
+  documents: DocumentsDescriptor | undefined,
 ): Set<string> {
   const schemaPaths = new Set<string>([
     `inputs.${entryChannel}`,
     initialEntryPath,
   ]);
+  if (documents) {
+    collectDocumentsSchemaPaths(documents, schemaPaths);
+  }
   for (const transition of transitions) {
     const guardField = guardFieldForTransition(transition, completion);
     if (guardField) {
@@ -8156,6 +8417,68 @@ function collectParentSchemaPathsForDelegationValidation(
     schemaPaths.add(`${stage.slug}.output.digest`);
   }
   return schemaPaths;
+}
+
+function collectDocumentsSchemaPaths(documents: DocumentsDescriptor, schemaPaths: Set<string>): void {
+  const resultPath = documents.result_path;
+  for (const path of [
+    DOCUMENT_INTAKE_ROOT,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.*`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.*.fileId`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.*.name`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.*.mimeType`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.*.size`,
+    `${DOCUMENT_INTAKE_ROOT}.documents`,
+    `${DOCUMENT_INTAKE_ROOT}.status`,
+    `${DOCUMENT_INTAKE_ROOT}.source`,
+    `${DOCUMENT_INTAKE_ROOT}.completed`,
+    `${DOCUMENT_INTAKE_ROOT}.documents_requested`,
+    DOCUMENTS_RECEIVED_PATH,
+    resultPath,
+    `${resultPath}.full_text`,
+    `${resultPath}.documents`,
+    `${resultPath}.documents.*`,
+    `${resultPath}.documents.*.id`,
+    `${resultPath}.documents.*.name`,
+    `${resultPath}.documents.*.mime_type`,
+    `${resultPath}.documents.*.size`,
+    `${resultPath}.documents.*.text`,
+    `${resultPath}.documents.*.char_count`,
+    `${resultPath}.documents.*.source_index`,
+    `${resultPath}.documents.*.extraction_kind`,
+    `${resultPath}.documents.*.provenance`,
+    `${resultPath}.documents.*.provenance.file_id`,
+    `${resultPath}.documents.*.provenance.name`,
+    `${resultPath}.documents.*.provenance.mime_type`,
+    `${resultPath}.documents.*.provenance.size`,
+    `${resultPath}.documents.*.provenance.source_index`,
+    `${resultPath}.current_document`,
+    `${resultPath}.current_document.id`,
+    `${resultPath}.current_document.name`,
+    `${resultPath}.current_document.mime_type`,
+    `${resultPath}.current_document.size`,
+    `${resultPath}.current_document.text`,
+    `${resultPath}.current_document.char_count`,
+    `${resultPath}.current_document.source_index`,
+    `${resultPath}.current_document.extraction_kind`,
+    `${resultPath}.current_document.provenance`,
+    `${resultPath}.current_document.provenance.file_id`,
+    `${resultPath}.current_document.provenance.name`,
+    `${resultPath}.current_document.provenance.mime_type`,
+    `${resultPath}.current_document.provenance.size`,
+    `${resultPath}.current_document.provenance.source_index`,
+    `${resultPath}.char_count`,
+    `${resultPath}.file_count`,
+    `${resultPath}.document_count`,
+    `${resultPath}.files_json`,
+    `${resultPath}.extraction_kind`,
+    `${resultPath}.status`,
+    `${resultPath}.reason`,
+    documentsSourceReadyPath(documents),
+  ]) {
+    schemaPaths.add(path);
+  }
 }
 
 function collectDomainSpecProducedPaths(
