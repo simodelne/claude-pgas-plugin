@@ -176,4 +176,4 @@ Capstone zero-patch completion: no.
 
 ## PR
 
-TBD
+PR #231: https://github.com/simodelne/pgas-new/pull/231
