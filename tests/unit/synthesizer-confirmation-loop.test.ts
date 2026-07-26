@@ -105,7 +105,12 @@ interface ParsedSpec {
     policy: string;
     terminals?: string[];
   };
-  modes: Record<string, { channels?: string[]; vocabulary?: string[] }>;
+  modes: Record<string, {
+    channels?: string[];
+    vocabulary?: string[];
+    transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+    preconditions?: Record<string, Array<Record<string, unknown>>>;
+  }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
   schema: Record<string, string>;
   prompts: Record<string, string>;
@@ -121,6 +126,27 @@ interface ParsedSpec {
 }
 
 describe('confirmation_loop descriptor synthesis', () => {
+  it('gates the awaiting propose action after a terminal loop before a downstream stage', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.modes.review_work.transitions).toEqual([
+      { target: 'assemble_work', guard: { kind: 'FieldTruthy', path: 'work_units.all_terminal' } },
+    ]);
+    expect(parsed.action_map.propose_item.awaits_user_decision).toEqual({
+      channel: 'user_confirmation',
+      intent: 'present_for_approval',
+    });
+    expect(parsed.action_map.complete_review_work).toBeUndefined();
+    expect(parsed.modes.review_work.preconditions?.propose_item).toEqual([
+      { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
+    ]);
+    expect(parsed.prompts.review_work).toContain('do not call propose_item again');
+    expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
+      expect.stringContaining('do not call propose_item'),
+    ]));
+  });
+
   it('emits user_confirmation targeting, confirmation_pairing, propose_item, and an engine-valid spec', () => {
     const artifact = synthesizeProgramSpecFromDomain(domainWithLoop());
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
@@ -560,6 +586,36 @@ function domainWithLoop(overrides: {
       collection_lifecycle: lifecycle,
     }),
     'intake.interaction_json': JSON.stringify({ confirmation_loops: [loop] }),
+  };
+}
+
+function domainWithLoopThenDownstream(): Record<string, unknown> {
+  return {
+    ...domainWithLoop(),
+    'program.slug': 'work-unit-flow-downstream',
+    'program.name': 'Work Unit Flow Downstream',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'plan_work' },
+      { slug: 'review_work' },
+      { slug: 'assemble_work' },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'plan_work', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'plan_work', to: 'review_work', trigger: 'planned', guard_field: 'plan_work.done' },
+      { from: 'review_work', to: 'assemble_work', trigger: 'reviewed', guard_field: 'work_units.all_terminal' },
+      { from: 'assemble_work', to: 'complete', trigger: 'assembled', guard_field: 'assemble_work.done' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      plan_work: { kind: 'llm-reasoning' },
+      assemble_work: { kind: 'pure-compute' },
+    }),
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'assemble_work.done',
+      collection_lifecycle: indexedLifecycle,
+    }),
   };
 }
 
