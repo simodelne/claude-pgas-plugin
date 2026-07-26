@@ -274,7 +274,7 @@ describe('delegation children descriptor validation', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(CapabilityRefusalError);
-    expect((thrown as CapabilityRefusalError).message).toContain('single-child fan-out');
+    expect((thrown as CapabilityRefusalError).message).toContain('generic fan_out');
     // continue-mode and strict (non-optional) still refuse under multi-child too.
     expectCapabilityRefusalMulti(
       { ...twoChildrenOneFanOut, children: [twoChildrenOneFanOut.children[0], { ...twoChildrenOneFanOut.children[1], fan_out: undefined, delegation_mode: 'continue' }] },

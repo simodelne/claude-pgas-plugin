@@ -602,9 +602,14 @@ action_map:
         llm-reasoning, pure-compute, and external-adapter. Use
         reasoning_per_turn=true only when a stage must run agent reasoning on
         each turn.
-        For children, v1 accepts exactly one static target_spec child or one
-        synthesize_child child, requires optional=true (degrade-only), and does
-        not synthesize fan_out, dynamic_target_arg, or delegation_mode=continue.
+        For children, v1 accepts static target_spec/synthesize_child children,
+        requires optional=true (degrade-only), and supports one narrow document
+        fan-out child when documents_json is required: set fan_out.source to
+        "<documents.result_path>.documents", fan_out.current_document to
+        "<documents.result_path>.current_document", and provide stage-local
+        fan_out.result_path + fan_out.completion_guard. Generic fan_out,
+        dynamic_target_arg, delegation_mode=continue, and strict delegation
+        are still refused.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 

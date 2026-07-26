@@ -116,7 +116,7 @@ describe('multi-child delegation route-level engine falsifier (Slice B)', () => 
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(CapabilityRefusalError);
-    expect((thrown as CapabilityRefusalError).message).toContain('single-child fan-out');
+    expect((thrown as CapabilityRefusalError).message).toContain('generic fan_out');
     process.stdout.write(`[multi-child-falsifier] M-2 KILL PASS (fan_out on N-child still refuses)\n`);
   });
 
