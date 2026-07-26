@@ -986,3 +986,125 @@ E2E_TRIGGER_API_BASE=https://simoneos-staging.simoneos.xyz/api \
 E2E_DETERMINISTIC_UAT=1 \
 npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
 ```
+
+## Live VDR DD-Report UAT PASS - 2026-07-26
+
+This pass completed the requested live DD-report exercise with a synthetic
+electronic data-room perimeter of more than 20 documents. No secrets/tokens were
+printed, no force-push/main rewrite was performed, and no unrelated live/tunnel
+infrastructure was mutated.
+
+SimoneOS implementation branch:
+
+- Repo: `/home/simone/simoneos`
+- Branch: `feat/dd-report-live-vdr-uat`
+- Head: `f0af1ac3d7449ad92de28657f6cfab3958f2324e`
+- Latest commit: `fix(due-diligence-report): complete after deterministic assembly`
+- Pushed: `origin/feat/dd-report-live-vdr-uat`
+
+Repo verification run before commit/push:
+
+```bash
+npm test -- programs/simoneos/due-diligence-report/__tests__/spec-load.test.ts -t "requires native approval actions"
+npm test -- programs/simoneos/due-diligence-report/__tests__
+npm run specs:loadcheck
+npx tsx qc/lint-patterns.ts 2>&1 | head -20
+tsx qc/drift-check.ts --update
+tsx qc/integrity.ts --rotate --reason "Route assembled DD reports directly to complete"
+npm run typecheck
+npm run qc:gate
+npm test
+```
+
+Observed results:
+
+- Focused DD-report suite: 4 files, 71 tests passed.
+- Spec loadcheck: 14/14 programs compiled, including `due-diligence-report`.
+- Pattern lint: OK, no hand-written/pattern-emitted duplication.
+- Drift check: PASS after update.
+- Integrity rotate: PASS, manifest rotated for the transition-graph change.
+- Typecheck: PASS.
+- `npm run qc:gate`: PASS; only pre-existing advisory spec-graph warnings and
+  the expected local live-provider skip.
+- Full `npm test`: 282 files passed, 3113 tests passed.
+
+Staging promotion:
+
+```bash
+SIMONEOS_STAGING_REQUIRED_PROGRAMS="router telegram-router draft-policy contract-draft contract-review contract-review-service contract-revision review-service research document-ingest document-due-diligence document-due-diligence-service due-diligence-report legal-memo minutes-drafter fee-proposal-drafter user-surrogate" \
+bash deploy/scripts/promote-staging.sh --ref f0af1ac3 --tag dd-report-live-vdr-f0af1ac3 --llm-provider openai
+```
+
+Promotion evidence:
+
+- Staging URL: `https://simoneos-staging.simoneos.xyz`
+- `/api/version` consumer SHA:
+  `f0af1ac3d7449ad92de28657f6cfab3958f2324e`
+- Backend image: `sha256:d6b965f98c3340d432034f06c067e6a75690ba3e129b2640598f187f5791c5c6`
+- Frontend image: `sha256:fad2d09b4bdf034b71d0033e792aae2753187e60900e8707e08aa2d0e70c9787`
+- Health gates passed with 17 required programs present, including
+  `due-diligence-report`; edge/public API ok; registration 403; PGAS-RAG health
+  200.
+
+Synthetic live VDR fixture:
+
+- Fixture route from staging backend network:
+  `http://dd-report-eroom-fixture:8080/rooms/atlas-live-vdr/documents`
+- Fixture count check:
+  `{"count":22,"total_estimate":22,"next_page_token":""}`
+
+Final live UAT command:
+
+```bash
+E2E_DETERMINISTIC_UAT=1 \
+E2E_BASE_URL=https://simoneos-staging.simoneos.xyz \
+E2E_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_TRIGGER_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+npm run e2e:frontend -- /tmp/dd-report-live-vdr-20.scenario.yml
+```
+
+Final UAT result:
+
+- Session: `due-diligence-report-1785029321478`
+- Scenario report:
+  `/tmp/runs/due-diligence-report-2026-07-26T01-28-39-497Z.json`
+- Runner result: `PASS in 1286.5s`
+- Terminal mode: `complete`
+- Rounds: 79
+- Runner summary: repairs=0, fallbacks=0
+
+Final envelope/report metrics:
+
+- eRoom registry: 22 documents
+- Downloads/provenance: 22 downloaded, 22 hashed
+- DD aggregation: 22 processed of 22 total
+- Parallel dispatch proof: last batch size 2, `parallel=true`, completed count 2
+- Report findings: 31 red flags, 31 chart/significant-finding entries
+- Approval workflow: 13 section drafts, 13 approved drafts
+- Assembly: `decisions.all_sections_approved=true`,
+  `decisions.report_assembled=true`, `work.status_complete=true`
+- DOCX descriptor: `kind=docx`, title
+  `Project Atlas Red Flag Due Diligence Report`, 13 sections, 31 chart findings
+- Professional-grade content checks: executive summary includes `Overall
+  Assessment`; red-flags section includes `Chart of Significant Findings`;
+  scope section includes `Assumptions and Limitations`; appendices include
+  `Document Review Index`.
+
+Raw session-log note:
+
+- The runner summary reports fallbacks=0. A defensive raw NDJSON scan still
+  finds two `round_result` rows named `__fallback__` around the first approval
+  handoff (`2026-07-26T01:35:30Z` and `2026-07-26T01:35:42Z`). Surrounding log
+  rows show these were stale/buffered continuation artifacts during
+  `user_approval`/`draft_sections`; the session recovered without repair,
+  completed all approvals, and produced the assembled DOCX descriptor.
+
+Final local status evidence after the live pass:
+
+```text
+/home/simone/simoneos:
+## feat/dd-report-live-vdr-uat...origin/feat/dd-report-live-vdr-uat
+
+/home/simone/pgas-new before this handoff-doc branch:
+## main...origin/main
+```
