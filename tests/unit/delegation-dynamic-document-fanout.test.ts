@@ -89,14 +89,20 @@ describe('dynamic document delegation fan-out synthesis', () => {
       ]),
     });
     expect(parsed.projection.review_documents.include).toEqual(expect.arrayContaining([
-      'work.source.documents',
-      'work.source.current_document',
       'work.source.current_document.id',
-      'work.source.current_document.text',
+      'work.source.current_document.name',
+      'work.source.document_count',
       'review_documents.fan_out.index',
       'review_documents.fan_out.complete',
-      'review_documents.fan_out.results',
+      'review_documents.fan_out.results.*.document_id',
+      'review_documents.fan_out.results.*.summary',
     ]));
+    expect(parsed.projection.review_documents.include).not.toContain('work.source.documents');
+    expect(parsed.projection.review_documents.include).not.toContain('work.source.current_document.text');
+    expect(parsed.projection.review_documents.include).not.toContain('review_documents.fan_out.results');
+    expect(parsed.projection.review_documents.include).not.toContain('review_documents.fan_out.results.*');
+    expect(parsed.projection.review_documents.include).not.toContain('review_documents.fan_out.results.*.result');
+    expect(parsed.projection.review_documents.include).not.toContain('review_documents.fan_out.results.*.seeded_topic');
 
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.text', target: 'request.topic' }");
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.id', target: 'request.document_id' }");
