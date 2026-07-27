@@ -221,6 +221,14 @@ export function createExistingRepoArtifactPlan(
                 'frontend-spec',
                 'program-colocated-test',
               ]),
+              artifact('qc', `qc/facts/${slug}.facts.yml`, 'Provide deterministic governed memo facts for the user-facing frontend QC overlay.', 'branch_write', [
+                'e2e-frontend-lint',
+                'coverage-matrix-lint',
+              ]),
+              artifact('qc', `qc/e2e-frontend/${slug}.scenario.yml`, 'Provide the deterministic governed memo frontend scenario paired to the facts file.', 'branch_write', [
+                'e2e-frontend-lint',
+                'coverage-matrix-lint',
+              ]),
             ]
           : []),
         artifact('test', `${programPath}/__tests__/spec-load.test.ts`, 'Verify the generated backend spec loads with modes, terminal state, action map, patterns, and native adapter wiring.', 'static_verify', [

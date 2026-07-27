@@ -295,17 +295,29 @@ describe('SimoneOS governed attach profile', () => {
     try {
       const backendOnly = renderGovernedMemoAttachment(backendOnlyRepo);
       expect(backendOnly.written).not.toContain('programs/governed-memo-mini/frontend.spec.yml');
+      expect(backendOnly.written).not.toContain('qc/facts/governed-memo-mini.facts.yml');
+      expect(backendOnly.written).not.toContain('qc/e2e-frontend/governed-memo-mini.scenario.yml');
       expect(existsSync(join(backendOnlyRepo, 'programs/governed-memo-mini/frontend.spec.yml'))).toBe(false);
+      expect(existsSync(join(backendOnlyRepo, 'qc/facts/governed-memo-mini.facts.yml'))).toBe(false);
+      expect(existsSync(join(backendOnlyRepo, 'qc/e2e-frontend/governed-memo-mini.scenario.yml'))).toBe(false);
       expect(readFileSync(join(backendOnlyRepo, 'programs/governed-memo-mini/registration.ts'), 'utf8')).not.toContain('frontendSpecPath');
+      const backendOnlyCuratorRequest = readFileSync(join(backendOnlyRepo, 'audit/PGAS-NEW-governed-memo-mini.curator-request.md'), 'utf8');
+      expect(backendOnlyCuratorRequest).not.toContain('register-governed-memo-mini');
+      expect(backendOnlyCuratorRequest).not.toContain('qc/USER_FACING_PROGRAMS.txt');
+      expect(backendOnlyCuratorRequest).not.toContain('frontend/src/runtime/cutover/v2-programs.ts');
 
       const userFacing = renderGovernedMemoAttachment(userFacingRepo, { governedAttachFrontendMode: 'user-facing' });
       expect(userFacing.written).toContain('programs/governed-memo-mini/frontend.spec.yml');
+      expect(userFacing.written).toContain('qc/facts/governed-memo-mini.facts.yml');
+      expect(userFacing.written).toContain('qc/e2e-frontend/governed-memo-mini.scenario.yml');
       expect(userFacing.written).not.toEqual(expect.arrayContaining([
-        'qc/e2e-frontend/governed-memo-mini.scenario.yml',
-        'qc/facts/governed-memo-mini.facts.yml',
         'qc/e2e-coverage.yml',
+        'qc/USER_FACING_PROGRAMS.txt',
         'frontend/src/runtime/cutover/v2-programs.ts',
         'frontend/src/lib/programNames.ts',
+        'frontend/src/runtime/docx-authoring/register-governed-memo-mini.ts',
+        'frontend/src/runtime/docx-authoring/__tests__/register-governed-memo-mini.test.ts',
+        'frontend/src/main.tsx',
       ]));
 
       const registration = readFileSync(join(userFacingRepo, 'programs/governed-memo-mini/registration.ts'), 'utf8');
@@ -336,6 +348,73 @@ describe('SimoneOS governed attach profile', () => {
         ],
       });
       expect(JSON.stringify(frontendSpec)).not.toMatch(/approval/u);
+
+      const facts = load(readFileSync(join(userFacingRepo, 'qc/facts/governed-memo-mini.facts.yml'), 'utf8')) as {
+        program?: string;
+        facts?: Record<string, unknown>;
+      };
+      expect(facts.program).toBe('governed-memo-mini');
+      expect(facts.facts).toMatchObject({
+        client: 'Acme Corp',
+        issue: 'Renewal recommendation',
+        audience: 'General Counsel',
+        assumption: 'Only the provided renewal facts may be used.',
+        required_conclusion: 'Renew the agreement with the negotiated liability cap.',
+      });
+
+      const scenario = load(readFileSync(join(userFacingRepo, 'qc/e2e-frontend/governed-memo-mini.scenario.yml'), 'utf8')) as {
+        extends?: string;
+        program?: string;
+        channel?: string;
+        kickoff_prompt?: string;
+        user_responses?: unknown[];
+        expected?: {
+          modes_visited?: string[];
+          final_artifacts?: Array<{ domain_path?: string; contains_keywords?: string[] }>;
+        };
+        llm_responder?: unknown;
+      };
+      expect(scenario.extends).toBe('../facts/governed-memo-mini.facts.yml');
+      expect(scenario.program).toBe('governed-memo-mini');
+      expect(scenario.channel).toBe('frontend');
+      expect(scenario.kickoff_prompt).toContain('Acme Corp');
+      expect(scenario.kickoff_prompt).toContain('Renewal recommendation');
+      expect(scenario.kickoff_prompt).toContain('General Counsel');
+      expect(scenario.user_responses).toEqual([
+        {
+          match: { widget_kind: 'notice' },
+          action: 'approve',
+        },
+        {
+          match: { widget_kind: 'confirmation' },
+          action: 'approve',
+        },
+      ]);
+      expect(scenario.expected?.modes_visited).toEqual(['intake', 'draft_memo', 'complete']);
+      expect(scenario.expected?.final_artifacts).toEqual([
+        {
+          kind: 'memo_markdown',
+          domain_path: 'work.memo_artifact.body',
+          contains_keywords: ['Acme Corp', 'Renewal recommendation', 'liability cap'],
+        },
+      ]);
+      expect(scenario.llm_responder).toBeUndefined();
+
+      const curatorRequest = readFileSync(join(userFacingRepo, 'audit/PGAS-NEW-governed-memo-mini.curator-request.md'), 'utf8');
+      expect(curatorRequest).toContain('Boundary: CURATOR-REQUEST');
+      expect(curatorRequest).toContain('frontend/src/runtime/docx-authoring/register-governed-memo-mini.ts');
+      expect(curatorRequest).toContain("registerArtifactRenderer('governed_memo_markdown'");
+      expect(curatorRequest).toContain("mimeType: 'text/markdown;charset=utf-8'");
+      expect(curatorRequest).toContain('frontend/src/runtime/docx-authoring/__tests__/register-governed-memo-mini.test.ts');
+      expect(curatorRequest).toContain("renderArtifact(domain, 'governed_memo_markdown')");
+      expect(curatorRequest).toContain('frontend/src/main.tsx');
+      expect(curatorRequest).toContain("import './runtime/docx-authoring/register-governed-memo-mini';");
+      expect(curatorRequest).toContain('qc/e2e-coverage.yml');
+      expect(curatorRequest).toContain('facts: qc/facts/governed-memo-mini.facts.yml');
+      expect(curatorRequest).toContain('channels: [frontend]');
+      expect(curatorRequest).toContain('qc/USER_FACING_PROGRAMS.txt');
+      expect(curatorRequest).toContain('frontend/src/runtime/cutover/v2-programs.ts');
+      expect(curatorRequest).toContain("'governed-memo-mini': 'Governed Memo Mini'");
     } finally {
       rmSync(backendOnlyRepo, { recursive: true, force: true });
       rmSync(userFacingRepo, { recursive: true, force: true });
