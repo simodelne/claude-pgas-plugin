@@ -16,8 +16,10 @@ import {
 import { renderControlPlaneControlsYaml } from './control-plane.js';
 import {
   renderSimoneOsGovernedAttachCuratorRequest,
+  renderSimoneOsGovernedAttachProjectionTest,
   renderSimoneOsGovernedAttachProjection,
   renderSimoneOsGovernedAttachRegistration,
+  renderSimoneOsGovernedAttachSpecLoadTest,
   renderSimoneOsGovernedAttachSpec,
   type ExistingRepoTargetProfile,
 } from './governed-attach-profile.js';
@@ -83,6 +85,8 @@ interface SynthesizedSources {
   specYaml?: string;
   registrationTs?: string;
   projectionTs?: string;
+  specLoadTestTs?: string;
+  projectionTestTs?: string;
   curatorRequestMd?: string;
   contractsTs?: string;
   handlersTs?: string;
@@ -228,6 +232,14 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
         name: options.name,
       }),
       projectionTs: renderSimoneOsGovernedAttachProjection({
+        slug: options.slug,
+        name: options.name,
+      }),
+      specLoadTestTs: renderSimoneOsGovernedAttachSpecLoadTest({
+        slug: options.slug,
+        name: options.name,
+      }),
+      projectionTestTs: renderSimoneOsGovernedAttachProjectionTest({
         slug: options.slug,
         name: options.name,
       }),
@@ -799,6 +811,12 @@ function templateForSynthesizedArtifact(
   }
   if (artifact.path.endsWith(`/${selected.slug}/projection.ts`) && selected.projectionTs) {
     return inlineTemplate(selected.projectionTs);
+  }
+  if (artifact.path.endsWith(`/${selected.slug}/__tests__/spec-load.test.ts`) && selected.specLoadTestTs) {
+    return inlineTemplate(selected.specLoadTestTs);
+  }
+  if (artifact.path.endsWith(`/${selected.slug}/__tests__/projection.test.ts`) && selected.projectionTestTs) {
+    return inlineTemplate(selected.projectionTestTs);
   }
   if (artifact.path === `audit/PGAS-NEW-${selected.slug}.curator-request.md` && selected.curatorRequestMd) {
     return inlineTemplate(selected.curatorRequestMd);

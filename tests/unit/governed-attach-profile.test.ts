@@ -80,8 +80,26 @@ describe('SimoneOS governed attach profile', () => {
         'programs/governed-memo-mini/specs.yml',
         'programs/governed-memo-mini/registration.ts',
         'programs/governed-memo-mini/projection.ts',
+        'programs/governed-memo-mini/__tests__/spec-load.test.ts',
+        'programs/governed-memo-mini/__tests__/projection.test.ts',
         'audit/PGAS-NEW-governed-memo-mini.curator-request.md',
       ]);
+      expect(result.written).not.toEqual(expect.arrayContaining([
+        'programs/governed-memo-mini/handlers.ts',
+        'programs/governed-memo-mini/handlers/index.ts',
+        'programs/governed-memo-mini/handlers/_resolver.ts',
+        'programs/governed-memo-mini/tools.ts',
+        'programs/governed-memo-mini/frontend.spec.yml',
+        'tests/governed-memo-mini-deterministic.test.ts',
+        'tests/live-provider.test.ts',
+        'qc/e2e-frontend/governed-memo-mini.scenario.yml',
+        'qc/facts/governed-memo-mini.facts.yml',
+        'qc/e2e-coverage.yml',
+        'frontend/src/runtime/cutover/v2-programs.ts',
+      ]));
+      for (const writtenPath of result.written) {
+        expect(writtenPath).not.toMatch(/(?:^|\/)(?:live|e2e)(?:[-.]|\/)|(?:[-.])(?:live|e2e)(?:[-.]|$)/u);
+      }
 
       const source = readFileSync(join(repoRoot, 'programs/governed-memo-mini/specs.yml'), 'utf8');
       const parsed = load(source) as ParsedSpec;
@@ -203,6 +221,29 @@ describe('SimoneOS governed attach profile', () => {
       expect(projection).toContain('export const governedMemoMiniProjection: ProjectionBuilder');
       expect(projection).toContain("'work.memo_artifact'");
       expect(projection).not.toMatch(/from ['"](?:\.{1,2}\/|\/)[^'"]*(?:server|frontend)[^'"]*['"]/u);
+      expect(projection).toContain('interface GovernedMemoMiniDerived');
+      expect(projection).toContain('memo_artifact: MemoArtifact | null');
+
+      const specLoadTest = readFileSync(join(repoRoot, 'programs/governed-memo-mini/__tests__/spec-load.test.ts'), 'utf8');
+      expect(specLoadTest).toContain("import { createProgramEntry } from '../registration.js';");
+      expect(specLoadTest).toContain("expect(entry.spec.name).toBe('governed-memo-mini')");
+      expect(specLoadTest).toContain("expect(entry.spec.modes.has('intake')).toBe(true)");
+      expect(specLoadTest).toContain("expect(entry.spec.modes.has('draft_memo')).toBe(true)");
+      expect(specLoadTest).toContain("expect(entry.spec.modes.has('complete')).toBe(true)");
+      expect(specLoadTest).toContain("expect(entry.spec.terminal).toContain('complete')");
+      expect(specLoadTest).toContain("expect(entry.spec.action_map.get('draft_memo')?.mutations)");
+      expect(specLoadTest).toContain("expect(raw.patterns).toEqual(");
+      expect(specLoadTest).toContain("expect(() => entry.createAdapters({ userId: 'u-test', sessionId: 's-test' })).not.toThrow()");
+      expect(specLoadTest).not.toMatch(/(?:^|[-.])(live|e2e)([-.]|$)/u);
+
+      const projectionTest = readFileSync(join(repoRoot, 'programs/governed-memo-mini/__tests__/projection.test.ts'), 'utf8');
+      expect(projectionTest).toContain("import type { DomainMap } from '@simodelne/pgas-server/plugin.js';");
+      expect(projectionTest).toContain("import { governedMemoMiniProjection } from '../projection.js';");
+      expect(projectionTest).toContain("'work.memo_artifact'");
+      expect(projectionTest).toContain("expect(derived.memo_artifact).toMatchObject({");
+      expect(projectionTest).toContain("expect(derived.workspace_artifact_items).toEqual([");
+      expect(projectionTest).toContain("expect(derived.phase_steps).toEqual([");
+      expect(projectionTest).not.toMatch(/(?:^|[-.])(live|e2e)([-.]|$)/u);
 
       const curatorRequest = readFileSync(join(repoRoot, 'audit/PGAS-NEW-governed-memo-mini.curator-request.md'), 'utf8');
       expect(curatorRequest).toContain('Boundary: CURATOR-REQUEST');

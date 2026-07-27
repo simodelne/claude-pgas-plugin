@@ -213,6 +213,16 @@ export function createExistingRepoArtifactPlan(
           'typecheck',
           'projection-lint',
         ]),
+        artifact('test', `${programPath}/__tests__/spec-load.test.ts`, 'Verify the generated backend spec loads with modes, terminal state, action map, patterns, and native adapter wiring.', 'static_verify', [
+          'spec-load',
+          'program-colocated-test',
+          'lint-tests',
+        ]),
+        artifact('test', `${programPath}/__tests__/projection.test.ts`, 'Verify governed memo domain state derives stable backend projection fields.', 'static_verify', [
+          'typecheck',
+          'program-colocated-test',
+          'projection-lint',
+        ]),
         artifact('audit', `${auditDir}/PGAS-NEW-${slug}.curator-request.md`, 'Request curator-owned SimoneOS central registry and specs-loadcheck edits.', 'pr_graduation', [
           'audit-review',
           'specs-loadcheck',
