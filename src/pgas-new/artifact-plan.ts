@@ -1,4 +1,5 @@
 import type { CapabilityGap } from '../foundry-program/synthesizer-store.js';
+import type { ExistingRepoTargetProfile } from './governed-attach-profile.js';
 import { FIXED_WIRING_MANIFEST_PATH, type PgasNewMode } from './model.js';
 import { isSafeRepoRelativePath, type WiringManifest } from './wiring-manifest.js';
 
@@ -68,6 +69,7 @@ export interface GeneratedArtifactPlanOptions {
   includeSmokeTest?: boolean;
   capabilityGaps?: readonly CapabilityGap[];
   requestedArtifactPaths?: string[];
+  targetProfile?: ExistingRepoTargetProfile;
   exportSurfaces?: {
     docx?: boolean;
     html?: boolean;
@@ -191,6 +193,17 @@ export function createExistingRepoArtifactPlan(
   const pgasNewDir = trimSlashes(manifest.paths.pgas_new_dir);
   const auditDir = trimSlashes(manifest.paths.audit_dir);
   const programPath = `${programsDir}/${slug}`;
+  if (options.targetProfile === 'simoneos-governed-attach') {
+    return {
+      target: 'existing_repo',
+      program: safeProgram,
+      artifacts: [
+        artifact('spec', `${programPath}/specs.yml`, 'Declare the SimoneOS-governed attached program spec.', 'branch_write', [
+          'spec-load',
+        ]),
+      ],
+    };
+  }
   const coreArtifacts = [
     artifact('spec', `${programPath}/specs.yml`, 'Declare the attached PGAS program spec.', 'branch_write', [
       'spec-load',
