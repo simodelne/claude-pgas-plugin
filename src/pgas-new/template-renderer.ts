@@ -16,12 +16,14 @@ import {
 import { renderControlPlaneControlsYaml } from './control-plane.js';
 import {
   renderSimoneOsGovernedAttachCuratorRequest,
+  renderSimoneOsGovernedAttachFrontendSpec,
   renderSimoneOsGovernedAttachProjectionTest,
   renderSimoneOsGovernedAttachProjection,
   renderSimoneOsGovernedAttachRegistration,
   renderSimoneOsGovernedAttachSpecLoadTest,
   renderSimoneOsGovernedAttachSpec,
   type ExistingRepoTargetProfile,
+  type SimoneOsGovernedAttachFrontendMode,
 } from './governed-attach-profile.js';
 import { PGAS_SERVER_VERSION } from './version.js';
 import type { WiringManifest } from './wiring-manifest.js';
@@ -57,6 +59,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   targetProfile?: ExistingRepoTargetProfile;
+  governedAttachFrontendMode?: SimoneOsGovernedAttachFrontendMode;
   synthesizedSpecYaml?: string;
   synthesizedSynthesisContext?: SynthesisContext;
   synthesizedRegistrationTs?: string;
@@ -85,6 +88,7 @@ interface SynthesizedSources {
   specYaml?: string;
   registrationTs?: string;
   projectionTs?: string;
+  frontendSpecYaml?: string;
   specLoadTestTs?: string;
   projectionTestTs?: string;
   curatorRequestMd?: string;
@@ -195,6 +199,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
     options.manifest,
     {
       targetProfile: options.targetProfile,
+      governedAttachFrontendMode: options.governedAttachFrontendMode,
       stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
@@ -220,6 +225,9 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
     if (!options.synthesizedSynthesisContext) {
       throw new Error('simoneos governed attach profile requires synthesizedSynthesisContext');
     }
+    const frontendSpecPath = options.governedAttachFrontendMode === 'user-facing'
+      ? `${trimRepoRelativePath(options.manifest.paths.programs_dir)}/${options.slug}`
+      : undefined;
     return {
       ...sources,
       specYaml: renderSimoneOsGovernedAttachSpec({
@@ -230,14 +238,22 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
       registrationTs: renderSimoneOsGovernedAttachRegistration({
         slug: options.slug,
         name: options.name,
+        frontendSpecPath,
       }),
       projectionTs: renderSimoneOsGovernedAttachProjection({
         slug: options.slug,
         name: options.name,
       }),
+      frontendSpecYaml: options.governedAttachFrontendMode === 'user-facing'
+        ? renderSimoneOsGovernedAttachFrontendSpec({
+            slug: options.slug,
+            name: options.name,
+          })
+        : undefined,
       specLoadTestTs: renderSimoneOsGovernedAttachSpecLoadTest({
         slug: options.slug,
         name: options.name,
+        frontendSpecPath,
       }),
       projectionTestTs: renderSimoneOsGovernedAttachProjectionTest({
         slug: options.slug,
@@ -246,6 +262,7 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
       curatorRequestMd: renderSimoneOsGovernedAttachCuratorRequest({
         slug: options.slug,
         name: options.name,
+        frontendSpecPath,
       }),
     };
   }
@@ -812,6 +829,9 @@ function templateForSynthesizedArtifact(
   if (artifact.path.endsWith(`/${selected.slug}/projection.ts`) && selected.projectionTs) {
     return inlineTemplate(selected.projectionTs);
   }
+  if (artifact.path.endsWith(`/${selected.slug}/frontend.spec.yml`) && selected.frontendSpecYaml) {
+    return inlineTemplate(selected.frontendSpecYaml);
+  }
   if (artifact.path.endsWith(`/${selected.slug}/__tests__/spec-load.test.ts`) && selected.specLoadTestTs) {
     return inlineTemplate(selected.specLoadTestTs);
   }
@@ -1136,6 +1156,7 @@ function synthesizedSourcesFor(options: {
     specYaml: options.synthesizedSpecYaml,
     registrationTs: options.synthesizedRegistrationTs,
     projectionTs: undefined,
+    frontendSpecYaml: undefined,
     curatorRequestMd: undefined,
     contractsTs: options.synthesizedContractsTs,
     handlersTs: options.synthesizedHandlersTs,
@@ -1152,6 +1173,7 @@ function synthesizedSourcesFor(options: {
       specYaml: child.spec_yaml,
       registrationTs: child.registration_ts,
       projectionTs: undefined,
+      frontendSpecYaml: undefined,
       curatorRequestMd: undefined,
       contractsTs: child.contracts_ts,
       handlersTs: child.handlers_ts,
