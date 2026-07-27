@@ -15,6 +15,9 @@ import {
 } from './artifact-plan.js';
 import { renderControlPlaneControlsYaml } from './control-plane.js';
 import {
+  renderSimoneOsGovernedAttachCuratorRequest,
+  renderSimoneOsGovernedAttachProjection,
+  renderSimoneOsGovernedAttachRegistration,
   renderSimoneOsGovernedAttachSpec,
   type ExistingRepoTargetProfile,
 } from './governed-attach-profile.js';
@@ -79,6 +82,8 @@ interface TemplateSpec {
 interface SynthesizedSources {
   specYaml?: string;
   registrationTs?: string;
+  projectionTs?: string;
+  curatorRequestMd?: string;
   contractsTs?: string;
   handlersTs?: string;
   handlersIndexTs?: string;
@@ -218,6 +223,18 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
         name: options.name,
         context: options.synthesizedSynthesisContext,
       }),
+      registrationTs: renderSimoneOsGovernedAttachRegistration({
+        slug: options.slug,
+        name: options.name,
+      }),
+      projectionTs: renderSimoneOsGovernedAttachProjection({
+        slug: options.slug,
+        name: options.name,
+      }),
+      curatorRequestMd: renderSimoneOsGovernedAttachCuratorRequest({
+        slug: options.slug,
+        name: options.name,
+      }),
     };
   }
 
@@ -231,7 +248,9 @@ function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sour
   // so stamp the repo-relative program directory into the generated registration.
   const frontendSpecPath = `${trimRepoRelativePath(options.manifest.paths.programs_dir)}/${options.slug}`;
   const registrationTs = sources.registrationTs
-    ? injectFrontendSpecPath(sources.registrationTs, frontendSpecPath)
+    ? options.targetProfile === 'simoneos-governed-attach'
+      ? sources.registrationTs
+      : injectFrontendSpecPath(sources.registrationTs, frontendSpecPath)
     : sources.registrationTs;
 
   return {
@@ -778,6 +797,12 @@ function templateForSynthesizedArtifact(
     }
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
+  if (artifact.path.endsWith(`/${selected.slug}/projection.ts`) && selected.projectionTs) {
+    return inlineTemplate(selected.projectionTs);
+  }
+  if (artifact.path === `audit/PGAS-NEW-${selected.slug}.curator-request.md` && selected.curatorRequestMd) {
+    return inlineTemplate(selected.curatorRequestMd);
+  }
   if (artifact.path.endsWith(`/${selected.slug}/contracts.ts`) && selected.contractsTs) {
     return inlineTemplate(selected.contractsTs);
   }
@@ -809,6 +834,9 @@ function synthesizedSourcesForArtifact(
   sources: SynthesizedSources,
 ): ResolvedSynthesizedSources | undefined {
   if (artifactPath === 'tests/generated-program-smoke.test.ts') {
+    return { ...sources, slug: primarySlug };
+  }
+  if (artifactPath === `audit/PGAS-NEW-${primarySlug}.curator-request.md`) {
     return { ...sources, slug: primarySlug };
   }
   if (artifactPathBelongsToProgram(artifactPath, primarySlug)) {
@@ -1089,6 +1117,8 @@ function synthesizedSourcesFor(options: {
   return {
     specYaml: options.synthesizedSpecYaml,
     registrationTs: options.synthesizedRegistrationTs,
+    projectionTs: undefined,
+    curatorRequestMd: undefined,
     contractsTs: options.synthesizedContractsTs,
     handlersTs: options.synthesizedHandlersTs,
     handlersIndexTs: options.synthesizedHandlersIndexTs,
@@ -1103,6 +1133,8 @@ function synthesizedSourcesFor(options: {
       name: child.name,
       specYaml: child.spec_yaml,
       registrationTs: child.registration_ts,
+      projectionTs: undefined,
+      curatorRequestMd: undefined,
       contractsTs: child.contracts_ts,
       handlersTs: child.handlers_ts,
       handlersIndexTs: child.handlers_index_ts,

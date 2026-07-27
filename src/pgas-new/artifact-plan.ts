@@ -197,9 +197,25 @@ export function createExistingRepoArtifactPlan(
     return {
       target: 'existing_repo',
       program: safeProgram,
+      registration_patch_request: {
+        strategy: manifest.registration.strategy,
+        requested: true,
+      },
       artifacts: [
         artifact('spec', `${programPath}/specs.yml`, 'Declare the SimoneOS-governed attached program spec.', 'branch_write', [
           'spec-load',
+        ]),
+        artifact('registration', `${programPath}/registration.ts`, 'Register the SimoneOS-governed attached backend program through the target-native ProgramEntry surface.', 'branch_write', [
+          'typecheck',
+          'spec-load',
+        ]),
+        artifact('projection', `${programPath}/projection.ts`, 'Expose minimal colocated derived state for the SimoneOS-governed backend program.', 'branch_write', [
+          'typecheck',
+          'projection-lint',
+        ]),
+        artifact('audit', `${auditDir}/PGAS-NEW-${slug}.curator-request.md`, 'Request curator-owned SimoneOS central registry and specs-loadcheck edits.', 'pr_graduation', [
+          'audit-review',
+          'specs-loadcheck',
         ]),
       ],
     };
