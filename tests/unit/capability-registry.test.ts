@@ -4,6 +4,7 @@ import {
   CapabilityRefusalError,
   assertSynthesizableCapabilities,
   assessCapabilities,
+  capabilityEntry,
   capabilityStatus,
   detectRequestedCapabilities,
 } from '../../src/foundry-program/capability-registry.js';
@@ -48,11 +49,57 @@ describe('foundry capability registry (#166 PR-1)', () => {
     expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
     expect(capabilityStatus('document_extraction_docx')).toBe('synthesizes');
     expect(capabilityStatus('document_extraction_pdf')).toBe('scaffolds_with_gap');
+    expect(capabilityStatus('rich_frontend')).toBe('synthesizes');
     for (const cap of [
-      'rich_frontend',
+      'rich_frontend_unsupported_surface',
       'export_docx_trackchange',
     ]) {
       expect(capabilityStatus(cap), cap).toBe('refuses');
+    }
+  });
+
+  it('claims only the minimal governed memo workspace frontend as synthesized', () => {
+    expect(capabilityEntry('rich_frontend')).toEqual({
+      capability: 'rich_frontend',
+      status: 'synthesizes',
+      evidence:
+        'Synthesizes only the minimal governed memo workspace frontend for the simoneos-governed-attach user-facing governed-memo-mini bundle: workspace-3col rails, focus-panel, chat-thread, completion-celebration, artifact-list, and Markdown artifact download through the curator-request central wiring.',
+      since_version: '3.28.0',
+    });
+
+    const demands = detectRequestedCapabilities({
+      purpose:
+        'Create the minimal governed memo workspace frontend with workspace-3col rails, focus-panel, chat-thread, completion-celebration, artifact-list, and Markdown artifact download via curator-request central wiring.',
+    });
+
+    expect(demands).toEqual([{
+      capability: 'rich_frontend',
+      evidence: 'minimal governed memo workspace frontend (matched "minimal governed memo workspace frontend")',
+    }]);
+    expect(assertSynthesizableCapabilities({ purpose: 'Generate a governed-memo-mini frontend.' }).refuses).toEqual([]);
+  });
+
+  it('still refuses richer frontend surfaces beyond the governed memo workspace', () => {
+    const unsupportedRichSurfaces: Array<[string, string]> = [
+      ['editable document viewers', 'Build an editable document viewer for uploaded contracts.'],
+      ['generic/arbitrary approval widgets', 'Add an arbitrary approval widget users can configure for any workflow.'],
+      ['alternatives-comparison UI', 'Show an alternatives-comparison UI with side-by-side choices to accept.'],
+      ['rich per-item confirmation loops', 'Render a rich per-item confirmation loop with approve and reject controls for every clause.'],
+      ['arbitrary custom workspace-context tabs', 'Add arbitrary custom workspace-context tabs for timeline, risks, and stakeholders.'],
+      ['native DOCX track-change UI', 'Provide a native DOCX track-change UI with insertions and deletions.'],
+    ];
+
+    for (const [label, purpose] of unsupportedRichSurfaces) {
+      const demands = detectRequestedCapabilities({ purpose });
+      expect(demands.map((demand) => demand.capability), label).toContain('rich_frontend_unsupported_surface');
+      expect(() => assertSynthesizableCapabilities({ purpose }), label).toThrow(CapabilityRefusalError);
+      try {
+        assertSynthesizableCapabilities({ purpose });
+      } catch (error) {
+        expect(error).toBeInstanceOf(CapabilityRefusalError);
+        expect((error as CapabilityRefusalError).refused.map((demand) => demand.capability), label)
+          .toContain('rich_frontend_unsupported_surface');
+      }
     }
   });
 });
@@ -70,7 +117,8 @@ describe('capability detection precision', () => {
     expect(caps).toContain('document_upload_intake');
     expect(caps).toContain('delegation_research_agent');
     expect(caps).toContain('export_docx_trackchange');
-    expect(caps).toContain('rich_frontend');
+    expect(caps).toContain('rich_frontend_unsupported_surface');
+    expect(caps).not.toContain('rich_frontend');
   });
 
   it('does NOT fire on a linear program (no false positives)', () => {
