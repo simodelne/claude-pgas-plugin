@@ -2283,9 +2283,9 @@ interface ExportSection {
 }
 
 function sectionsFromDomain(domain: Record<string, unknown>, stage: string): ExportSection[] {
-  const sections: ExportSection[] = [];
+  const sections: ExportSection[] = approvedReportSectionsFromDomain(domain);
   for (const key of Object.keys(domain).sort()) {
-    if (key.startsWith(stage + '.')) {
+    if (key.startsWith(stage + '.') || isReportSectionLifecyclePath(key) || isRawSourceOrCorpusPath(key)) {
       continue;
     }
     const value = domain[key];
@@ -2300,6 +2300,9 @@ function sectionsFromDomain(domain: Record<string, unknown>, stage: string): Exp
 }
 
 function sectionForDomainValue(path: string, value: unknown): ExportSection | undefined {
+  if (isReportSectionLifecyclePath(path) || isRawSourceOrCorpusPath(path)) {
+    return undefined;
+  }
   if (isStageOutput(value)) {
     const parsed = parseJsonValue(value.result_json);
     return {
@@ -2323,8 +2326,90 @@ function sectionForDomainValue(path: string, value: unknown): ExportSection | un
   return undefined;
 }
 
+function approvedReportSectionsFromDomain(domain: Record<string, unknown>): ExportSection[] {
+  const sections: ExportSection[] = [];
+  for (const [index, item] of reportSectionRecordsFromDomain(domain)) {
+    const status = stringField(item, 'status')?.toLowerCase();
+    if (status && status !== 'accepted' && status !== 'approved') {
+      continue;
+    }
+    const body = stringField(item, 'final_text')
+      ?? stringField(item, 'approved_text')
+      ?? stringField(item, 'proposed_text')
+      ?? stringField(item, 'body')
+      ?? stringField(item, 'text')
+      ?? stringField(item, 'summary');
+    if (!body || body.trim().length === 0) {
+      continue;
+    }
+    sections.push({
+      title: stringField(item, 'title') ?? stringField(item, 'section_kind') ?? 'Report Section ' + String(index + 1),
+      body,
+    });
+  }
+  return sections;
+}
+
+function reportSectionRecordsFromDomain(domain: Record<string, unknown>): Array<[number, Record<string, unknown>]> {
+  const byIndex = new Map<number, Record<string, unknown>>();
+  const directItems = domain['work.report_sections.items'];
+  if (Array.isArray(directItems)) {
+    directItems.forEach((item, index) => {
+      if (isRecordValue(item)) {
+        byIndex.set(index, { ...item });
+      }
+    });
+  }
+  for (const key of Object.keys(domain).sort()) {
+    const match = key.match(/^work\\.report_sections\\.items\\.(\\d+)(?:\\.(.+))?$/u);
+    if (!match) {
+      continue;
+    }
+    const index = Number(match[1]);
+    const existing = byIndex.get(index) ?? {};
+    const field = match[2];
+    const value = domain[key];
+    if (!field && isRecordValue(value)) {
+      byIndex.set(index, { ...existing, ...value });
+      continue;
+    }
+    if (field) {
+      existing[field] = value;
+      byIndex.set(index, existing);
+    }
+  }
+  return [...byIndex.entries()].sort(([left], [right]) => left - right);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isReportSectionLifecyclePath(path: string): boolean {
+  return path === 'work.report_sections' || path.startsWith('work.report_sections.');
+}
+
+function isRawSourceOrCorpusPath(path: string): boolean {
+  const normalized = path.toLowerCase();
+  return normalized === 'work.source'
+    || normalized.startsWith('work.source.')
+    || normalized === 'work.source_ready'
+    || normalized.endsWith('.full_text')
+    || normalized.includes('.full_text.')
+    || normalized.endsWith('.documents')
+    || normalized.includes('.documents.')
+    || normalized.endsWith('.current_document.text')
+    || normalized.includes('.current_document.text.')
+    || normalized.includes('.fan_out.results');
+}
+
 function isStageOutput(value: unknown): value is { result_json: string; items_json?: string; digest?: string } {
   return !!value && typeof value === 'object' && !Array.isArray(value) && typeof (value as { result_json?: unknown }).result_json === 'string';
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function parseJsonValue(value: string): unknown {
