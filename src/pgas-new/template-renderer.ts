@@ -4,6 +4,7 @@ import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import ts from 'typescript';
+import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import {
   createExistingRepoArtifactPlan,
   createStandaloneArtifactPlan,
@@ -13,6 +14,10 @@ import {
   type ProgramIdentity,
 } from './artifact-plan.js';
 import { renderControlPlaneControlsYaml } from './control-plane.js';
+import {
+  renderSimoneOsGovernedAttachSpec,
+  type ExistingRepoTargetProfile,
+} from './governed-attach-profile.js';
 import { PGAS_SERVER_VERSION } from './version.js';
 import type { WiringManifest } from './wiring-manifest.js';
 
@@ -46,7 +51,9 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   stageSlugs?: string[];
   template?: ProgramTemplate;
   mandate?: string;
+  targetProfile?: ExistingRepoTargetProfile;
   synthesizedSpecYaml?: string;
+  synthesizedSynthesisContext?: SynthesisContext;
   synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
@@ -173,11 +180,12 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
 }
 
 export function renderExistingRepoAttachment(options: RenderExistingRepoOptions): RenderResult {
-  const synthesizedSources = existingRepoSynthesizedSources(options, synthesizedSourcesFor(options));
+  const synthesizedSources = existingRepoSynthesizedSources(options, profiledSynthesizedSources(options, synthesizedSourcesFor(options)));
   const plan = createExistingRepoArtifactPlan(
     { slug: options.slug, name: options.name },
     options.manifest,
     {
+      targetProfile: options.targetProfile,
       stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
@@ -193,6 +201,28 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
     templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, synthesizedSources),
     tokens: tokensFor(options, plan),
   });
+}
+
+function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources: SynthesizedSources): SynthesizedSources {
+  if (options.targetProfile === undefined) {
+    return sources;
+  }
+  if (options.targetProfile === 'simoneos-governed-attach') {
+    if (!options.synthesizedSynthesisContext) {
+      throw new Error('simoneos governed attach profile requires synthesizedSynthesisContext');
+    }
+    return {
+      ...sources,
+      specYaml: renderSimoneOsGovernedAttachSpec({
+        slug: options.slug,
+        name: options.name,
+        context: options.synthesizedSynthesisContext,
+      }),
+    };
+  }
+
+  const unreachable: never = options.targetProfile;
+  throw new Error(`unsupported existing repo target profile: ${unreachable}`);
 }
 
 function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sources: SynthesizedSources): SynthesizedSources {
