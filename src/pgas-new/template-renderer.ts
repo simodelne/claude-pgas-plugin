@@ -16,6 +16,8 @@ import {
 import { renderControlPlaneControlsYaml } from './control-plane.js';
 import {
   renderSimoneOsGovernedAttachCuratorRequest,
+  renderSimoneOsGovernedAttachFacts,
+  renderSimoneOsGovernedAttachFrontendScenario,
   renderSimoneOsGovernedAttachFrontendSpec,
   renderSimoneOsGovernedAttachProjectionTest,
   renderSimoneOsGovernedAttachProjection,
@@ -89,6 +91,8 @@ interface SynthesizedSources {
   registrationTs?: string;
   projectionTs?: string;
   frontendSpecYaml?: string;
+  factsYaml?: string;
+  frontendScenarioYaml?: string;
   specLoadTestTs?: string;
   projectionTestTs?: string;
   curatorRequestMd?: string;
@@ -246,6 +250,18 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
       }),
       frontendSpecYaml: options.governedAttachFrontendMode === 'user-facing'
         ? renderSimoneOsGovernedAttachFrontendSpec({
+            slug: options.slug,
+            name: options.name,
+          })
+        : undefined,
+      factsYaml: options.governedAttachFrontendMode === 'user-facing'
+        ? renderSimoneOsGovernedAttachFacts({
+            slug: options.slug,
+            name: options.name,
+          })
+        : undefined,
+      frontendScenarioYaml: options.governedAttachFrontendMode === 'user-facing'
+        ? renderSimoneOsGovernedAttachFrontendScenario({
             slug: options.slug,
             name: options.name,
           })
@@ -832,6 +848,12 @@ function templateForSynthesizedArtifact(
   if (artifact.path.endsWith(`/${selected.slug}/frontend.spec.yml`) && selected.frontendSpecYaml) {
     return inlineTemplate(selected.frontendSpecYaml);
   }
+  if (artifact.path === `qc/facts/${selected.slug}.facts.yml` && selected.factsYaml) {
+    return inlineTemplate(selected.factsYaml);
+  }
+  if (artifact.path === `qc/e2e-frontend/${selected.slug}.scenario.yml` && selected.frontendScenarioYaml) {
+    return inlineTemplate(selected.frontendScenarioYaml);
+  }
   if (artifact.path.endsWith(`/${selected.slug}/__tests__/spec-load.test.ts`) && selected.specLoadTestTs) {
     return inlineTemplate(selected.specLoadTestTs);
   }
@@ -875,6 +897,12 @@ function synthesizedSourcesForArtifact(
     return { ...sources, slug: primarySlug };
   }
   if (artifactPath === `audit/PGAS-NEW-${primarySlug}.curator-request.md`) {
+    return { ...sources, slug: primarySlug };
+  }
+  if (
+    artifactPath === `qc/facts/${primarySlug}.facts.yml`
+    || artifactPath === `qc/e2e-frontend/${primarySlug}.scenario.yml`
+  ) {
     return { ...sources, slug: primarySlug };
   }
   if (artifactPathBelongsToProgram(artifactPath, primarySlug)) {
@@ -1157,6 +1185,8 @@ function synthesizedSourcesFor(options: {
     registrationTs: options.synthesizedRegistrationTs,
     projectionTs: undefined,
     frontendSpecYaml: undefined,
+    factsYaml: undefined,
+    frontendScenarioYaml: undefined,
     curatorRequestMd: undefined,
     contractsTs: options.synthesizedContractsTs,
     handlersTs: options.synthesizedHandlersTs,
@@ -1174,6 +1204,8 @@ function synthesizedSourcesFor(options: {
       registrationTs: child.registration_ts,
       projectionTs: undefined,
       frontendSpecYaml: undefined,
+      factsYaml: undefined,
+      frontendScenarioYaml: undefined,
       curatorRequestMd: undefined,
       contractsTs: child.contracts_ts,
       handlersTs: child.handlers_ts,

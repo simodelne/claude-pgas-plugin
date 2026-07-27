@@ -417,6 +417,77 @@ modes:
 `;
 }
 
+export function renderSimoneOsGovernedAttachFacts(options: SimoneOsGovernedProgramOptions): string {
+  return dump({
+    program: options.slug,
+    description: `${options.name} deterministic memo frontend QC facts`,
+    facts: {
+      client: 'Acme Corp',
+      issue: 'Renewal recommendation',
+      audience: 'General Counsel',
+      assumption: 'Only the provided renewal facts may be used.',
+      required_conclusion: 'Renew the agreement with the negotiated liability cap.',
+    },
+    expected_modes: ['intake', 'draft_memo', 'complete'],
+    expected_artifacts: [
+      {
+        kind: 'memo_markdown',
+        domain_path: 'work.memo_artifact.body',
+        contains_keywords: ['Acme Corp', 'Renewal recommendation', 'liability cap'],
+      },
+    ],
+    acceptance: {
+      max_duration_minutes: 30,
+      max_repair_rate: 0.2,
+      max_fallback_rate: 0,
+    },
+  }, { lineWidth: -1, noRefs: true, sortKeys: false });
+}
+
+export function renderSimoneOsGovernedAttachFrontendScenario(options: SimoneOsGovernedProgramOptions): string {
+  return dump({
+    extends: `../facts/${options.slug}.facts.yml`,
+    program: options.slug,
+    channel: 'frontend',
+    description: `${options.name} frontend deterministic memo drafting flow`,
+    kickoff_prompt: [
+      'Please draft a concise governed markdown memo using only these facts:',
+      '- Client: Acme Corp.',
+      '- Issue: Renewal recommendation.',
+      '- Audience: General Counsel.',
+      '- Assumption: Only the provided renewal facts may be used.',
+      '- Required conclusion: Renew the agreement with the negotiated liability cap.',
+      '',
+      'Provide the final memo as markdown and do not introduce unstated facts.',
+    ].join('\n'),
+    user_responses: [
+      {
+        match: { widget_kind: 'notice' },
+        action: 'approve',
+      },
+      {
+        match: { widget_kind: 'confirmation' },
+        action: 'approve',
+      },
+    ],
+    expected: {
+      modes_visited: ['intake', 'draft_memo', 'complete'],
+      final_artifacts: [
+        {
+          kind: 'memo_markdown',
+          domain_path: 'work.memo_artifact.body',
+          contains_keywords: ['Acme Corp', 'Renewal recommendation', 'liability cap'],
+        },
+      ],
+    },
+    acceptance: {
+      max_duration_minutes: 30,
+      max_repair_rate: 0.2,
+      max_fallback_rate: 0,
+    },
+  }, { lineWidth: -1, noRefs: true, sortKeys: false });
+}
+
 export function renderSimoneOsGovernedAttachProjection(options: SimoneOsGovernedProgramOptions): string {
   const projectionName = `${toCamelCase(options.slug)}Projection`;
   const deriveName = `derive${toPascalCase(options.slug)}Projection`;
@@ -1004,16 +1075,20 @@ export function renderSimoneOsGovernedAttachCuratorRequest(options: SimoneOsGove
   const registryRegister = `registry.register('${options.slug}', asRegisterableProgramEntry(create${toPascalCase(options.slug)}ProgramEntry()));`;
   const loadcheckImport = `import { createProgramEntry as create${toPascalCase(options.slug)} } from '../programs/${options.slug}/registration.js';`;
   const loadcheckRosterEntry = `{ name: '${options.slug}',         load: () => create${toPascalCase(options.slug)}() },`;
-  const frontendArtifactBullet = options.frontendSpecPath ? `- \`programs/${options.slug}/frontend.spec.yml\`\n` : '';
+  const frontendArtifactBullet = options.frontendSpecPath
+    ? `- \`programs/${options.slug}/frontend.spec.yml\`\n- \`qc/facts/${options.slug}.facts.yml\`\n- \`qc/e2e-frontend/${options.slug}.scenario.yml\`\n`
+    : '';
   const frontendBoundaryNote = options.frontendSpecPath
     ? `## Frontend Boundary Note
 
-This generated program includes a program-local \`frontend.spec.yml\` and sets \`frontendSpecPath: '${options.frontendSpecPath}'\` in \`programs/${options.slug}/registration.ts\`. pgas-new intentionally emitted no central frontend renderer registration, V2 roster entry, display-name registry edit, \`qc/facts/${options.slug}.facts.yml\`, \`qc/e2e-frontend/${options.slug}.scenario.yml\`, or \`qc/e2e-coverage.yml\` entry in this increment. Treat Markdown renderer registration and frontend QC pairing as follow-up curator-request work.
+This generated program includes a program-local \`frontend.spec.yml\`, sets \`frontendSpecPath: '${options.frontendSpecPath}'\` in \`programs/${options.slug}/registration.ts\`, and directly emits the paired program QC files \`qc/facts/${options.slug}.facts.yml\` plus \`qc/e2e-frontend/${options.slug}.scenario.yml\`. The central frontend runtime, frontend roster, display-name registry, coverage matrix, user-facing roster, backend registry, specs-loadcheck roster, drift, and integrity updates remain curator-owned text below.
 `
     : `## Backend-Only QC Note
 
 This generated program is backend-only. pgas-new intentionally emitted no \`frontend.spec.yml\`, no \`frontendSpecPath\`, no \`qc/facts/${options.slug}.facts.yml\`, no \`qc/e2e-frontend/${options.slug}.scenario.yml\`, no \`qc/e2e-coverage.yml\` entry, and no V2 frontend roster entry. If SimoneOS policy requires every registered program to be user-facing, treat that as a SimoneOS backend-only program policy finding rather than adding frontend/QC placeholders.
 `;
+  const frontendCuratorSections = options.frontendSpecPath ? renderFrontendCuratorSections(options) : '';
+  const frontendUnifiedDiffShape = options.frontendSpecPath ? renderFrontendUnifiedDiffShape(options) : '';
 
   return `# PGAS-New Curator Request: ${options.name}
 
@@ -1088,6 +1163,8 @@ Insert before anchor:
   ${loadcheckRosterEntry}
 \`\`\`
 
+${frontendCuratorSections}
+
 ## Unified Diff Shape
 
 \`\`\`diff
@@ -1120,15 +1197,241 @@ diff --git a/scripts/specs-loadcheck.ts b/scripts/specs-loadcheck.ts
    { name: 'minutes-drafter',            load: () => createMinutesDrafter() },
 +  ${loadcheckRosterEntry}
    { name: 'user-surrogate',             load: () => createUserSurrogate({ targetPort: noopSurrogatePort as never }) },
+${frontendUnifiedDiffShape}
 \`\`\`
 
 ## Curator QC Commands
 
 \`\`\`bash
+tsx qc/integrity.ts --rotate --reason "Pre-rotate governed-memo-mini curator patch before drift update"
 tsx qc/drift-check.ts --update
 tsx qc/integrity.ts --rotate --reason "Register governed-memo-mini from pgas-new governed attach"
 \`\`\`
 `;
+}
+
+function renderFrontendCuratorSections(options: SimoneOsGovernedProgramOptions): string {
+  const rendererPath = `frontend/src/runtime/docx-authoring/register-${options.slug}.ts`;
+  const rendererTestPath = `frontend/src/runtime/docx-authoring/__tests__/register-${options.slug}.test.ts`;
+  const mainImport = `import './runtime/docx-authoring/register-${options.slug}';`;
+  return [
+    `### \`${rendererPath}\``,
+    '',
+    'Create this file:',
+    '',
+    '~~~ts',
+    renderGovernedMemoMarkdownRendererSource(),
+    '~~~',
+    '',
+    `### \`${rendererTestPath}\``,
+    '',
+    'Create this test file:',
+    '',
+    '~~~ts',
+    renderGovernedMemoMarkdownRendererTestSource(),
+    '~~~',
+    '',
+    '### `frontend/src/main.tsx`',
+    '',
+    'Insert this side-effect import after the existing due-diligence-report renderer import:',
+    '',
+    'Anchor:',
+    '~~~ts',
+    "import './runtime/docx-authoring/register-due-diligence-report';",
+    '~~~',
+    '',
+    'Insert after anchor:',
+    '~~~ts',
+    mainImport,
+    '~~~',
+    '',
+    '### `qc/e2e-coverage.yml`',
+    '',
+    'Insert this user-facing roster entry after `fee-proposal-drafter`:',
+    '',
+    '~~~yaml',
+    `  - ${options.slug}`,
+    '~~~',
+    '',
+    'Insert this program coverage block after the existing `fee-proposal-drafter` block and before `legal-memo`:',
+    '',
+    '~~~yaml',
+    `  ${options.slug}:`,
+    `    facts: qc/facts/${options.slug}.facts.yml`,
+    '    e2e-frontend:',
+    '      channels: [frontend]',
+    '      required: true',
+    '~~~',
+    '',
+    '### `qc/USER_FACING_PROGRAMS.txt`',
+    '',
+    'Insert this roster line after `fee-proposal-drafter`:',
+    '',
+    '~~~text',
+    options.slug,
+    '~~~',
+    '',
+    '### `frontend/src/runtime/cutover/v2-programs.ts`',
+    '',
+    'Insert this V2 roster entry after `fee-proposal-drafter`:',
+    '',
+    '~~~ts',
+    `  '${options.slug}',`,
+    '~~~',
+    '',
+    '### `frontend/src/lib/programNames.ts`',
+    '',
+    'Insert this canonical display-name entry after `fee-proposal-drafter`:',
+    '',
+    '~~~ts',
+    `  '${options.slug}': '${options.name}',`,
+    '~~~',
+  ].join('\n');
+}
+
+function renderFrontendUnifiedDiffShape(options: SimoneOsGovernedProgramOptions): string {
+  return [
+    'diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx',
+    '--- a/frontend/src/main.tsx',
+    '+++ b/frontend/src/main.tsx',
+    '@@',
+    " import './runtime/docx-authoring/register-due-diligence-report';",
+    `+import './runtime/docx-authoring/register-${options.slug}';`,
+    'diff --git a/qc/e2e-coverage.yml b/qc/e2e-coverage.yml',
+    '--- a/qc/e2e-coverage.yml',
+    '+++ b/qc/e2e-coverage.yml',
+    '@@',
+    '   - fee-proposal-drafter',
+    `+  - ${options.slug}`,
+    '   - legal-memo',
+    '@@',
+    '   fee-proposal-drafter:',
+    '     facts: qc/facts/fee-proposal-drafter.facts.yml',
+    '     e2e-frontend:',
+    '       channels: [frontend]',
+    '       required: true',
+    '+',
+    `+  ${options.slug}:`,
+    `+    facts: qc/facts/${options.slug}.facts.yml`,
+    '+    e2e-frontend:',
+    '+      channels: [frontend]',
+    '+      required: true',
+    '+',
+    '   legal-memo:',
+    'diff --git a/qc/USER_FACING_PROGRAMS.txt b/qc/USER_FACING_PROGRAMS.txt',
+    '--- a/qc/USER_FACING_PROGRAMS.txt',
+    '+++ b/qc/USER_FACING_PROGRAMS.txt',
+    '@@',
+    ' fee-proposal-drafter',
+    `+${options.slug}`,
+    'diff --git a/frontend/src/runtime/cutover/v2-programs.ts b/frontend/src/runtime/cutover/v2-programs.ts',
+    '--- a/frontend/src/runtime/cutover/v2-programs.ts',
+    '+++ b/frontend/src/runtime/cutover/v2-programs.ts',
+    '@@',
+    "   'fee-proposal-drafter',",
+    `+  '${options.slug}',`,
+    'diff --git a/frontend/src/lib/programNames.ts b/frontend/src/lib/programNames.ts',
+    '--- a/frontend/src/lib/programNames.ts',
+    '+++ b/frontend/src/lib/programNames.ts',
+    '@@',
+    "   'fee-proposal-drafter': 'Fee Proposal Drafter',",
+    `+  '${options.slug}': '${options.name}',`,
+  ].join('\n');
+}
+
+function renderGovernedMemoMarkdownRendererSource(): string {
+  return [
+    "import {",
+    "  registerArtifactRenderer,",
+    "  type ArtifactRenderResult,",
+    "} from '../host/artifact-renderer';",
+    '',
+    'type RecordValue = Record<string, unknown>;',
+    '',
+    'export function registerGovernedMemoMiniRenderers(): void {',
+    "  registerArtifactRenderer('governed_memo_markdown', (domain) => {",
+    "    const artifact = readRecord(domain.get('work.memo_artifact'));",
+    "    const body = readString(domain.get('work.memo_artifact.body')) || readString(artifact.body);",
+    '    if (!body) return null;',
+    "    const title = readString(domain.get('work.memo_artifact.title')) || readString(artifact.title) || 'Governed Memo';",
+    '',
+    '    return {',
+    "      filename: slugify(title) + '.md',",
+    '      content: body,',
+    "      mimeType: 'text/markdown;charset=utf-8',",
+    '    } satisfies ArtifactRenderResult;',
+    '  });',
+    '}',
+    '',
+    'function readRecord(value: unknown): RecordValue {',
+    "  if (value && typeof value === 'object' && !Array.isArray(value)) return value as RecordValue;",
+    '  return {};',
+    '}',
+    '',
+    'function readString(value: unknown): string {',
+    "  return typeof value === 'string' ? value.trim() : '';",
+    '}',
+    '',
+    'function slugify(value: string): string {',
+    "  const base = (value || 'governed-memo')",
+    '    .trim()',
+    "    .replace(/\\s+/g, '-')",
+    "    .replace(/[^A-Za-z0-9._-]/g, '')",
+    "    .replace(/-+/g, '-')",
+    "    .replace(/^[-.]+|[-.]+$/g, '')",
+    '    .slice(0, 80);',
+    "  return base.length > 0 ? base : 'governed-memo';",
+    '}',
+    '',
+    'registerGovernedMemoMiniRenderers();',
+  ].join('\n');
+}
+
+function renderGovernedMemoMarkdownRendererTestSource(): string {
+  return [
+    "import { afterEach, beforeEach, describe, expect, it } from 'vitest';",
+    "import {",
+    "  renderArtifact,",
+    "  _clearArtifactRendererRegistryForTests,",
+    "} from '../../host/artifact-renderer';",
+    "import { registerGovernedMemoMiniRenderers } from '../register-governed-memo-mini';",
+    '',
+    'function makeDomain(entries: Array<[string, unknown]>): ReadonlyMap<string, unknown> {',
+    '  return new Map(entries);',
+    '}',
+    '',
+    "describe('governed-memo-mini Markdown renderer', () => {",
+    '  beforeEach(() => {',
+    '    _clearArtifactRendererRegistryForTests();',
+    '    registerGovernedMemoMiniRenderers();',
+    '  });',
+    '',
+    '  afterEach(() => {',
+    '    _clearArtifactRendererRegistryForTests();',
+    '  });',
+    '',
+    "  it('renders the memo artifact body as markdown', async () => {",
+    '    const domain = makeDomain([',
+    "      ['work.memo_artifact.title', 'Renewal Recommendation'],",
+    "      ['work.memo_artifact.body', '## Recommendation\\nRenew Acme Corp.'],",
+    '    ]);',
+    "    const artifact = await renderArtifact(domain, 'governed_memo_markdown');",
+    '',
+    '    expect(artifact).not.toBeNull();',
+    "    expect(artifact!.filename).toBe('Renewal-Recommendation.md');",
+    "    expect(artifact!.mimeType).toBe('text/markdown;charset=utf-8');",
+    "    expect(artifact!.content).toBe('## Recommendation\\nRenew Acme Corp.');",
+    '  });',
+    '',
+    "  it('returns null when the memo body is absent', async () => {",
+    '    const artifact = await renderArtifact(makeDomain([',
+    "      ['work.memo_artifact.title', 'Missing Body'],",
+    "    ]), 'governed_memo_markdown');",
+    '',
+    '    expect(artifact).toBeNull();',
+    '  });',
+    '});',
+  ].join('\n');
 }
 
 function minimalLinearStageModel(context: SynthesisContext): {
