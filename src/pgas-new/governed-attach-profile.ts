@@ -324,6 +324,56 @@ export function renderSimoneOsGovernedAttachProjection(options: SimoneOsGoverned
 
 type StageStatus = 'complete' | 'current' | 'pending';
 
+interface MemoArtifact {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  status: string;
+}
+
+interface StatusBanner {
+  tone: 'success' | 'info';
+  label: string;
+  detail: string;
+}
+
+interface PhaseStep {
+  id: string;
+  label: string;
+  status: StageStatus;
+}
+
+interface WorkspaceCheckpoint {
+  label: string;
+  complete: boolean;
+  status: 'complete' | 'pending';
+}
+
+interface WorkspaceMetadata {
+  label: string;
+  value: string;
+}
+
+interface WorkspaceArtifactItem {
+  id: string;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+interface GovernedMemoMiniDerived {
+  program_title: string;
+  program_slug: string;
+  mode: string;
+  status_banner: StatusBanner;
+  phase_steps: PhaseStep[];
+  workspace_checkpoints: WorkspaceCheckpoint[];
+  workspace_metadata: WorkspaceMetadata[];
+  memo_artifact: MemoArtifact | null;
+  workspace_artifact_items: WorkspaceArtifactItem[];
+}
+
 const PHASES = [
   ['intake', 'Intake'],
   ['draft_memo', 'Draft Memo'],
@@ -335,27 +385,28 @@ export const ${projectionName}: ProjectionBuilder = (domain, mode) => {
 };
 
 function ${deriveName}(domain: DomainMap, mode: string): DerivedMap {
-  const memoArtifact = readRecord(domain, 'work.memo_artifact');
+  const memoArtifact = readMemoArtifact(domain);
   const intake = readRecord(domain, 'work.intake');
   const intakeFacts = readRecord(domain, 'work.intake.facts');
-  const status = readString(domain, 'work.status') || readStringFromRecord(memoArtifact, 'status') || 'pending';
-  const complete = mode === 'complete' || status === 'memo_drafted' || status === 'drafted';
+  const nestedIntakeFacts = readRecord(intake, 'facts');
+  const status = readString(domain, 'work.status') || memoArtifact?.status || 'pending';
+  const complete = mode === 'complete' || status === 'memo_drafted' || memoArtifact?.status === 'drafted';
 
-  return {
+  const derived: GovernedMemoMiniDerived = {
     program_title: '${options.name}',
     program_slug: '${options.slug}',
     mode,
     status_banner: complete
-      ? { tone: 'success', label: 'Memo drafted', detail: readStringFromRecord(memoArtifact, 'title') || 'Markdown memo artifact is available.' }
-      : { tone: 'info', label: 'In progress', detail: \`Currently in \${mode.replace(/_/g, ' ')}.\` },
+      ? { tone: 'success', label: 'Memo drafted', detail: memoArtifact?.title || 'Markdown memo artifact is available.' }
+      : { tone: 'info', label: 'In progress', detail: 'Currently in ' + mode.replace(/_/g, ' ') + '.' },
     phase_steps: PHASES.map(([id, label]) => ({
       id,
       label,
       status: phaseStatus(id, mode, complete),
     })),
     workspace_checkpoints: [
-      checkpoint('Intake facts recorded', Object.keys(intakeFacts).length > 0 || Object.keys(readRecord(intake, 'facts')).length > 0 || isTruthy(domain.get('work.intake_recorded'))),
-      checkpoint('Memo artifact drafted', Object.keys(memoArtifact).length > 0 && readStringFromRecord(memoArtifact, 'kind') === 'markdown'),
+      checkpoint('Intake facts recorded', Object.keys(intakeFacts).length > 0 || Object.keys(nestedIntakeFacts).length > 0 || isTruthy(domain.get('work.intake_recorded'))),
+      checkpoint('Memo artifact drafted', memoArtifact?.kind === 'markdown'),
     ],
     workspace_metadata: [
       { label: 'Program', value: '${options.name}' },
@@ -363,17 +414,19 @@ function ${deriveName}(domain: DomainMap, mode: string): DerivedMap {
       { label: 'Status', value: status },
     ],
     memo_artifact: memoArtifact,
-    workspace_artifact_items: Object.keys(memoArtifact).length > 0
+    workspace_artifact_items: memoArtifact
       ? [
           {
-            id: readStringFromRecord(memoArtifact, 'id') || 'memo-artifact',
-            label: readStringFromRecord(memoArtifact, 'title') || '${options.name} Markdown Memo',
-            kind: readStringFromRecord(memoArtifact, 'kind') || 'markdown',
-            status: readStringFromRecord(memoArtifact, 'status') || status,
+            id: memoArtifact.id,
+            label: memoArtifact.title || '${options.name} Markdown Memo',
+            kind: memoArtifact.kind,
+            status: memoArtifact.status || status,
           },
         ]
       : [],
   };
+
+  return { ...derived };
 }
 
 function phaseStatus(id: string, mode: string, complete: boolean): StageStatus {
@@ -382,13 +435,27 @@ function phaseStatus(id: string, mode: string, complete: boolean): StageStatus {
   return 'pending';
 }
 
-function checkpoint(label: string, complete: boolean): Record<string, unknown> {
+function checkpoint(label: string, complete: boolean): WorkspaceCheckpoint {
   return { label, complete, status: complete ? 'complete' : 'pending' };
 }
 
 function readRecord(domain: DomainMap | Record<string, unknown>, path: string): Record<string, unknown> {
   const value = domain instanceof Map ? domain.get(path) : domain[path];
   return isRecord(value) ? value : {};
+}
+
+function readMemoArtifact(domain: DomainMap): MemoArtifact | null {
+  const record = readRecord(domain, 'work.memo_artifact');
+  if (Object.keys(record).length === 0) {
+    return null;
+  }
+  return {
+    id: readStringFromRecord(record, 'id') || 'memo-artifact',
+    kind: readStringFromRecord(record, 'kind') || 'markdown',
+    title: readStringFromRecord(record, 'title'),
+    body: readStringFromRecord(record, 'body'),
+    status: readStringFromRecord(record, 'status') || 'drafted',
+  };
 }
 
 function readString(domain: DomainMap, path: string): string {
@@ -411,6 +478,180 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 `;
 }
 
+export function renderSimoneOsGovernedAttachSpecLoadTest(options: SimoneOsGovernedProgramOptions): string {
+  return `import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parse } from 'yaml';
+import { describe, expect, it } from 'vitest';
+import { createProgramEntry } from '../registration.js';
+
+interface RawSpec {
+  patterns?: Array<{ use: string; as?: Record<string, unknown> }>;
+  channels?: Record<string, unknown>;
+  action_map?: Record<string, { description?: string }>;
+}
+
+function loadRawSpec(): RawSpec {
+  return parse(readFileSync(resolve(__dirname, '../specs.yml'), 'utf8')) as RawSpec;
+}
+
+describe('${options.slug} spec load', () => {
+  it('loads backend modes, terminal state, action map, and composition patterns', () => {
+    const entry = createProgramEntry();
+    const raw = loadRawSpec();
+
+    expect(entry.frontendSpecPath).toBeUndefined();
+    expect(entry.projectionBuilder).toBeDefined();
+    expect(entry.manifest).toMatchObject({
+      interactive: false,
+      keywords: expect.arrayContaining(['memo', 'backend']),
+    });
+    expect(entry.spec.name).toBe('${options.slug}');
+    expect(entry.spec.modes.has('intake')).toBe(true);
+    expect(entry.spec.modes.has('draft_memo')).toBe(true);
+    expect(entry.spec.modes.has('complete')).toBe(true);
+    expect(entry.spec.terminal).toContain('complete');
+
+    expect(entry.spec.modes.get('intake')?.vocabulary).toContain('record_intake');
+    expect(entry.spec.modes.get('draft_memo')?.vocabulary).toContain('draft_memo');
+    expect(entry.spec.modes.get('complete')?.vocabulary).toEqual([]);
+    expect(entry.spec.action_map.get('record_intake')?.mutations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ op: 'MSet', path: 'work.intake.facts', from_arg: 'facts' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.intake_recorded', value: true }),
+    ]));
+    expect(entry.spec.action_map.get('draft_memo')?.mutations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ op: 'MSet', path: 'work.memo_artifact.id', from_arg: 'id' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.memo_artifact.kind', value: 'markdown' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.memo_artifact.title', from_arg: 'title' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.memo_artifact.body', from_arg: 'body' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.memo_artifact.status', from_arg: 'status' }),
+    ]));
+
+    expect(raw.patterns).toEqual([
+      {
+        use: 'control-plane-standard',
+        as: {
+          program: '${options.slug}',
+          ask_channel: 'user_text',
+          default_controls: ['ask', 'abort', 'new', 'history', 'status', 'help'],
+          http_controls: ['ask', 'abort', 'history', 'status', 'help'],
+        },
+      },
+    ]);
+    expect(raw.channels).toHaveProperty('user_text');
+    expect(raw.channels).toHaveProperty('widget_output');
+    expect(raw.action_map?.draft_memo?.description).toMatch(/LLM-reasoning/i);
+  });
+
+  it('uses engine-native action mutations without custom handlers or tools', () => {
+    const entry = createProgramEntry();
+
+    expect(entry.reactionHandlers).toBeUndefined();
+    expect(() => entry.createAdapters({ userId: 'u-test', sessionId: 's-test' })).not.toThrow();
+  });
+});
+`;
+}
+
+export function renderSimoneOsGovernedAttachProjectionTest(options: SimoneOsGovernedProgramOptions): string {
+  const projectionName = `${toCamelCase(options.slug)}Projection`;
+  return `import { describe, expect, it } from 'vitest';
+import type { DomainMap } from '@simodelne/pgas-server/plugin.js';
+import { ${projectionName} } from '../projection.js';
+
+function domain(entries: Record<string, unknown>): DomainMap {
+  return new Map(Object.entries(entries)) as DomainMap;
+}
+
+describe('${projectionName}', () => {
+  it('derives memo artifact fields and completed backend phase state from domain state', () => {
+    const derived = ${projectionName}(
+      domain({
+        'work.status': 'memo_drafted',
+        'work.intake_recorded': true,
+        'work.intake.facts': {
+          client: 'Acme Corp',
+          issue: 'Renewal recommendation',
+        },
+        'work.memo_artifact': {
+          id: 'memo-001',
+          kind: 'markdown',
+          title: 'Renewal Recommendation',
+          body: '## Recommendation\\nRenew Acme Corp.',
+          status: 'drafted',
+        },
+      }),
+      'complete',
+      { state: { rounds: [] } },
+    );
+
+    expect(derived.memo_artifact).toMatchObject({
+      id: 'memo-001',
+      kind: 'markdown',
+      title: 'Renewal Recommendation',
+      body: expect.stringContaining('Renew Acme Corp'),
+      status: 'drafted',
+    });
+    expect(derived.status_banner).toMatchObject({
+      tone: 'success',
+      label: 'Memo drafted',
+      detail: 'Renewal Recommendation',
+    });
+    expect(derived.workspace_artifact_items).toEqual([
+      {
+        id: 'memo-001',
+        label: 'Renewal Recommendation',
+        kind: 'markdown',
+        status: 'drafted',
+      },
+    ]);
+    expect(derived.phase_steps).toEqual([
+      { id: 'intake', label: 'Intake', status: 'complete' },
+      { id: 'draft_memo', label: 'Draft Memo', status: 'complete' },
+      { id: 'complete', label: 'Complete', status: 'complete' },
+    ]);
+    expect(derived.workspace_checkpoints).toEqual([
+      { label: 'Intake facts recorded', complete: true, status: 'complete' },
+      { label: 'Memo artifact drafted', complete: true, status: 'complete' },
+    ]);
+  });
+
+  it('keeps pending artifact fields explicit before the memo is drafted', () => {
+    const derived = ${projectionName}(
+      domain({
+        'work.status': 'intake_recorded',
+        'work.intake_recorded': true,
+        'work.intake': {
+          facts: {
+            topic: 'Risk summary',
+          },
+        },
+      }),
+      'draft_memo',
+      { state: { rounds: [] } },
+    );
+
+    expect(derived.memo_artifact).toBeNull();
+    expect(derived.workspace_artifact_items).toEqual([]);
+    expect(derived.status_banner).toMatchObject({
+      tone: 'info',
+      label: 'In progress',
+      detail: 'Currently in draft memo.',
+    });
+    expect(derived.phase_steps).toEqual([
+      { id: 'intake', label: 'Intake', status: 'pending' },
+      { id: 'draft_memo', label: 'Draft Memo', status: 'current' },
+      { id: 'complete', label: 'Complete', status: 'pending' },
+    ]);
+    expect(derived.workspace_checkpoints).toEqual([
+      { label: 'Intake facts recorded', complete: true, status: 'complete' },
+      { label: 'Memo artifact drafted', complete: false, status: 'pending' },
+    ]);
+  });
+});
+`;
+}
+
 export function renderSimoneOsGovernedAttachCuratorRequest(options: SimoneOsGovernedProgramOptions): string {
   const registryImport = `import { createProgramEntry as create${toPascalCase(options.slug)}ProgramEntry } from '../../../programs/${options.slug}/registration.js';`;
   const registryRegister = `registry.register('${options.slug}', asRegisterableProgramEntry(create${toPascalCase(options.slug)}ProgramEntry()));`;
@@ -429,6 +670,12 @@ Generated program directory: \`programs/${options.slug}\`
 - \`programs/${options.slug}/specs.yml\`
 - \`programs/${options.slug}/registration.ts\`
 - \`programs/${options.slug}/projection.ts\`
+- \`programs/${options.slug}/__tests__/spec-load.test.ts\`
+- \`programs/${options.slug}/__tests__/projection.test.ts\`
+
+## Backend-Only QC Note
+
+This generated program is backend-only. pgas-new intentionally emitted no \`frontend.spec.yml\`, no \`frontendSpecPath\`, no \`qc/facts/${options.slug}.facts.yml\`, no \`qc/e2e-frontend/${options.slug}.scenario.yml\`, no \`qc/e2e-coverage.yml\` entry, and no V2 frontend roster entry. If SimoneOS policy requires every registered program to be user-facing, treat that as a SimoneOS backend-only program policy finding rather than adding frontend/QC placeholders.
 
 ## Central Edits For Curator
 
