@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
@@ -60,6 +61,30 @@ interface ParsedSpec {
   projection?: Record<string, { include: string[]; exclude: string[] }>;
   control_plane?: unknown;
 }
+
+interface FrontendWidget {
+  widget: string;
+  bind?: Record<string, unknown>;
+  actions?: Array<{ label?: string; trigger?: { type?: string; name?: string; channel?: string }; emit?: string }>;
+}
+
+interface FrontendMode {
+  layout: string;
+  focus?: { enabled?: boolean };
+  side?: FrontendWidget[];
+  primary?: FrontendWidget[];
+  secondary?: FrontendWidget[];
+}
+
+interface FrontendSpec {
+  program: string;
+  display?: { title?: string };
+  modes: Record<string, FrontendMode>;
+}
+
+type GovernedFrontendRenderOptions = Parameters<typeof renderExistingRepoAttachment>[0] & {
+  governedAttachFrontendMode?: 'backend-only' | 'user-facing';
+};
 
 describe('SimoneOS governed attach profile', () => {
   it('translates the minimal foundry stage model into a SimoneOS-composed backend specs.yml', () => {
@@ -243,6 +268,10 @@ describe('SimoneOS governed attach profile', () => {
       expect(projectionTest).toContain("expect(derived.memo_artifact).toMatchObject({");
       expect(projectionTest).toContain("expect(derived.workspace_artifact_items).toEqual([");
       expect(projectionTest).toContain("expect(derived.phase_steps).toEqual([");
+      expect(projectionTest).toContain('focus_object');
+      expect(projectionTest).toContain('workspace_context_tabs');
+      expect(projectionTest).toContain('completion_artifacts');
+      expect(projectionTest).toContain('governed_memo_markdown');
       expect(projectionTest).not.toMatch(/(?:^|[-.])(live|e2e)([-.]|$)/u);
 
       const curatorRequest = readFileSync(join(repoRoot, 'audit/PGAS-NEW-governed-memo-mini.curator-request.md'), 'utf8');
@@ -259,7 +288,268 @@ describe('SimoneOS governed attach profile', () => {
       rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+
+  it('emits the governed memo frontend spec and frontendSpecPath only in user-facing mode', () => {
+    const backendOnlyRepo = mkdtempSync(join(tmpdir(), 'pgas-new-governed-attach-backend-'));
+    const userFacingRepo = mkdtempSync(join(tmpdir(), 'pgas-new-governed-attach-frontend-'));
+    try {
+      const backendOnly = renderGovernedMemoAttachment(backendOnlyRepo);
+      expect(backendOnly.written).not.toContain('programs/governed-memo-mini/frontend.spec.yml');
+      expect(existsSync(join(backendOnlyRepo, 'programs/governed-memo-mini/frontend.spec.yml'))).toBe(false);
+      expect(readFileSync(join(backendOnlyRepo, 'programs/governed-memo-mini/registration.ts'), 'utf8')).not.toContain('frontendSpecPath');
+
+      const userFacing = renderGovernedMemoAttachment(userFacingRepo, { governedAttachFrontendMode: 'user-facing' });
+      expect(userFacing.written).toContain('programs/governed-memo-mini/frontend.spec.yml');
+      expect(userFacing.written).not.toEqual(expect.arrayContaining([
+        'qc/e2e-frontend/governed-memo-mini.scenario.yml',
+        'qc/facts/governed-memo-mini.facts.yml',
+        'qc/e2e-coverage.yml',
+        'frontend/src/runtime/cutover/v2-programs.ts',
+        'frontend/src/lib/programNames.ts',
+      ]));
+
+      const registration = readFileSync(join(userFacingRepo, 'programs/governed-memo-mini/registration.ts'), 'utf8');
+      expect(registration).toContain("frontendSpecPath: 'programs/governed-memo-mini'");
+
+      const frontendSpec = load(readFileSync(join(userFacingRepo, 'programs/governed-memo-mini/frontend.spec.yml'), 'utf8')) as FrontendSpec;
+      expect(frontendSpec.program).toBe('governed-memo-mini');
+      expect(frontendSpec.modes.intake.layout).toBe('workspace-3col');
+      expect(frontendSpec.modes.draft_memo.layout).toBe('workspace-3col');
+      expect(frontendSpec.modes.complete.layout).toBe('workspace-3col');
+      expect(frontendSpec.modes.intake.side?.[0]?.widget).toBe('workspace-sidebar');
+      expect(frontendSpec.modes.draft_memo.side?.[0]?.widget).toBe('workspace-sidebar');
+      expect(frontendSpec.modes.intake.secondary?.[0]?.widget).toBe('workspace-context');
+      expect(frontendSpec.modes.draft_memo.secondary?.[0]?.widget).toBe('workspace-context');
+      expect(frontendSpec.modes.complete.primary?.[0]?.widget).toBe('completion-celebration');
+      expect(frontendSpec.modes.complete.secondary?.[0]?.widget).toBe('workspace-context');
+      expect(frontendSpec.modes.complete.secondary?.[1]).toMatchObject({
+        widget: 'artifact-list',
+        bind: {
+          variant: 'literal:list',
+          items: 'derived.completion_artifacts',
+        },
+        actions: [
+          {
+            trigger: { type: 'action', name: 'download_session_artifact' },
+            emit: 'download',
+          },
+        ],
+      });
+      expect(JSON.stringify(frontendSpec)).not.toMatch(/approval/u);
+    } finally {
+      rmSync(backendOnlyRepo, { recursive: true, force: true });
+      rmSync(userFacingRepo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps frontend derived binding inventory backed by emitted projection output', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-governed-bindings-'));
+    try {
+      renderGovernedMemoAttachment(repoRoot, { governedAttachFrontendMode: 'user-facing' });
+      const frontendSpec = load(readFileSync(join(repoRoot, 'programs/governed-memo-mini/frontend.spec.yml'), 'utf8')) as FrontendSpec;
+      const boundDerivedKeys = derivedKeysFromFrontendSpec(frontendSpec);
+      expect([...boundDerivedKeys].sort()).toEqual([
+        'completion_artifacts',
+        'completion_summary',
+        'completion_title',
+        'focus_object',
+        'memo_sections',
+        'phase_steps',
+        'workspace_artifact_items',
+        'workspace_checkpoints',
+        'workspace_context_tabs',
+        'workspace_domain_content',
+        'workspace_metadata',
+        'workspace_session_content',
+        'workspace_stat_items',
+      ]);
+
+      const projectionModule = await import(pathToFileURL(join(repoRoot, 'programs/governed-memo-mini/projection.ts')).href) as {
+        governedMemoMiniProjection: (domain: Map<string, unknown>, mode: string, context: unknown) => Record<string, unknown>;
+      };
+      const missing: string[] = [];
+      for (const mode of ['intake', 'draft_memo', 'complete']) {
+        const derived = projectionModule.governedMemoMiniProjection(representativeDomain(mode), mode, { state: { rounds: [] } });
+        for (const key of boundDerivedKeys) {
+          if (!Object.prototype.hasOwnProperty.call(derived, key)) {
+            missing.push(`${mode}:${key}`);
+          }
+        }
+      }
+
+      expect(missing).toEqual([]);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('emits the full governed memo frontend projection contract with widget phase statuses', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-governed-projection-contract-'));
+    try {
+      renderGovernedMemoAttachment(repoRoot, { governedAttachFrontendMode: 'user-facing' });
+      const projectionModule = await import(pathToFileURL(join(repoRoot, 'programs/governed-memo-mini/projection.ts')).href) as {
+        governedMemoMiniProjection: (domain: Map<string, unknown>, mode: string, context: unknown) => Record<string, unknown>;
+      };
+
+      const draft = projectionModule.governedMemoMiniProjection(representativeDomain('draft_memo'), 'draft_memo', { state: { rounds: [] } });
+      expect(draft.phase_steps).toEqual([
+        { id: 'intake', label: 'Intake', status: 'done' },
+        { id: 'draft_memo', label: 'Draft Memo', status: 'current' },
+        { id: 'complete', label: 'Complete', status: 'upcoming' },
+      ]);
+      for (const step of draft.phase_steps as Array<{ status: string }>) {
+        expect(['done', 'current', 'upcoming']).toContain(step.status);
+      }
+      expect(draft.focus_object).toMatchObject({
+        id: 'governed-memo-mini-draft_memo-focus',
+        program: 'governed-memo-mini',
+        phase: 'draft_memo',
+        kind: 'section',
+        title: 'Draft Memo',
+        status: 'revising',
+        actions: [],
+      });
+      expect(draft.workspace_context_tabs).toEqual([
+        { id: 'session', label: 'Session' },
+        { id: 'artifacts', label: 'Artifacts' },
+        { id: 'stats', label: 'Stats' },
+      ]);
+      expect(draft.workspace_session_content).toEqual(expect.arrayContaining([
+        { label: 'Current mode', value: 'draft memo' },
+        { label: 'Memo status', value: 'intake_recorded' },
+      ]));
+      expect(draft.workspace_domain_content).toEqual(expect.arrayContaining([
+        { label: 'client', value: 'Acme Corp' },
+        { label: 'issue', value: 'Renewal recommendation' },
+      ]));
+      expect(draft.workspace_stat_items).toEqual(expect.arrayContaining([
+        { label: 'Recorded facts', value: '2' },
+        { label: 'Memo artifact', value: 'Pending' },
+      ]));
+      expect(draft.memo_sections).toEqual([]);
+
+      const complete = projectionModule.governedMemoMiniProjection(representativeDomain('complete'), 'complete', { state: { rounds: [] } });
+      expect(complete.focus_object).toMatchObject({
+        id: 'governed-memo-mini-complete-focus',
+        program: 'governed-memo-mini',
+        phase: 'complete',
+        kind: 'completion',
+        title: 'Renewal Recommendation',
+        status: 'approved',
+        actions: [],
+      });
+      expect(complete.completion_title).toBe('Renewal Recommendation');
+      expect(complete.completion_summary).toContain('Markdown memo drafted from recorded intake facts');
+      expect(complete.memo_sections).toEqual([
+        {
+          id: 'memo',
+          title: 'Renewal Recommendation',
+          text: '## Recommendation\nRenew Acme Corp.',
+          status: 'drafted',
+        },
+      ]);
+      expect(complete.final_artifacts).toEqual([
+        {
+          id: 'governed_memo_markdown',
+          extension: '.md',
+          title: 'Governed memo - Markdown',
+          subtitle: 'Plain text memo source',
+          status: 'ready',
+        },
+      ]);
+      expect(complete.completion_artifacts).toEqual(complete.final_artifacts);
+      expect(complete.workspace_artifact_items).toEqual([
+        {
+          id: 'governed_memo_markdown',
+          label: 'Governed memo - Markdown',
+          kind: 'markdown',
+          status: 'ready',
+        },
+      ]);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
+
+function renderGovernedMemoAttachment(
+  repoRoot: string,
+  options: { governedAttachFrontendMode?: 'backend-only' | 'user-facing' } = {},
+) {
+  const artifact = synthesizeProgramSpecFromDomain(minimalGovernedMemoDomain());
+  const renderOptions: GovernedFrontendRenderOptions = {
+    repoRoot,
+    manifest: SIMONEOS_MANIFEST,
+    slug: 'governed-memo-mini',
+    name: 'Governed Memo Mini',
+    targetProfile: 'simoneos-governed-attach',
+    governedAttachFrontendMode: options.governedAttachFrontendMode,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedSynthesisContext: artifact.synthesis_context,
+  };
+  return renderExistingRepoAttachment(renderOptions);
+}
+
+function derivedKeysFromFrontendSpec(spec: FrontendSpec): Set<string> {
+  const keys = new Set<string>();
+  collectDerivedKeys(spec, keys);
+  return keys;
+}
+
+function collectDerivedKeys(value: unknown, keys: Set<string>): void {
+  if (typeof value === 'string') {
+    const match = value.match(/^derived\.([A-Za-z0-9_]+)$/u);
+    if (match?.[1]) {
+      keys.add(match[1]);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDerivedKeys(item, keys);
+    }
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) {
+      collectDerivedKeys(child, keys);
+    }
+  }
+}
+
+function representativeDomain(mode: string): Map<string, unknown> {
+  if (mode === 'complete') {
+    return new Map(Object.entries({
+      'work.status': 'memo_drafted',
+      'work.intake_recorded': true,
+      'work.intake.facts': {
+        client: 'Acme Corp',
+        issue: 'Renewal recommendation',
+      },
+      'work.memo_artifact': {
+        id: 'memo-001',
+        kind: 'markdown',
+        title: 'Renewal Recommendation',
+        body: '## Recommendation\nRenew Acme Corp.',
+        status: 'drafted',
+      },
+    }));
+  }
+  if (mode === 'draft_memo') {
+    return new Map(Object.entries({
+      'work.status': 'intake_recorded',
+      'work.intake_recorded': true,
+      'work.intake.facts': {
+        client: 'Acme Corp',
+        issue: 'Renewal recommendation',
+      },
+    }));
+  }
+  return new Map(Object.entries({
+    'work.status': 'pending',
+    'inputs.user_text': 'Draft a memo for Acme Corp.',
+  }));
+}
 
 function minimalGovernedMemoDomain(): Record<string, unknown> {
   return {

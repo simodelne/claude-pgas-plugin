@@ -1,5 +1,5 @@
 import type { CapabilityGap } from '../foundry-program/synthesizer-store.js';
-import type { ExistingRepoTargetProfile } from './governed-attach-profile.js';
+import type { ExistingRepoTargetProfile, SimoneOsGovernedAttachFrontendMode } from './governed-attach-profile.js';
 import { FIXED_WIRING_MANIFEST_PATH, type PgasNewMode } from './model.js';
 import { isSafeRepoRelativePath, type WiringManifest } from './wiring-manifest.js';
 
@@ -70,6 +70,7 @@ export interface GeneratedArtifactPlanOptions {
   capabilityGaps?: readonly CapabilityGap[];
   requestedArtifactPaths?: string[];
   targetProfile?: ExistingRepoTargetProfile;
+  governedAttachFrontendMode?: SimoneOsGovernedAttachFrontendMode;
   exportSurfaces?: {
     docx?: boolean;
     html?: boolean;
@@ -194,6 +195,7 @@ export function createExistingRepoArtifactPlan(
   const auditDir = trimSlashes(manifest.paths.audit_dir);
   const programPath = `${programsDir}/${slug}`;
   if (options.targetProfile === 'simoneos-governed-attach') {
+    const emitsFrontend = options.governedAttachFrontendMode === 'user-facing';
     return {
       target: 'existing_repo',
       program: safeProgram,
@@ -213,6 +215,14 @@ export function createExistingRepoArtifactPlan(
           'typecheck',
           'projection-lint',
         ]),
+        ...(emitsFrontend
+          ? [
+              artifact('frontend', `${programPath}/frontend.spec.yml`, 'Declare the opt-in governed memo workspace frontend spec.', 'branch_write', [
+                'frontend-spec',
+                'program-colocated-test',
+              ]),
+            ]
+          : []),
         artifact('test', `${programPath}/__tests__/spec-load.test.ts`, 'Verify the generated backend spec loads with modes, terminal state, action map, patterns, and native adapter wiring.', 'static_verify', [
           'spec-load',
           'program-colocated-test',
