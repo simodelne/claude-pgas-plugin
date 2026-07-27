@@ -9,6 +9,11 @@ interface SimoneOsGovernedSpecOptions {
   context: SynthesisContext;
 }
 
+interface SimoneOsGovernedProgramOptions {
+  slug: string;
+  name: string;
+}
+
 interface StageModel {
   slug: string;
   is_bootstrap?: boolean;
@@ -221,6 +226,309 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
   return dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
 }
 
+export function renderSimoneOsGovernedAttachRegistration(options: SimoneOsGovernedProgramOptions): string {
+  const constantPrefix = toConstantPrefix(options.slug);
+  const projectionName = `${toCamelCase(options.slug)}Projection`;
+  return `import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createProgramAdapters, enableNotebook, loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';
+import { ${projectionName} } from './projection.js';
+
+const ${constantPrefix}_MANIFEST: ProgramEntry['manifest'] = {
+  description: 'Backend-only governed markdown memo drafting from recorded intake facts.',
+  keywords: ['memo', 'governed attach', 'markdown', 'backend'],
+  interactive: false,
+};
+
+const ${constantPrefix}_PRESENTATION: ProgramEntry['presentation'] = {
+  labels: {
+    program: '${options.name}',
+    modes: {
+      intake: 'Intake',
+      draft_memo: 'Draft Memo',
+      complete: 'Complete',
+    },
+    actions: {
+      record_intake: 'Record intake',
+      draft_memo: 'Draft memo',
+    },
+    paths: {
+      'work.intake.facts': 'Recorded facts',
+      'work.memo_artifact': 'Memo artifact',
+    },
+  },
+  ui: {
+    contextTabs: ['session', 'domain', 'artifacts'],
+  },
+  behavior: {
+    autoContinuationMode: 'draft_memo',
+  },
+};
+
+const ${constantPrefix}_ARTIFACT_POLICY: ProgramEntry['artifactPolicy'] = {
+  rules: [
+    {
+      artifactType: 'memo_markdown',
+      title: '${options.name} Markdown Memo',
+      summary: 'Markdown memo drafted from recorded intake facts.',
+      payloadRef: 'work.memo_artifact',
+      whenAnyPath: ['work.memo_artifact'],
+    },
+  ],
+  fallbackStatusPath: 'work.status',
+};
+
+const ${constantPrefix}_SURROGATE_POLICY: ProgramEntry['surrogatePolicy'] = {
+  autoBindEligible: true,
+  suggestedRole: 'governed memo drafter',
+  suggestedPersona: 'You draft concise markdown memos using only recorded intake facts and stop when the memo artifact is drafted.',
+  goalHints: ['Capture intake facts, draft the markdown memo, and avoid introducing unstated facts.'],
+  expectedModes: ['intake', 'draft_memo', 'complete'],
+  domainProjectionPaths: ['work.intake', 'work.memo_artifact', 'work.status'],
+  intakeHints: ['Memo topic', 'Material facts to use', 'Requested conclusion or audience'],
+  intakeExample: 'Draft a short governed memo from these facts.',
+};
+
+const ${constantPrefix}_CONTINUATION_POLICY: ProgramEntry['continuationPolicy'] = {
+  modeEntryAutoContinue: true,
+  autoStart: {
+    channel: 'user_text',
+    payloadPath: 'inputs.domain_context.kickoff_message',
+    defaultPayload: 'Begin the governed memo intake.',
+  },
+};
+
+export function createProgramEntry(): ProgramEntry {
+  const dirname = path.dirname(fileURLToPath(import.meta.url));
+  const { spec: loadedSpec } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
+  const spec = enableNotebook(loadedSpec, { modes: ['intake', 'draft_memo'] });
+
+  return {
+    spec,
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, {}),
+    projectionBuilder: ${projectionName},
+    manifest: ${constantPrefix}_MANIFEST,
+    presentation: ${constantPrefix}_PRESENTATION,
+    artifactPolicy: ${constantPrefix}_ARTIFACT_POLICY,
+    surrogatePolicy: ${constantPrefix}_SURROGATE_POLICY,
+    continuationPolicy: ${constantPrefix}_CONTINUATION_POLICY,
+  };
+}
+`;
+}
+
+export function renderSimoneOsGovernedAttachProjection(options: SimoneOsGovernedProgramOptions): string {
+  const projectionName = `${toCamelCase(options.slug)}Projection`;
+  const deriveName = `derive${toPascalCase(options.slug)}Projection`;
+  return `import type { DerivedMap, DomainMap, ProjectionBuilder } from '@simodelne/pgas-server/plugin.js';
+
+type StageStatus = 'complete' | 'current' | 'pending';
+
+const PHASES = [
+  ['intake', 'Intake'],
+  ['draft_memo', 'Draft Memo'],
+  ['complete', 'Complete'],
+] as const;
+
+export const ${projectionName}: ProjectionBuilder = (domain, mode) => {
+  return ${deriveName}(domain, mode);
+};
+
+function ${deriveName}(domain: DomainMap, mode: string): DerivedMap {
+  const memoArtifact = readRecord(domain, 'work.memo_artifact');
+  const intake = readRecord(domain, 'work.intake');
+  const intakeFacts = readRecord(domain, 'work.intake.facts');
+  const status = readString(domain, 'work.status') || readStringFromRecord(memoArtifact, 'status') || 'pending';
+  const complete = mode === 'complete' || status === 'memo_drafted' || status === 'drafted';
+
+  return {
+    program_title: '${options.name}',
+    program_slug: '${options.slug}',
+    mode,
+    status_banner: complete
+      ? { tone: 'success', label: 'Memo drafted', detail: readStringFromRecord(memoArtifact, 'title') || 'Markdown memo artifact is available.' }
+      : { tone: 'info', label: 'In progress', detail: \`Currently in \${mode.replace(/_/g, ' ')}.\` },
+    phase_steps: PHASES.map(([id, label]) => ({
+      id,
+      label,
+      status: phaseStatus(id, mode, complete),
+    })),
+    workspace_checkpoints: [
+      checkpoint('Intake facts recorded', Object.keys(intakeFacts).length > 0 || Object.keys(readRecord(intake, 'facts')).length > 0 || isTruthy(domain.get('work.intake_recorded'))),
+      checkpoint('Memo artifact drafted', Object.keys(memoArtifact).length > 0 && readStringFromRecord(memoArtifact, 'kind') === 'markdown'),
+    ],
+    workspace_metadata: [
+      { label: 'Program', value: '${options.name}' },
+      { label: 'Mode', value: mode.replace(/_/g, ' ') },
+      { label: 'Status', value: status },
+    ],
+    memo_artifact: memoArtifact,
+    workspace_artifact_items: Object.keys(memoArtifact).length > 0
+      ? [
+          {
+            id: readStringFromRecord(memoArtifact, 'id') || 'memo-artifact',
+            label: readStringFromRecord(memoArtifact, 'title') || '${options.name} Markdown Memo',
+            kind: readStringFromRecord(memoArtifact, 'kind') || 'markdown',
+            status: readStringFromRecord(memoArtifact, 'status') || status,
+          },
+        ]
+      : [],
+  };
+}
+
+function phaseStatus(id: string, mode: string, complete: boolean): StageStatus {
+  if (complete) return 'complete';
+  if (id === mode) return 'current';
+  return 'pending';
+}
+
+function checkpoint(label: string, complete: boolean): Record<string, unknown> {
+  return { label, complete, status: complete ? 'complete' : 'pending' };
+}
+
+function readRecord(domain: DomainMap | Record<string, unknown>, path: string): Record<string, unknown> {
+  const value = domain instanceof Map ? domain.get(path) : domain[path];
+  return isRecord(value) ? value : {};
+}
+
+function readString(domain: DomainMap, path: string): string {
+  const value = domain.get(path);
+  return typeof value === 'string' ? value : '';
+}
+
+function readStringFromRecord(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+`;
+}
+
+export function renderSimoneOsGovernedAttachCuratorRequest(options: SimoneOsGovernedProgramOptions): string {
+  const registryImport = `import { createProgramEntry as create${toPascalCase(options.slug)}ProgramEntry } from '../../../programs/${options.slug}/registration.js';`;
+  const registryRegister = `registry.register('${options.slug}', asRegisterableProgramEntry(create${toPascalCase(options.slug)}ProgramEntry()));`;
+  const loadcheckImport = `import { createProgramEntry as create${toPascalCase(options.slug)} } from '../programs/${options.slug}/registration.js';`;
+  const loadcheckRosterEntry = `{ name: '${options.slug}',         load: () => create${toPascalCase(options.slug)}() },`;
+
+  return `# PGAS-New Curator Request: ${options.name}
+
+Boundary: CURATOR-REQUEST. pgas-new generated SimoneOS-conformant program artifacts and did not edit SimoneOS central files.
+
+Program: \`${options.slug}\`
+Generated program directory: \`programs/${options.slug}\`
+
+## Generated Artifacts
+
+- \`programs/${options.slug}/specs.yml\`
+- \`programs/${options.slug}/registration.ts\`
+- \`programs/${options.slug}/projection.ts\`
+
+## Central Edits For Curator
+
+Apply these exact edits in the SimoneOS repo after reviewing the generated artifacts.
+
+### \`server/src/registrations/index.ts\`
+
+Insert this import after the existing anchor:
+
+Anchor:
+\`\`\`ts
+import { createProgramEntry as createMinutesDrafterProgramEntry } from '../../../programs/minutes-drafter/registration.js';
+\`\`\`
+
+Insert:
+\`\`\`ts
+${registryImport}
+\`\`\`
+
+Insert this registry line after the existing minutes-drafter registration block and before the \`fee-proposal-drafter\` registration:
+
+Anchor:
+\`\`\`ts
+  registry.register('fee-proposal-drafter', asRegisterableProgramEntry(createFeeProposalDrafterProgramEntry()));
+\`\`\`
+
+Insert before anchor:
+\`\`\`ts
+  ${registryRegister}
+\`\`\`
+
+### \`scripts/specs-loadcheck.ts\`
+
+Insert this import after the existing anchor:
+
+Anchor:
+\`\`\`ts
+import { createProgramEntry as createMinutesDrafter } from '../programs/minutes-drafter/registration.js';
+\`\`\`
+
+Insert:
+\`\`\`ts
+${loadcheckImport}
+\`\`\`
+
+Insert this PROGRAMS-roster entry after the existing \`minutes-drafter\` entry and before \`user-surrogate\`:
+
+Anchor:
+\`\`\`ts
+  { name: 'user-surrogate',             load: () => createUserSurrogate({ targetPort: noopSurrogatePort as never }) },
+\`\`\`
+
+Insert before anchor:
+\`\`\`ts
+  ${loadcheckRosterEntry}
+\`\`\`
+
+## Unified Diff Shape
+
+\`\`\`diff
+diff --git a/server/src/registrations/index.ts b/server/src/registrations/index.ts
+--- a/server/src/registrations/index.ts
++++ b/server/src/registrations/index.ts
+@@
+ import { createProgramEntry as createLegalMemoProgramEntry } from '../../../programs/legal-memo/registration.js';
+ import { createProgramEntry as createMinutesDrafterProgramEntry } from '../../../programs/minutes-drafter/registration.js';
++${registryImport}
+ import { createFeeProposalDrafterProgramEntry } from '../../../programs/fee-proposal-drafter/registration.js';
+@@
+   registry.register('minutes-drafter', asRegisterableProgramEntry(createMinutesDrafterProgramEntry({
+     authorComplete: options.authorComplete,
+     transcribeAudio: minutesDrafterTranscribeAudio,
+   })));
++  ${registryRegister}
+   registry.register('fee-proposal-drafter', asRegisterableProgramEntry(createFeeProposalDrafterProgramEntry()));
+diff --git a/scripts/specs-loadcheck.ts b/scripts/specs-loadcheck.ts
+--- a/scripts/specs-loadcheck.ts
++++ b/scripts/specs-loadcheck.ts
+@@
+ import { createDraftPolicyProgramEntry as createDraftPolicy } from '../programs/draft-policy/registration.js';
+ import { createProgramEntry as createMinutesDrafter } from '../programs/minutes-drafter/registration.js';
++${loadcheckImport}
+ import { createProgramEntry as createUserSurrogate } from '../programs/user-surrogate/registration.js';
+@@
+   { name: 'legal-memo',                 load: () => createLegalMemo() },
+   { name: 'draft-policy',               load: () => createDraftPolicy() },
+   { name: 'minutes-drafter',            load: () => createMinutesDrafter() },
++  ${loadcheckRosterEntry}
+   { name: 'user-surrogate',             load: () => createUserSurrogate({ targetPort: noopSurrogatePort as never }) },
+\`\`\`
+
+## Curator QC Commands
+
+\`\`\`bash
+tsx qc/drift-check.ts --update
+tsx qc/integrity.ts --rotate --reason "Register governed-memo-mini from pgas-new governed attach"
+\`\`\`
+`;
+}
+
 function minimalLinearStageModel(context: SynthesisContext): {
   initial: StageModel;
   body: StageModel;
@@ -287,4 +595,25 @@ function stageRules(stage: StageModel): string[] {
   const rules = stage.domain_spec?.rules ?? [];
   const invariants = stage.domain_spec?.invariants ?? [];
   return [...rules, ...invariants].map((rule) => `STAGE RULE: ${rule}`);
+}
+
+function toPascalCase(value: string): string {
+  return value
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join('');
+}
+
+function toCamelCase(value: string): string {
+  const pascal = toPascalCase(value);
+  return `${pascal[0]?.toLowerCase() ?? ''}${pascal.slice(1)}`;
+}
+
+function toConstantPrefix(value: string): string {
+  return value
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.toUpperCase())
+    .join('_');
 }
