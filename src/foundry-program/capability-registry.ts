@@ -95,10 +95,16 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'rich_frontend',
+    status: 'synthesizes',
+    evidence: 'Synthesizes only the minimal governed memo workspace frontend for the simoneos-governed-attach user-facing governed-memo-mini bundle: workspace-3col rails, focus-panel, chat-thread, completion-celebration, artifact-list, and Markdown artifact download through the curator-request central wiring.',
+    since_version: '3.28.0',
+  },
+  {
+    capability: 'rich_frontend_unsupported_surface',
     status: 'refuses',
-    evidence: 'only basic widget projection is emitted; no editable-view / approval-widget / alternatives / progress frontend spec.',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-9 (frontend synthesis, existing-repo/simoneos targets); maps to the SimoneOS widget catalog.',
+    evidence: 'Richer frontend surfaces beyond the governed memo archetype are not synthesized: editable document viewers, generic/arbitrary approval widgets, alternatives-comparison UI, rich per-item confirmation loops, arbitrary custom workspace-context tabs, and native DOCX track-change UI.',
+    since_version: '3.28.0',
+    gap_note: 'requires separate falsifiers and synthesis support for each richer frontend surface; native DOCX track-change UI remains platform-blocked with export_docx_trackchange.',
   },
   {
     capability: 'export_html',
@@ -233,8 +239,13 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
   },
   {
     capability: 'rich_frontend',
-    pattern: /\b(?:editable[^.]{0,20}(?:html|view|document|contract)|approval widget|redline (?:view|editor|preview)|alternatives? (?:selection|to (?:accept|choose))|choose[^.]{0,20}(?:an )?alternative|side[- ]by[- ]side redline)\b/i,
-    label: 'rich editable / approval / redline frontend',
+    pattern: /\b(?:minimal governed memo workspace frontend|governed-memo-mini frontend|governed memo frontend|simoneos-governed-attach user-facing frontend)\b/i,
+    label: 'minimal governed memo workspace frontend',
+  },
+  {
+    capability: 'rich_frontend_unsupported_surface',
+    pattern: /\b(?:editable[^.]{0,25}(?:html|view|viewer|document|contract)|(?:generic|arbitrary|custom)?[^.]{0,20}approval widgets?|redline (?:view|editor|preview)|alternatives?[- ]comparison UI|alternatives? (?:selection|comparison|to (?:accept|choose))|choose[^.]{0,20}(?:an )?alternative|rich[^.]{0,20}per[- ]item[^.]{0,20}confirmation loops?|(?:arbitrary|custom)[^.]{0,30}workspace[- ]context tabs?|native[^.]{0,25}docx[^.]{0,25}track[- ]changes?[^.]{0,25}ui|side[- ]by[- ]side redline)\b/i,
+    label: 'unsupported rich frontend surface',
   },
 ];
 
