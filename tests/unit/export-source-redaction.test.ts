@@ -14,6 +14,11 @@ import { renderStructuredDocxDocument } from '../integration/fixtures/export-doc
 const RAW_CORPUS = 'RAW-CORPUS-EXPORT-LEAK must never appear in client export bytes.';
 const APPROVED_SECTION_BODY = 'APPROVED-REPORT-SECTION retained for the client artifact.';
 const FINDING_TEXT = 'FINDING-SUMMARY retained for the client artifact.';
+const APPROVED_OPINION_TITLE = 'Duty Analysis';
+const APPROVED_OPINION_TEXT = 'APPROVED-OPINION-CONTENT retained for the client artifact.';
+const APPROVED_DEFECT_TITLE = 'Defect Analysis';
+const APPROVED_DEFECT_TEXT = 'DEFECT-ANALYSIS-CONTENT retained for the client artifact.';
+const PENDING_OPINION_TEXT = 'PENDING-OPINION-DRAFT must not appear in the client artifact.';
 
 describe('synthesized report export source redaction', () => {
   it('renders report sections and findings without raw uploaded corpus keys', async () => {
@@ -55,6 +60,53 @@ describe('synthesized report export source redaction', () => {
       expect(docText).not.toContain('Fan Out Results');
       expect(docText).not.toContain(RAW_CORPUS);
       expect(docText).not.toContain('work.source.full_text');
+    } finally {
+      rmSync(cacheDir, { force: true, recursive: true });
+    }
+  });
+
+  it('renders approved non-report confirmation-loop sections without loop bookkeeping', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(opinionExportDomain());
+    const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-export-loop-redaction-'));
+    try {
+      const withBodies = await synthesizeDomainLogic({
+        ...artifact,
+        created_at: '2026-07-27T00:00:00.000Z',
+      }, {
+        cacheDir,
+        generator: async () => nonExportStageBody(),
+      });
+      const runStage = loadGeneratedExportStage(withBodies.stage_sources?.assemble_export ?? '');
+      const output = await runStage({
+        stage: 'assemble_export',
+        payload: {},
+        domain: opinionRuntimeDomain(),
+        domain_spec: { reads: [], produces: {}, rules: [], invariants: [] },
+      }, {
+        now: () => '2026-07-27T00:00:00.000Z',
+        random: () => 0.5,
+        llm: async () => {
+          throw new Error('llm unavailable in deterministic export test');
+        },
+      });
+      const result = JSON.parse(output.result_json) as { docx_base64: string; section_count: number };
+      const extracted = extractDocxText(Buffer.from(result.docx_base64, 'base64'));
+
+      expect(extracted.ok).toBe(true);
+      const docText = extracted.ok ? extracted.text : '';
+      expect(result.section_count).toBe(2);
+      expect(docText).toContain(APPROVED_OPINION_TITLE);
+      expect(docText).toContain(APPROVED_OPINION_TEXT);
+      expect(docText).toContain(APPROVED_DEFECT_TITLE);
+      expect(docText).toContain(APPROVED_DEFECT_TEXT);
+      expect(docText).not.toContain(PENDING_OPINION_TEXT);
+      expect(docText).not.toContain('Work Opinion Sections');
+      expect(docText).not.toContain('Pending Approval Action');
+      expect(docText).not.toContain('Work Opinion Sections Items 0 Status');
+      expect(docText).not.toContain('Work Opinion Sections Items 0 Index');
+      expect(docText).not.toContain('Work Opinion Sections All Terminal');
+      expect(docText).not.toContain('Work Opinion Sections Confirmation Summary');
+      expect(docText).not.toContain('work.opinion_sections.items.0.status');
     } finally {
       rmSync(cacheDir, { force: true, recursive: true });
     }
@@ -137,6 +189,62 @@ function reportRuntimeDomain(): Record<string, unknown> {
   };
 }
 
+function opinionRuntimeDomain(): Record<string, unknown> {
+  return {
+    'work.opinion_sections': 762,
+    'work.opinion_sections.items': [
+      {
+        id: 'opinion-1',
+        title: APPROVED_OPINION_TITLE,
+        status: 'approved',
+        text: APPROVED_OPINION_TEXT,
+      },
+      {
+        id: 'opinion-2',
+        title: APPROVED_DEFECT_TITLE,
+        status: 'accepted',
+        body: APPROVED_DEFECT_TEXT,
+      },
+      {
+        id: 'opinion-3',
+        title: 'Unapproved Draft',
+        status: 'pending_review',
+        text: PENDING_OPINION_TEXT,
+      },
+    ],
+    'work.opinion_sections.items.0.id': 'opinion-1',
+    'work.opinion_sections.items.0.index': 0,
+    'work.opinion_sections.items.0.status': 'approved',
+    'work.opinion_sections.items.0.text': APPROVED_OPINION_TEXT,
+    'work.opinion_sections.items.0.title': APPROVED_OPINION_TITLE,
+    'work.opinion_sections.items.1.body': APPROVED_DEFECT_TEXT,
+    'work.opinion_sections.items.1.id': 'opinion-2',
+    'work.opinion_sections.items.1.index': 1,
+    'work.opinion_sections.items.1.status': 'accepted',
+    'work.opinion_sections.items.1.title': APPROVED_DEFECT_TITLE,
+    'work.opinion_sections.items.2.id': 'opinion-3',
+    'work.opinion_sections.items.2.index': 2,
+    'work.opinion_sections.items.2.status': 'pending_review',
+    'work.opinion_sections.items.2.text': PENDING_OPINION_TEXT,
+    'work.opinion_sections.items.2.title': 'Unapproved Draft',
+    'work.opinion_sections.all_terminal': true,
+    'work.opinion_sections.current_index': 2,
+    'work.opinion_sections.confirmation_summary': {
+      total_items: 3,
+      terminal_items: 2,
+      pending_items: 1,
+      current_index: 2,
+    },
+    'work.opinion_sections.confirmation_summary.total_items': 3,
+    'work.opinion_sections.confirmation_summary.terminal_items': 2,
+    'work.opinion_sections.confirmation_summary.pending_items': 1,
+    'work.opinion_sections.confirmation_summary.current_index': 2,
+    'work.opinion_sections.confirmation_summary.active_item.title': 'Unapproved Draft',
+    'work.pending_approval.action': 1,
+    'work.pending_approval.decision': 'approve',
+  };
+}
+
 function reportExportDomain(): Record<string, unknown> {
   return {
     'program.slug': 'report-export-redaction',
@@ -182,6 +290,130 @@ function reportExportDomain(): Record<string, unknown> {
       },
     }),
     'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'export_document.ready' }),
+  };
+}
+
+function opinionExportDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'opinion-export-redaction',
+    'program.name': 'Opinion Export Redaction',
+    'program.target_dir': '/tmp/opinion-export-redaction',
+    'intake.purpose': 'Produce an approved legal opinion from reviewed sections and export a DOCX.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'draft_opinion' },
+      { slug: 'review_opinion_sections' },
+      {
+        slug: 'assemble_export',
+        kind: 'export_docx',
+        domain_spec: {
+          reads: [
+            'work.opinion_sections.items.*.title',
+            'work.opinion_sections.items.*.text',
+            'work.opinion_sections.items.*.body',
+          ],
+          produces: {
+            result_json: {
+              stage: 'string',
+              docx_base64: 'string',
+              docx_bytes: 'number',
+              sha256: 'string',
+              section_count: 'number',
+            },
+            items_json: ['docx_export:<sha256>'],
+          },
+          rules: ['Render only approved opinion sections into a deterministic DOCX export.'],
+          invariants: ['Never render confirmation-loop bookkeeping or pending approval state.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'draft_opinion', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'draft_opinion', to: 'review_opinion_sections', trigger: 'drafted', guard_field: 'draft_opinion.done' },
+      { from: 'review_opinion_sections', to: 'assemble_export', trigger: 'reviewed', guard_field: 'work.opinion_sections.all_terminal' },
+      { from: 'assemble_export', to: 'complete', trigger: 'exported', guard_field: 'assemble_export.ready' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      stages: {
+        draft_opinion: { kind: 'llm-reasoning' },
+        review_opinion_sections: { kind: 'llm-reasoning' },
+      },
+    }),
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'assemble_export.ready',
+      collection_lifecycle: opinionSectionLifecycle(),
+    }),
+    'intake.interaction_json': JSON.stringify({
+      confirmation_loops: [opinionSectionApprovalLoop()],
+    }),
+  };
+}
+
+function opinionSectionLifecycle(): Record<string, unknown> {
+  return {
+    version: 1,
+    name: 'opinion_sections',
+    item_label: 'opinion section',
+    storage: {
+      items_path: 'work.opinion_sections.items',
+      event_path: 'work.opinion_sections.pending_event_json',
+      violation_path: 'work.opinion_sections.lifecycle_violation_json',
+      representation: 'indexed_array',
+    },
+    item: {
+      id_field: 'id',
+      status_field: 'status',
+      schema: {
+        id: 'string',
+        title: 'string',
+        text: 'string',
+        body: 'string',
+        user_instruction: 'string',
+        status: 'string',
+      },
+    },
+    statuses: [
+      { name: 'pending_review', initial: true },
+      { name: 'proposed' },
+      { name: 'approved', terminal: true },
+      { name: 'accepted', terminal: true },
+      { name: 'omitted', terminal: true },
+    ],
+    transitions: [],
+    aggregate: {
+      guard_field: 'work.opinion_sections.all_terminal',
+      terminal_statuses: ['approved', 'accepted', 'omitted'],
+      require_non_empty: true,
+    },
+  };
+}
+
+function opinionSectionApprovalLoop(): Record<string, unknown> {
+  return {
+    collection: 'work.opinion_sections.items',
+    proposed_status: 'proposed',
+    seed: { source_stage: 'draft_opinion', id_prefix: 'opinion' },
+    decisions: {
+      approve: { to: 'approved' },
+      revise: {
+        to: 'proposed',
+        requires_instruction: true,
+        instruction_path: 'work.opinion_sections.items.*.user_instruction',
+        re_propose: true,
+      },
+      skip: { to: 'omitted' },
+    },
+    one_proposed_at_a_time: true,
+    aggregate: {
+      guard_field: 'work.opinion_sections.all_terminal',
+      terminal_statuses: ['approved', 'accepted', 'omitted'],
+    },
+    stage: 'review_opinion_sections',
+    summary_path: 'work.opinion_sections.confirmation_summary',
+    pending_action_path: 'work.pending_approval.action',
   };
 }
 
