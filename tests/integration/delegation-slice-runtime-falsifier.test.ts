@@ -37,6 +37,7 @@ const DOCUMENTS = [
 const TARGET_DOCUMENT_INDEX = 0;
 const TARGET_DOCUMENT = DOCUMENTS[TARGET_DOCUMENT_INDEX]!;
 const TARGET_STAGE = `review_doc_${String(TARGET_DOCUMENT_INDEX + 1)}`;
+const UPSTREAM_SUMMARY = '{"transaction_summary":"UPSTREAM_SUMMARY_SHOULD_NOT_OVERWRITE_DOCUMENT_SLICE"}';
 const REQUEST_PROJECTION_PATHS = [
   'inputs.request',
   'inputs.request.topic',
@@ -62,6 +63,7 @@ describe('delegation slice runtime delivery falsifier', () => {
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.text', target: 'request.topic' }");
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.id', target: 'request.document_id' }");
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.name', target: 'request.document_name' }");
+    expect(artifact.registration_ts).toContain("source: 'transaction_understanding.result_json'");
 
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-slice-runtime-'));
     try {
@@ -99,10 +101,13 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       expect(evidence.target.documentId).toBe(TARGET_DOCUMENT.id);
       expect(evidence.target.documentName).toBe(TARGET_DOCUMENT.name);
       expect(evidence.target.seededTopic).not.toBe(`raw-${TARGET_DOCUMENT.id}-slug`);
+      expect(evidence.target.seededTopic).not.toBe(UPSTREAM_SUMMARY);
 
       for (const other of DOCUMENTS.filter((candidate) => candidate.id !== TARGET_DOCUMENT.id)) {
         expect(JSON.stringify(evidence.target)).not.toContain(other.text);
       }
+
+      expect(duplicateInputEnrichmentTargets(artifact.registration_ts ?? '')).toEqual([]);
 
       process.stdout.write(`[delegation-slice-runtime-falsifier] GREEN ${JSON.stringify(evidence.target)}\n`);
     } finally {
@@ -192,61 +197,116 @@ function perDocumentReviewDomain(): Record<string, unknown> {
           invariants: ['Document text comes from upload ingestion.'],
         },
       },
+      {
+        slug: 'transaction_understanding',
+        domain_spec: {
+          reads: ['inputs.initial_user_text', 'work.source.files_json', 'work.source.document_count'],
+          produces: {
+            result_json: {
+              transaction_summary: 'string',
+              review_context: 'string',
+            },
+            items_json: ['transaction:<transaction_summary>'],
+          },
+          rules: ['Summarize the uploaded transaction before document review.'],
+          invariants: ['This summary is context and must not replace the per-document review text.'],
+        },
+      },
       ...reviewStages.map((slug, index) => {
         const document = DOCUMENTS[index]!;
         return {
-        slug,
+          slug,
+          domain_spec: {
+            reads: ['work.source.full_text', 'work.source.files_json', 'inputs.initial_user_text'],
+            produces: {
+              result_json: {
+                document_id: 'string',
+                document_name: 'string',
+                summary: 'string',
+              },
+              items_json: [`${document.id}:<document_id>`],
+            },
+            rules: [`Review uploaded document ${String(index + 1)} only.`],
+            invariants: ['Do not use non-target uploaded documents.'],
+          },
+        };
+      }),
+      {
+        slug: 'summary_context',
         domain_spec: {
-          reads: ['work.source.full_text', 'work.source.files_json', 'inputs.initial_user_text'],
+          reads: ['transaction_understanding.result_json', 'inputs.initial_user_text'],
           produces: {
             result_json: {
-              document_id: 'string',
-              document_name: 'string',
               summary: 'string',
             },
-            items_json: [`${document.id}:<document_id>`],
+            items_json: ['summary_context:<summary>'],
           },
-          rules: [`Review uploaded document ${String(index + 1)} only.`],
-          invariants: ['Do not use non-target uploaded documents.'],
+          rules: ['Review transaction summary context after per-document review.'],
+          invariants: ['This stage is not allowed to overwrite per-document DD inputs.'],
         },
-      };
-      }),
+      },
       { slug: 'complete', is_terminal: true },
     ]),
     'intake.transitions_json': JSON.stringify([
       { from: 'intake', to: 'upload_docs', trigger: 'started', guard_field: 'intake.started' },
-      { from: 'upload_docs', to: 'review_doc_1', trigger: 'uploaded', guard_field: 'work.source_ready' },
+      { from: 'upload_docs', to: 'transaction_understanding', trigger: 'uploaded', guard_field: 'work.source_ready' },
+      { from: 'transaction_understanding', to: 'review_doc_1', trigger: 'transaction_understood', guard_field: 'transaction_understanding.done' },
       { from: 'review_doc_1', to: 'review_doc_2', trigger: 'doc1_done', guard_field: 'review_doc_1.ready' },
       { from: 'review_doc_2', to: 'review_doc_3', trigger: 'doc2_done', guard_field: 'review_doc_2.ready' },
-      { from: 'review_doc_3', to: 'complete', trigger: 'doc3_done', guard_field: 'review_doc_3.ready' },
+      { from: 'review_doc_3', to: 'summary_context', trigger: 'doc3_done', guard_field: 'review_doc_3.ready' },
+      { from: 'summary_context', to: 'complete', trigger: 'summary_context_done', guard_field: 'summary_context.ready' },
     ]),
     'intake.delegation_json': JSON.stringify({
       stages: {
         upload_docs: { kind: 'pure-compute' },
+        transaction_understanding: { kind: 'llm-reasoning', reasoning_per_turn: true },
         [TARGET_STAGE]: { kind: 'llm-reasoning', reasoning_per_turn: true },
+        summary_context: { kind: 'llm-reasoning', reasoning_per_turn: true },
       },
-      children: DOCUMENTS.map((document, index) => ({
-        id: document.id,
-        stage: `review_doc_${String(index + 1)}`,
-        synthesize_child: {
-          kind: 'worker',
-          slug: document.id,
-          purpose: `Review uploaded document ${String(index + 1)}.`,
-          result_fields: {
-            seeded_topic: 'string',
-            document_id: 'string',
-            document_name: 'string',
-            summary: 'string',
+      children: [
+        ...DOCUMENTS.map((document, index) => ({
+          id: document.id,
+          stage: `review_doc_${String(index + 1)}`,
+          synthesize_child: {
+            kind: 'worker',
+            slug: document.id,
+            purpose: `Review uploaded document ${String(index + 1)}.`,
+            result_fields: {
+              seeded_topic: 'string',
+              document_id: 'string',
+              document_name: 'string',
+              summary: 'string',
+            },
           },
+          payload_map: {
+            'request.topic': 'work.source.full_text',
+            'domain_context.original_request': 'inputs.initial_user_text',
+          },
+          result_path: `review_doc_${String(index + 1)}.delegation.${document.id}.result`,
+          max_delegated_rounds: 12,
+          optional: true,
+        })),
+        {
+          id: 'summary_context',
+          stage: 'summary_context',
+          synthesize_child: {
+            kind: 'worker',
+            slug: 'summary-context-worker',
+            purpose: 'Review the upstream transaction summary.',
+            result_fields: {
+              seeded_topic: 'string',
+              summary: 'string',
+            },
+          },
+          payload_map: {
+            'request.topic': 'transaction_understanding.result_json',
+            'domain_context.original_request': 'inputs.initial_user_text',
+          },
+          result_path: 'summary_context.delegation.summary_context.result',
+          max_delegated_rounds: 12,
+          optional: true,
         },
-        payload_map: {
-          'request.topic': 'work.source.full_text',
-          'domain_context.original_request': 'inputs.initial_user_text',
-        },
-        result_path: `review_doc_${String(index + 1)}.delegation.${document.id}.result`,
-        max_delegated_rounds: 12,
-        optional: true,
-      })),
+      ],
     }),
     'intake.documents_json': JSON.stringify({
       version: 1,
@@ -259,7 +319,7 @@ function perDocumentReviewDomain(): Record<string, unknown> {
     }),
     'intake.completion_json': JSON.stringify({
       final_stage: 'complete',
-      guard_field: 'review_doc_3.ready',
+      guard_field: 'summary_context.ready',
     }),
   };
 }
@@ -331,6 +391,7 @@ function createProjectionEchoAuthor() {
   let requestedDocuments = false;
   let ingestedDocuments = false;
   let uploadCompleted = false;
+  let transactionUnderstood = false;
   let uploadedDocuments: Record<string, unknown>[] = [];
   const requested = new Set<string>();
   const completed = new Set<string>();
@@ -381,8 +442,17 @@ function createProjectionEchoAuthor() {
         uploadCompleted = true;
         return JSON.stringify(effect('complete_upload_docs', {
           __stage_runtime: { now_iso: '2026-07-26T00:00:00.000Z', random: 0.25 },
-          [`document_slice_doc${String(TARGET_DOCUMENT_INDEX + 1)}`]: requiredUploadedDocument(world, uploadedDocuments, TARGET_DOCUMENT_INDEX),
         }, 'stage_output'));
+      }
+      if (hasAction(actionNames, prompt, 'complete_transaction_understanding') && !transactionUnderstood) {
+        transactionUnderstood = true;
+        return JSON.stringify(effect('complete_transaction_understanding', {
+          result_json: UPSTREAM_SUMMARY,
+          items_json: JSON.stringify(['transaction:upstream-summary']),
+          transaction_summary: 'UPSTREAM_SUMMARY_SHOULD_NOT_OVERWRITE_DOCUMENT_SLICE',
+          review_context: 'upstream context only',
+          [`document_slice_doc${String(TARGET_DOCUMENT_INDEX + 1)}`]: requiredUploadedDocument(world, uploadedDocuments, TARGET_DOCUMENT_INDEX),
+        }));
       }
 
       for (const document of DOCUMENTS) {
@@ -620,6 +690,22 @@ function firstString(...values: unknown[]): string | null {
     if (typeof value === 'string' && value.length > 0) return value;
   }
   return null;
+}
+
+function duplicateInputEnrichmentTargets(registrationSource: string): string[] {
+  const targets = Array.from(
+    registrationSource.matchAll(/\{\s*source:\s*'[^']+',\s*target:\s*'([^']+)'\s*\}/gu),
+    (match) => match[1]!,
+  );
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const target of targets) {
+    if (seen.has(target)) {
+      duplicates.add(target);
+    }
+    seen.add(target);
+  }
+  return [...duplicates].sort();
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
