@@ -406,11 +406,11 @@ describe('delegation children descriptor synthesis gate', () => {
       result_path: 'dispatch_research.delegation.research.result',
       mutations: [
         { op: 'MSet', path: 'dispatch_research.delegation.research.requested', value: true },
-        { op: 'MSet', path: 'dispatch_research.delegation.research.request', from_arg: 'request' },
+        { op: 'MSet', path: 'dispatch_research.delegation.research.request', value: {}, from_arg: 'request' },
       ],
       description: expect.stringContaining('research child program'),
       arg_descriptions: {
-        request: 'Object with the request for the child (include a short topic/query string).',
+        request: 'Object with the request for the child. Emit the action payload as { request: { ... } }; do not put request fields directly under payload.',
       },
     });
     expect(parsed.modes.dispatch_research.vocabulary).toContain('request_research');
