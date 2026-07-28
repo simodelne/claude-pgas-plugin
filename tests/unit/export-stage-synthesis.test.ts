@@ -66,6 +66,47 @@ describe('PR-E2 export stage synthesis', () => {
     }
   });
 
+  it('redacts deterministic export output shapes from the terminal action description', () => {
+    const artifact = synthesizeProgramSpecFromDomain(exportDomain());
+    const spec = load(artifact.spec_yaml) as {
+      action_map: Record<string, { description?: string }>;
+    };
+    const description = spec.action_map.complete_export_document?.description ?? '';
+
+    expect(description).toContain('Author-provided domain spec for export_document');
+    expect(description).toContain('"reads":["compose_memo.output.result_json"]');
+    expect(description).toContain('Render accumulated stage state into a deterministic DOCX export.');
+    expect(description).toContain('Do not call an LLM or provider while rendering export bytes.');
+    expect(description).not.toContain('"produces"');
+    expect(description).not.toContain('docx_base64');
+  });
+
+  it('tells deterministic export wrappers to emit empty payloads instead of output fields', () => {
+    const artifact = synthesizeProgramSpecFromDomain(exportDomain());
+    const spec = load(artifact.spec_yaml) as {
+      action_map: Record<string, { description?: string }>;
+    };
+    const description = spec.action_map.complete_export_document?.description ?? '';
+
+    expect(description).toContain('emit this action with an EMPTY payload');
+    expect(description).toContain('Do NOT author result_json');
+    expect(description).toContain('output fields');
+  });
+
+  it('keeps reasoning stage produce shapes in terminal action descriptions', () => {
+    const artifact = synthesizeProgramSpecFromDomain(reasoningDomain());
+    const spec = load(artifact.spec_yaml) as {
+      action_map: Record<string, { description?: string; arg_descriptions?: Record<string, string> }>;
+    };
+    const description = spec.action_map.complete_draft_opinion?.description ?? '';
+    const resultArgDescription = spec.action_map.complete_draft_opinion?.arg_descriptions?.result_json ?? '';
+
+    expect(description).toContain('"produces"');
+    expect(description).toContain('"opinion_text":"string"');
+    expect(resultArgDescription).toContain('"produces"');
+    expect(resultArgDescription).toContain('"opinion_text":"string"');
+  });
+
   it('keeps standalone export artifacts and artifactPolicy default-off without export demand', () => {
     const artifact = synthesizeProgramSpecFromDomain(noExportDomain());
     const plan = createStandaloneArtifactPlan(
@@ -118,6 +159,46 @@ function exportDomain(): Record<string, unknown> {
     ]),
     'intake.delegation_json': JSON.stringify({}),
     'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'export_document.ready' }),
+  };
+}
+
+function reasoningDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'reasoning-guard-demo',
+    'program.name': 'Reasoning Guard Demo',
+    'program.target_dir': '/tmp/reasoning-guard-demo',
+    'intake.purpose': 'Draft a reasoned opinion summary.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      {
+        slug: 'draft_opinion',
+        domain_spec: {
+          reads: ['inputs.initial_user_text'],
+          produces: {
+            result_json: {
+              stage: 'string',
+              opinion_text: 'string',
+              confidence: 'string',
+            },
+            items_json: ['opinion:<confidence>'],
+          },
+          rules: ['Draft an opinion from the request.'],
+          invariants: ['result_json.stage must equal draft_opinion.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'draft_opinion', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'draft_opinion', to: 'complete', trigger: 'drafted', guard_field: 'draft_opinion.done' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      stages: {
+        draft_opinion: { kind: 'llm-reasoning' },
+      },
+    }),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'draft_opinion.done' }),
   };
 }
 
