@@ -206,13 +206,19 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(parsed.modes.review_work.channels).toEqual(expect.arrayContaining(['user_confirmation', 'widget_output']));
     expect(parsed.projection.review_work.include).toEqual(expect.arrayContaining([
       'inputs.user_decision.target_item_index',
-      'work_units.items.*.id',
-      'work_units.items.*.title',
-      'work_units.items.*.status',
       'work_units.all_terminal',
       'summary.confirmation_loop',
+      'summary.confirmation_loop.active_item',
+      'summary.confirmation_loop.total_items',
+      'summary.confirmation_loop.terminal_items',
+      'summary.confirmation_loop.pending_items',
+      'summary.confirmation_loop.current_index',
     ]));
     expect(parsed.projection.review_work.include).not.toContain('work_units.items');
+    expect(parsed.projection.review_work.include).not.toContain('work_units.items.*.id');
+    expect(parsed.projection.review_work.include).not.toContain('work_units.items.*.title');
+    expect(parsed.projection.review_work.include).not.toContain('work_units.items.*.status');
+    expect(parsed.projection.review_work.include).not.toContain('plan_work.items_json');
     expect(parsed.reactions.save_review_work_decision).toEqual({
       event: 'AfterIngestion',
       watch: [
@@ -235,6 +241,16 @@ describe('confirmation_loop descriptor synthesis', () => {
         'work_units.all_terminal',
       ],
     });
+    expect(parsed.reactions.summarize_review_work_approval).toEqual({
+      event: 'AfterIngestion',
+      watch: [
+        'inputs.mode_entry.mode',
+        'inputs.user_text',
+        'inputs.user_decision.decision',
+        'inputs.user_decision.timestamp',
+      ],
+      write_scope: ['summary.confirmation_loop'],
+    });
     expect(parsed.reactions.choreograph_review_work_collection).toEqual({
       event: 'AfterRound',
       watch: [],
@@ -247,20 +263,38 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(Object.keys(parsed.reactions).indexOf('save_review_work_decision')).toBeLessThan(
       Object.keys(parsed.reactions).indexOf('enforce_review_work_status'),
     );
+    expect(Object.keys(parsed.reactions).indexOf('enforce_review_work_status')).toBeLessThan(
+      Object.keys(parsed.reactions).indexOf('summarize_review_work_approval'),
+    );
+    expect(Object.keys(parsed.reactions).indexOf('summarize_review_work_approval')).toBeLessThan(
+      Object.keys(parsed.reactions).indexOf('choreograph_review_work_collection'),
+    );
     expect(parsed.schema).toMatchObject({
       'review_work.proposal': 'object',
       'review_work.proposal.proposed_text': 'string',
       'review_work.proposal.log': 'array',
+      'summary.confirmation_loop.active_item': 'object',
+      'summary.confirmation_loop.active_item.id': 'string',
+      'summary.confirmation_loop.active_item.title': 'string',
+      'summary.confirmation_loop.active_item.status': 'string',
+      'summary.confirmation_loop.total_items': 'number',
+      'summary.confirmation_loop.terminal_items': 'number',
+      'summary.confirmation_loop.pending_items': 'number',
+      'summary.confirmation_loop.current_index': 'number',
       'summary.confirmation_loop.applied_proposal_count': 'number',
       'summary.confirmation_loop.seed_state': 'string',
     });
     expect(parsed.prompts.review_work).toContain('Work through the work units one at a time');
-    expect(parsed.prompts.review_work).toContain('runtime selects the target item');
+    expect(parsed.prompts.review_work).toContain('the runtime selects that item');
+    expect(parsed.prompts.review_work).toContain('use its active_item and progress counts');
     expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
       expect.stringContaining('never write item statuses yourself'),
+      expect.stringContaining('summary.confirmation_loop.active_item'),
+      expect.stringContaining('not the full work_units.items collection'),
     ]));
     expect(artifact.handlers_ts).toContain("['save_review_work_decision', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("['enforce_review_work_status', (snapshot, trigger, mode) =>");
+    expect(artifact.handlers_ts).toContain("['summarize_review_work_approval', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("['choreograph_review_work_collection', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain('"request_revision"');
     expect(artifact.handlers_ts).toContain('"reject"');
