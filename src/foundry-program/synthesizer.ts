@@ -493,7 +493,7 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
   }
-  applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops);
+  applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops, transitionActions);
   applyDocumentsModeWiring(synthesizedModes, documents);
   applyDelegationModeWiring(synthesizedModes, delegationChildren);
   spec.modes = synthesizedModes;
@@ -504,6 +504,7 @@ export function synthesizeProgramSpecFromDomain(
       .map((action) => [action.name, action.target]),
   );
   applyDocumentsProceedTo(recordField(spec, 'proceed_to'), documents, transitionActionsBySource);
+  applyConfirmationLoopCompletionProceedTo(recordField(spec, 'proceed_to'), confirmationLoops, transitionActions);
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
@@ -569,7 +570,7 @@ export function synthesizeProgramSpecFromDomain(
     prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
   applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames);
-  applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle);
+  applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
   spec.prompts = prompts;
@@ -627,6 +628,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentActions(actionMap, confirmationLoops, completion.collection_lifecycle);
+  applyConfirmationLoopCompletionActions(actionMap, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsActions(actionMap, documents);
   applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
@@ -684,7 +686,7 @@ export function synthesizeProgramSpecFromDomain(
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames);
-  applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle);
+  applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
 
@@ -2234,17 +2236,23 @@ function applyConfirmationLoopReactions(
 function applyConfirmationLoopIntentModeWiring(
   modes: MutableRecord,
   loops: ConfirmationLoopDescriptor[],
+  transitionActions: TransitionAction[],
 ): void {
   loops.forEach((loop, index) => {
     const mode = recordField(modes, loop.stage);
     const proposeAction = confirmationLoopProposeActionName(loop, index, loops.length);
+    const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     mode.vocabulary = [
       proposeAction,
+      ...completionActions.map((action) => action.name),
       ...CONTROL_PLANE_ACTIONS,
     ];
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
     appendModePrecondition(mode, proposeAction, { kind: 'FieldFalsy', path: loop.aggregate.guard_field });
+    for (const action of completionActions) {
+      appendModePrecondition(mode, action.name, { kind: 'FieldTruthy', path: loop.aggregate.guard_field });
+    }
   });
 }
 
@@ -2325,6 +2333,7 @@ function applyConfirmationLoopPrompts(
   prompts: MutableRecord,
   loops: ConfirmationLoopDescriptor[],
   lifecycle?: CollectionLifecycleDescriptor,
+  transitionActions: TransitionAction[] = [],
 ): void {
   if (!lifecycle) {
     return;
@@ -2334,7 +2343,12 @@ function applyConfirmationLoopPrompts(
     const itemLabelPlural = `${itemLabel}s`;
     const existing = typeof prompts[loop.stage] === 'string' ? `${prompts[loop.stage]}\n` : '';
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
-    prompts[loop.stage] = `${existing}${terminalActionInstruction([proposeAction])}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
+    const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
+    const completionActionNames = completionActions.map((action) => action.name);
+    const completionInstruction = completionActionNames.length > 0
+      ? ` When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
+      : ` When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
+    prompts[loop.stage] = `${existing}${terminalActionInstruction([proposeAction, ...completionActionNames])}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
   }
 }
 
@@ -2342,6 +2356,7 @@ function applyConfirmationLoopGuidance(
   guidance: MutableRecord,
   loops: ConfirmationLoopDescriptor[],
   lifecycle?: CollectionLifecycleDescriptor,
+  transitionActions: TransitionAction[] = [],
 ): void {
   if (!lifecycle) {
     return;
@@ -2349,13 +2364,17 @@ function applyConfirmationLoopGuidance(
   for (const loop of loops) {
     const existing = Array.isArray(guidance[loop.stage]) ? guidance[loop.stage] as string[] : [];
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
+    const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
+    const completionActionNames = completionActions.map((action) => action.name);
     guidance[loop.stage] = [
       ...existing,
-      terminalActionInstruction([proposeAction]),
+      terminalActionInstruction([proposeAction, ...completionActionNames]),
       `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${proposeAction}.`,
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
-      `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`,
+      ...(completionActionNames.length > 0
+        ? [`When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`]
+        : [`When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`]),
     ];
   }
 }
@@ -2400,6 +2419,41 @@ function applyConfirmationLoopIntentActions(
       };
     }
   });
+}
+
+function applyConfirmationLoopCompletionActions(
+  actionMap: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor | undefined,
+  transitionActions: TransitionAction[],
+): void {
+  if (!lifecycle) {
+    return;
+  }
+  for (const action of confirmationLoopCompletionTransitionActions(loops, transitionActions)) {
+    if (Object.prototype.hasOwnProperty.call(actionMap, action.name)) {
+      throw new Error(`confirmation_loop completion action collides with generated action_map: ${action.name}`);
+    }
+    actionMap[action.name] = {
+      description: `Advance from confirmation-loop stage ${action.source} to ${action.target} after every ${lifecycle.item_label} is terminal. This action does not open another approval prompt.`,
+      mutations: [],
+      channel: 'widget_output',
+    };
+  }
+}
+
+function applyConfirmationLoopCompletionProceedTo(
+  proceedTo: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  transitionActions: TransitionAction[],
+): void {
+  for (const action of confirmationLoopCompletionTransitionActions(loops, transitionActions)) {
+    const existing = proceedTo[action.name];
+    if (existing !== undefined && existing !== action.target) {
+      throw new Error(`confirmation_loop completion action ${action.name} has conflicting proceed_to target`);
+    }
+    proceedTo[action.name] = action.target;
+  }
 }
 
 function applyConfirmationLoopPairing(
@@ -2500,6 +2554,31 @@ function confirmationLoopDecisionActionNames(
       : `${safeIdentifier(runtimeDecision)}_${safeIdentifier(loop.stage)}_item`;
   },
   );
+}
+
+function confirmationLoopCompletionTransitionActions(
+  loops: ConfirmationLoopDescriptor[],
+  transitionActions: TransitionAction[],
+): TransitionAction[] {
+  const seen = new Set<string>();
+  return loops.flatMap((loop) =>
+    confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions)
+      .filter((action) => {
+        if (seen.has(action.name)) {
+          return false;
+        }
+        seen.add(action.name);
+        return true;
+      }));
+}
+
+function confirmationLoopCompletionTransitionActionsForLoop(
+  loop: ConfirmationLoopDescriptor,
+  transitionActions: TransitionAction[],
+): TransitionAction[] {
+  return transitionActions.filter((action) =>
+    action.source === loop.stage &&
+    action.guardField === loop.aggregate.guard_field);
 }
 
 function confirmationLoopPendingPath(loop: ConfirmationLoopDescriptor): string {
@@ -3079,12 +3158,11 @@ function uniqueGuardField(base: string, used: Set<string>): string {
   return field;
 }
 
-// Confirmation-loop stages advance via the aggregate guard (work.items_all_terminal),
-// NOT a generated complete_<stage> transition action — so the action_map + proceed_to
-// suppress those transition actions (see suppressedTransitionActionNames). The
-// handler/tool codegen MUST apply the same suppression, or the generated program emits
-// an orphaned complete_<stage> handler/tool and the engine's validateSpecWiring rejects
-// it at boot (HANDLER_NO_ACTION) — the exact defect the confirmation live-drive caught.
+// Confirmation-loop completion actions are declarative topology actions: the spec
+// advertises them at all_terminal and maps them through proceed_to, but generated
+// handler/tool code must keep suppressing loop-source transition actions. Otherwise
+// the generated program emits an orphaned complete_<stage> handler/tool and the
+// engine's validateSpecWiring rejects it at boot (HANDLER_NO_ACTION).
 function codegenStageActions(
   transitionActions: TransitionAction[],
   confirmationLoops: ConfirmationLoopDescriptor[],

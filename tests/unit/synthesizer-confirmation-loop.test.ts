@@ -116,6 +116,7 @@ interface ParsedSpec {
   prompts: Record<string, string>;
   guidance: Record<string, string[]>;
   ingestion: Record<string, string[]>;
+  proceed_to: Record<string, string>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
   action_map: Record<string, {
     channel?: string;
@@ -126,7 +127,7 @@ interface ParsedSpec {
 }
 
 describe('confirmation_loop descriptor synthesis', () => {
-  it('gates the awaiting propose action after a terminal loop before a downstream stage', () => {
+  it('gates propose_item before terminal and completion after terminal before a downstream stage', () => {
     const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
 
@@ -137,13 +138,25 @@ describe('confirmation_loop descriptor synthesis', () => {
       channel: 'user_confirmation',
       intent: 'present_for_approval',
     });
-    expect(parsed.action_map.complete_review_work).toBeUndefined();
+    expect(parsed.action_map.complete_review_work).toMatchObject({
+      channel: 'widget_output',
+      mutations: [],
+    });
+    expect(parsed.action_map.complete_review_work.awaits_user_decision).toBeUndefined();
+    expect(parsed.proceed_to.complete_review_work).toBe('assemble_work');
+    expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining([
+      'propose_item',
+      'complete_review_work',
+    ]));
     expect(parsed.modes.review_work.preconditions?.propose_item).toEqual([
       { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
     ]);
-    expect(parsed.prompts.review_work).toContain('do not call propose_item again');
+    expect(parsed.modes.review_work.preconditions?.complete_review_work).toEqual([
+      { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
+    ]);
+    expect(parsed.prompts.review_work).toContain('call complete_review_work exactly once to advance downstream');
     expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
-      expect.stringContaining('do not call propose_item'),
+      expect.stringContaining('call complete_review_work exactly once to advance downstream'),
     ]));
   });
 
@@ -193,8 +206,15 @@ describe('confirmation_loop descriptor synthesis', () => {
       { op: 'MSet', path: 'review_work.proposal.proposed_text', value: '', from_arg: 'proposed_text' },
       { op: 'MAppend', path: 'review_work.proposal.log', value: 'proposed' },
     ]);
+    expect(parsed.action_map.complete_review_work).toMatchObject({
+      description: expect.stringContaining('Advance from confirmation-loop stage review_work to complete'),
+      mutations: [],
+      channel: 'widget_output',
+    });
+    expect(parsed.proceed_to.complete_review_work).toBe('complete');
     expect(parsed.modes.review_work.vocabulary).toEqual([
       'propose_item',
+      'complete_review_work',
       'record_user_note',
       'session_new',
       'session_abort_current',
@@ -306,10 +326,10 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(artifact.smoke_test_ts).toContain("status: 'pending_review'");
     expect(artifact.smoke_test_ts).not.toContain('complete_review_work');
     // Regression (confirmation live-drive RED, 2026-07-16 — SpecWiringError
-    // HANDLER_NO_ACTION): the loop stage advances via the aggregate guard, not a
-    // complete_<stage> action, so handlers_ts/tools_ts must NOT emit an orphaned
-    // complete_review_work handler/tool. loadSpecWithPatterns does not run the
-    // engine's validateSpecWiring; createPgasServer boot (and the live-drive) does.
+    // HANDLER_NO_ACTION): terminal completion is a declarative spec action only,
+    // so handlers_ts/tools_ts must NOT emit an orphaned complete_review_work
+    // handler/tool. loadSpecWithPatterns does not run the engine's
+    // validateSpecWiring; createPgasServer boot (and the live-drive) does.
     expect(artifact.handlers_ts).not.toContain('complete_review_work');
     expect(artifact.tools_ts).not.toContain('complete_review_work');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
