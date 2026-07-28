@@ -545,6 +545,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
+  applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyScaleSafeProjectionPolicy(projection);
   spec.projection = projection;
 
@@ -2179,6 +2180,16 @@ function applyConfirmationLoopReactions(
         loop.aggregate.guard_field,
       ]),
     };
+    reactions[confirmationLoopSummarizeReactionName(loop)] = {
+      event: 'AfterIngestion',
+      watch: [
+        'inputs.mode_entry.mode',
+        'inputs.user_text',
+        'inputs.user_decision.decision',
+        'inputs.user_decision.timestamp',
+      ],
+      write_scope: [confirmationLoopSummaryPath(loop)],
+    };
     reactions[confirmationLoopChoreographReactionName(loop)] = {
       event: 'AfterRound',
       watch: [],
@@ -2219,19 +2230,8 @@ function applyConfirmationLoopProjection(
   }
   for (const loop of loops) {
     const modeProjection = recordField(projection, loop.stage);
-    const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
     const collectionPaths = confirmationLoopCollectionProjectionPaths(loop, lifecycle);
-    modeProjection.include = unique([
-      ...include.filter((path) => path !== loop.collection),
-      'inputs.user_decision.target_item_index',
-      'inputs.user_decision.target_item_id',
-      'inputs.user_decision.target_item_title',
-      'inputs.user_decision.target_item_status',
-      ...collectionPaths,
-      loop.aggregate.guard_field,
-      confirmationLoopSummaryPath(loop),
-      `${loop.seed.source_stage}.items_json`,
-    ]);
+    modeProjection.include = confirmationLoopApproveProjectionPaths(loop);
     if (!Array.isArray(modeProjection.exclude)) {
       modeProjection.exclude = [];
     }
@@ -2253,6 +2253,26 @@ function applyConfirmationLoopProjection(
       }
     }
   }
+}
+
+function confirmationLoopApproveProjectionPaths(loop: ConfirmationLoopDescriptor): string[] {
+  const summaryPath = confirmationLoopSummaryPath(loop);
+  return unique([
+    'inputs.user_decision.decision',
+    'inputs.user_decision.instruction',
+    'inputs.user_decision.target_item_index',
+    'inputs.user_decision.target_item_id',
+    'inputs.user_decision.target_item_title',
+    'inputs.user_decision.target_item_status',
+    loop.aggregate.guard_field,
+    summaryPath,
+    `${summaryPath}.active_item`,
+    `${summaryPath}.total_items`,
+    `${summaryPath}.terminal_items`,
+    `${summaryPath}.pending_items`,
+    `${summaryPath}.proposed_items`,
+    `${summaryPath}.current_index`,
+  ]);
 }
 
 function confirmationLoopCollectionProjectionPaths(
@@ -2284,7 +2304,7 @@ function applyConfirmationLoopPrompts(
     const itemLabel = lifecycle.item_label;
     const itemLabelPlural = `${itemLabel}s`;
     const existing = typeof prompts[loop.stage] === 'string' ? `${prompts[loop.stage]}\n` : '';
-    prompts[loop.stage] = `${existing}Work through the ${itemLabelPlural} one at a time. The projected ${loop.collection}.* entries show each item and its status. Call ${confirmationLoopProposeActionName(loop, 0, loops.length)} with the proposal content for the item under review; the runtime selects the target item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the item; call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`;
+    prompts[loop.stage] = `${existing}Work through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${confirmationLoopProposeActionName(loop, 0, loops.length)} with the proposal content for the active item; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`;
   }
 }
 
@@ -2300,7 +2320,8 @@ function applyConfirmationLoopGuidance(
     const existing = Array.isArray(guidance[loop.stage]) ? guidance[loop.stage] as string[] : [];
     guidance[loop.stage] = [
       ...existing,
-      `Work through the ${lifecycle.item_label}s one at a time; the runtime selects the target item for ${confirmationLoopProposeActionName(loop, 0, loops.length)}.`,
+      `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${confirmationLoopProposeActionName(loop, 0, loops.length)}.`,
+      `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
       `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`,
     ];
@@ -2387,6 +2408,15 @@ function applyConfirmationLoopSchema(
     schema[confirmationLoopPendingPath(loop)] = 'string';
     schema[confirmationLoopViolationPath(loop, lifecycle)] = 'string';
     schema[confirmationLoopSummaryPath(loop)] = 'object';
+    schema[`${confirmationLoopSummaryPath(loop)}.active_item`] = 'object';
+    schema[`${confirmationLoopSummaryPath(loop)}.total_items`] = 'number';
+    schema[`${confirmationLoopSummaryPath(loop)}.terminal_items`] = 'number';
+    schema[`${confirmationLoopSummaryPath(loop)}.pending_items`] = 'number';
+    schema[`${confirmationLoopSummaryPath(loop)}.proposed_items`] = 'number';
+    schema[`${confirmationLoopSummaryPath(loop)}.current_index`] = 'number';
+    for (const field of confirmationLoopActiveItemFields(loop, lifecycle)) {
+      schema[`${confirmationLoopSummaryPath(loop)}.active_item.${field}`] = 'string';
+    }
     schema[confirmationLoopDemotionCounterPath(loop)] = 'number';
     schema[confirmationLoopAppliedDecisionPath(loop)] = 'string';
     schema[confirmationLoopProposalPath(loop)] = 'object';
@@ -2406,6 +2436,10 @@ function confirmationLoopSaveReactionName(loop: ConfirmationLoopDescriptor): str
 
 function confirmationLoopEnforceReactionName(loop: ConfirmationLoopDescriptor): string {
   return `enforce_${safeIdentifier(loop.stage)}_status`;
+}
+
+function confirmationLoopSummarizeReactionName(loop: ConfirmationLoopDescriptor): string {
+  return `summarize_${safeIdentifier(loop.stage)}_approval`;
 }
 
 function confirmationLoopChoreographReactionName(loop: ConfirmationLoopDescriptor): string {
@@ -2521,6 +2555,21 @@ function confirmationLoopProposalFields(
       field !== titleField &&
       field !== statusField &&
       !instructionFields.has(field));
+}
+
+function confirmationLoopActiveItemFields(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
+  const idField = loop.item_id_field ?? lifecycle.item.id_field;
+  const titleField = loop.item_title_field ?? 'title';
+  return unique([
+    idField,
+    titleField,
+    lifecycle.item.status_field,
+    ...confirmationLoopProposalFields(loop, lifecycle),
+    ...confirmationLoopInstructionFields(loop),
+  ]);
 }
 
 function confirmationLoopSeedSchemaFields(
@@ -3912,6 +3961,20 @@ function renderConfirmationLoopReactionEntries(
       ${JSON.stringify(decisions)},
     );
   }],
+  [${tsString(confirmationLoopSummarizeReactionName(loop))}, (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== ${tsString(loop.stage)}) return undefined;
+    return confirmationLoopSummarizeCollection(
+      snapshot,
+      ${tsString(loop.collection)},
+      ${tsString(lifecycle.item.status_field)},
+      ${tsString(confirmationLoopInitialStatus(lifecycle))},
+      ${tsString(loop.proposed_status)},
+      [${loop.aggregate.terminal_statuses.map(tsString).join(', ')}],
+      ${tsString(confirmationLoopSummaryPath(loop))},
+      [${confirmationLoopActiveItemFields(loop, lifecycle).map(tsString).join(', ')}],
+    );
+  }],
   [${tsString(confirmationLoopChoreographReactionName(loop))}, (snapshot, trigger, mode) => {
     void trigger;
     return confirmationLoopChoreographCollection(
@@ -4311,6 +4374,37 @@ function confirmationLoopEnforceStatus(
   return mutations.length > 0 ? { mutations } : undefined;
 }
 
+function confirmationLoopSummarizeCollection(
+  snapshot: ReadonlyMap<string, unknown>,
+  itemsPath: string,
+  statusField: string,
+  initialStatus: string,
+  proposedStatus: string,
+  terminalStatuses: readonly string[],
+  summaryPath: string,
+  activeItemFields: readonly string[],
+): ReactionResult | undefined {
+  let items: unknown[] = [];
+  try {
+    items = reconstructArray(Object.fromEntries(snapshot), itemsPath);
+  } catch {
+    items = [];
+  }
+  const mutations: ReactionResult['mutations'] = [];
+  appendConfirmationLoopSummaryMutation(
+    mutations,
+    summaryPath,
+    items,
+    statusField,
+    initialStatus,
+    proposedStatus,
+    terminalStatuses,
+    activeItemFields,
+    confirmationLoopAllTerminal(items, statusField, terminalStatuses),
+  );
+  return { mutations };
+}
+
 function confirmationLoopChoreographCollection(
   snapshot: ReadonlyMap<string, unknown>,
   mode: string,
@@ -4502,6 +4596,106 @@ function confirmationLoopProposalTargetIndex(
   return items.findIndex((item) =>
     item && typeof item === 'object' && !Array.isArray(item) &&
     (item as Record<string, unknown>)[statusField] === initialStatus);
+}
+
+function appendConfirmationLoopSummaryMutation(
+  mutations: ReactionResult['mutations'],
+  summaryPath: string,
+  items: unknown[],
+  statusField: string,
+  initialStatus: string,
+  proposedStatus: string,
+  terminalStatuses: readonly string[],
+  activeItemFields: readonly string[],
+  allTerminal: boolean,
+): void {
+  mutations.push({
+    op: 'MSet' as const,
+    path: summaryPath,
+    value: confirmationLoopProgressSummary(
+      items,
+      statusField,
+      initialStatus,
+      proposedStatus,
+      terminalStatuses,
+      activeItemFields,
+      allTerminal,
+    ),
+  });
+}
+
+function confirmationLoopProgressSummary(
+  items: unknown[],
+  statusField: string,
+  initialStatus: string,
+  proposedStatus: string,
+  terminalStatuses: readonly string[],
+  activeItemFields: readonly string[],
+  allTerminal: boolean,
+): Record<string, unknown> {
+  const terminal = new Set(terminalStatuses);
+  const records = items
+    .map((item, index) => ({ item, index }))
+    .filter((entry): entry is { item: Record<string, unknown>; index: number } =>
+      entry.item !== null && typeof entry.item === 'object' && !Array.isArray(entry.item));
+  const terminalItems = records.filter(({ item }) => {
+    const status = item[statusField];
+    return typeof status === 'string' && terminal.has(status);
+  }).length;
+  const proposedItems = records.filter(({ item }) => item[statusField] === proposedStatus).length;
+  const currentIndex = confirmationLoopActiveItemIndex(records, statusField, initialStatus, proposedStatus, terminalStatuses);
+  const activeRecord = currentIndex >= 0 ? records.find(({ index }) => index === currentIndex)?.item : undefined;
+  return {
+    total_items: records.length,
+    terminal_items: terminalItems,
+    pending_items: Math.max(0, records.length - terminalItems),
+    proposed_items: proposedItems,
+    current_index: currentIndex,
+    all_terminal: allTerminal,
+    active_item: activeRecord ? confirmationLoopActiveItemView(activeRecord, activeItemFields) : {},
+  };
+}
+
+function confirmationLoopActiveItemIndex(
+  records: Array<{ item: Record<string, unknown>; index: number }>,
+  statusField: string,
+  initialStatus: string,
+  proposedStatus: string,
+  terminalStatuses: readonly string[],
+): number {
+  const terminal = new Set(terminalStatuses);
+  return records.find(({ item }) => item[statusField] === proposedStatus)?.index
+    ?? records.find(({ item }) => item[statusField] === initialStatus)?.index
+    ?? records.find(({ item }) => {
+      const status = item[statusField];
+      return typeof status !== 'string' || !terminal.has(status);
+    })?.index
+    ?? -1;
+}
+
+function confirmationLoopActiveItemView(
+  record: Record<string, unknown>,
+  activeItemFields: readonly string[],
+): Record<string, string> {
+  return Object.fromEntries(activeItemFields.map((field) => [
+    field,
+    typeof record[field] === 'string' ? record[field] : String(record[field] ?? ''),
+  ]));
+}
+
+function confirmationLoopAllTerminal(
+  items: unknown[],
+  statusField: string,
+  terminalStatuses: readonly string[],
+): boolean {
+  if (items.length === 0) {
+    return false;
+  }
+  const terminal = new Set(terminalStatuses);
+  return items.every((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+    typeof (item as Record<string, unknown>)[statusField] === 'string' &&
+    terminal.has((item as Record<string, unknown>)[statusField] as string));
 }
 
 function confirmationLoopPendingDecision(value: unknown, snapshot: ReadonlyMap<string, unknown>): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'present'; value: PendingConfirmationDecision } {
@@ -5516,6 +5710,7 @@ function renderConfirmationLoopSmokeTestSource(
   const reactionNames = loops.flatMap((loop) => [
     confirmationLoopSaveReactionName(loop),
     confirmationLoopEnforceReactionName(loop),
+    confirmationLoopSummarizeReactionName(loop),
     confirmationLoopChoreographReactionName(loop),
   ]);
   return `import { describe, expect, it } from 'vitest';
@@ -7953,6 +8148,28 @@ function confirmationLoopEnforceStatus(
   return mutations.length > 0 ? { mutations } : undefined;
 }
 
+function confirmationLoopSummarizeCollection(
+  snapshot: ReadonlyMap<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): ReactionResult | undefined {
+  let items: unknown[] = [];
+  try {
+    items = reconstructArray(Object.fromEntries(snapshot), loop.collection);
+  } catch {
+    items = [];
+  }
+  const mutations: ReactionMutations = [];
+  appendConfirmationLoopSummaryMutation(
+    mutations,
+    items,
+    loop,
+    lifecycle,
+    confirmationLoopAllTerminal(items, lifecycle.item.status_field, loop.aggregate.terminal_statuses),
+  );
+  return { mutations };
+}
+
 function confirmationLoopChoreographCollection(
   snapshot: ReadonlyMap<string, unknown>,
   mode: string,
@@ -8141,6 +8358,78 @@ function confirmationLoopProposalTargetIndex(
   return items.findIndex((item) =>
     item && typeof item === 'object' && !Array.isArray(item) &&
     (item as Record<string, unknown>)[statusField] === initialStatus);
+}
+
+function appendConfirmationLoopSummaryMutation(
+  mutations: ReactionMutations,
+  items: unknown[],
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+  allTerminal: boolean,
+): void {
+  mutations.push({
+    op: 'MSet' as const,
+    path: confirmationLoopSummaryPath(loop),
+    value: confirmationLoopProgressSummary(items, loop, lifecycle, allTerminal),
+  });
+}
+
+function confirmationLoopProgressSummary(
+  items: unknown[],
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+  allTerminal: boolean,
+): Record<string, unknown> {
+  const statusField = lifecycle.item.status_field;
+  const terminalStatuses = new Set(loop.aggregate.terminal_statuses);
+  const records = items
+    .map((item, index) => ({ item, index }))
+    .filter((entry): entry is { item: Record<string, unknown>; index: number } =>
+      entry.item !== null && typeof entry.item === 'object' && !Array.isArray(entry.item));
+  const terminalItems = records.filter(({ item }) => {
+    const status = item[statusField];
+    return typeof status === 'string' && terminalStatuses.has(status);
+  }).length;
+  const proposedItems = records.filter(({ item }) => item[statusField] === loop.proposed_status).length;
+  const currentIndex = confirmationLoopActiveItemIndex(records, loop, lifecycle);
+  const activeRecord = currentIndex >= 0 ? records.find(({ index }) => index === currentIndex)?.item : undefined;
+  return {
+    total_items: records.length,
+    terminal_items: terminalItems,
+    pending_items: Math.max(0, records.length - terminalItems),
+    proposed_items: proposedItems,
+    current_index: currentIndex,
+    all_terminal: allTerminal,
+    active_item: activeRecord ? confirmationLoopActiveItemView(activeRecord, loop, lifecycle) : {},
+  };
+}
+
+function confirmationLoopActiveItemIndex(
+  records: Array<{ item: Record<string, unknown>; index: number }>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): number {
+  const statusField = lifecycle.item.status_field;
+  const initialStatus = confirmationLoopInitialStatus(lifecycle);
+  const terminalStatuses = new Set(loop.aggregate.terminal_statuses);
+  return records.find(({ item }) => item[statusField] === loop.proposed_status)?.index
+    ?? records.find(({ item }) => item[statusField] === initialStatus)?.index
+    ?? records.find(({ item }) => {
+      const status = item[statusField];
+      return typeof status !== 'string' || !terminalStatuses.has(status);
+    })?.index
+    ?? -1;
+}
+
+function confirmationLoopActiveItemView(
+  record: Record<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): Record<string, string> {
+  return Object.fromEntries(confirmationLoopActiveItemFields(loop, lifecycle).map((field) => [
+    field,
+    typeof record[field] === 'string' ? record[field] : String(record[field] ?? ''),
+  ]));
 }
 
 function applyConfirmationPendingDecision(

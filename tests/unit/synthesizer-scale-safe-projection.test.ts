@@ -37,7 +37,7 @@ describe('scale-safe synthesized projections', () => {
     ]));
     expect(large.review_documents.include).not.toContain('review_documents.fan_out.results.*.seeded_topic');
 
-    for (const mode of ['aggregate_findings', 'draft_sections', 'approve_sections', 'assemble_report']) {
+    for (const mode of ['aggregate_findings', 'draft_sections', 'assemble_report']) {
       expect(large[mode]?.include, `${mode} sees document metadata counts`).toEqual(expect.arrayContaining([
         'work.source.document_count',
         'work.source.current_document.id',
@@ -48,13 +48,25 @@ describe('scale-safe synthesized projections', () => {
     }
 
     expect(large.approve_sections.include).toEqual(expect.arrayContaining([
-      'report.sections.*.id',
-      'report.sections.*.title',
-      'report.sections.*.status',
+      'inputs.user_decision.target_item_index',
+      'inputs.user_decision.target_item_id',
+      'inputs.user_decision.target_item_title',
+      'inputs.user_decision.target_item_status',
+      'report.all_sections_resolved',
       'summary.approved_sections',
-      'draft_sections.items_json',
+      'summary.approved_sections.active_item',
+      'summary.approved_sections.total_items',
+      'summary.approved_sections.terminal_items',
+      'summary.approved_sections.pending_items',
+      'summary.approved_sections.current_index',
     ]));
     expect(large.approve_sections.include).not.toContain('report.sections');
+    expect(large.approve_sections.include).not.toContain('report.sections.*.id');
+    expect(large.approve_sections.include).not.toContain('report.sections.*.title');
+    expect(large.approve_sections.include).not.toContain('report.sections.*.status');
+    expect(large.approve_sections.include).not.toContain('draft_sections.items_json');
+    expect(large.approve_sections.include).not.toContain('review_documents.result_json');
+    expect(large.approve_sections.include).not.toContain('aggregate_findings.result_json');
 
     expect(large.assemble_report.include).toEqual(expect.arrayContaining([
       'report.sections.*.id',
@@ -66,12 +78,65 @@ describe('scale-safe synthesized projections', () => {
     ]));
     expect(large.assemble_report.include).not.toContain('report.sections');
   });
+
+  it('keeps large per-item approval loops on a bounded active-item projection', () => {
+    const smallApprove = approvalProjectionForItemCount(5);
+    const largeApprove = approvalProjectionForItemCount(60);
+
+    expect([...largeApprove.include].sort()).toEqual([...smallApprove.include].sort());
+    expect(largeApprove.include.length).toBeLessThanOrEqual(18);
+    expect(largeApprove.include).toEqual(expect.arrayContaining([
+      'inputs.user_decision.target_item_index',
+      'inputs.user_decision.target_item_id',
+      'inputs.user_decision.target_item_title',
+      'inputs.user_decision.target_item_status',
+      'report.all_sections_resolved',
+      'summary.approved_sections',
+      'summary.approved_sections.active_item',
+      'summary.approved_sections.total_items',
+      'summary.approved_sections.terminal_items',
+      'summary.approved_sections.pending_items',
+      'summary.approved_sections.current_index',
+    ]));
+
+    for (const forbidden of [
+      'report.sections',
+      'report.sections.*.id',
+      'report.sections.*.title',
+      'report.sections.*.status',
+      'report.sections.*.summary',
+      'report.sections.*.draft_text',
+      'draft_sections.items_json',
+      'review_documents.result_json',
+      'review_documents.items_json',
+      'aggregate_findings.result_json',
+      'aggregate_findings.items_json',
+      'work.source.full_text',
+      'work.source.documents',
+      'work.source.documents.*.text',
+      'review_documents.fan_out.results',
+      'review_documents.fan_out.results.*',
+      'review_documents.fan_out.results.*.result',
+    ]) {
+      expect(largeApprove.include, `approve projection must not include ${forbidden}`).not.toContain(forbidden);
+    }
+    expect(
+      largeApprove.include.filter((path) => path.startsWith('report.sections.*')),
+      'approve projection must not expand the whole approval collection',
+    ).toEqual([]);
+  });
 });
 
 function projectionForDocumentCount(documentCount: number): ParsedSpec['projection'] {
   const artifact = synthesizeProgramSpecFromDomain(documentReviewApprovalDomain(documentCount));
   const parsed = load(artifact.spec_yaml) as ParsedSpec;
   return parsed.projection;
+}
+
+function approvalProjectionForItemCount(approvalItemCount: number): { include: string[]; exclude?: string[] } {
+  const artifact = synthesizeProgramSpecFromDomain(documentReviewApprovalDomain(3, approvalItemCount));
+  const parsed = load(artifact.spec_yaml) as ParsedSpec;
+  return parsed.projection.approve_sections;
 }
 
 function projectionShape(projection: ParsedSpec['projection']): Record<string, string[]> {
@@ -83,7 +148,7 @@ function projectionShape(projection: ParsedSpec['projection']): Record<string, s
   );
 }
 
-function documentReviewApprovalDomain(documentCount: number): Record<string, unknown> {
+function documentReviewApprovalDomain(documentCount: number, approvalItemCount = 1): Record<string, unknown> {
   return {
     'program.slug': `bounded-dd-report-${String(documentCount)}`,
     'program.name': `Bounded DD Report ${String(documentCount)}`,
@@ -139,7 +204,7 @@ function documentReviewApprovalDomain(documentCount: number): Record<string, unk
             result_json: {
               section_count: 'number',
             },
-            items_json: ['{"id":"section-1","title":"Executive Summary","summary":"Red flag summary","draft_text":"Draft section text"}'],
+            items_json: draftSectionItemTemplates(approvalItemCount),
           },
           rules: ['Draft report sections from aggregate summaries.'],
           invariants: ['Drafting uses summarized findings only.'],
@@ -242,6 +307,18 @@ function documentReviewApprovalDomain(documentCount: number): Record<string, unk
       confirmation_loops: [reportSectionApprovalLoop()],
     }),
   };
+}
+
+function draftSectionItemTemplates(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => {
+    const itemNumber = index + 1;
+    return JSON.stringify({
+      id: `section-${String(itemNumber)}`,
+      title: `Report Section ${String(itemNumber)}`,
+      summary: `Red flag summary ${String(itemNumber)}`,
+      draft_text: `Draft section text ${String(itemNumber)}`,
+    });
+  });
 }
 
 function reportSectionLifecycle(): Record<string, unknown> {
