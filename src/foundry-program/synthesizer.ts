@@ -1129,13 +1129,13 @@ function applyDelegationActions(
             value: { source: 'delegationPolicy.inputEnrichment' },
             from_arg: 'request',
           }
-          : { op: 'MSet', path: `${delegationStateBase(child)}.request`, from_arg: 'request' },
+          : { op: 'MSet', path: `${delegationStateBase(child)}.request`, value: {}, from_arg: 'request' },
       ],
       description: manifestReused
         ? `Dispatch the ${child.id} manifest-reused child program and wait for the routed delegation result; delegationPolicy.inputEnrichment supplies the child inputs.`
         : `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
       ...(manifestReused ? {} : { arg_descriptions: {
-        request: 'Object with the request for the child (include a short topic/query string).',
+        request: 'Object with the request for the child. Emit the action payload as { request: { ... } }; do not put request fields directly under payload.',
       } }),
     };
   }
@@ -1295,11 +1295,14 @@ function applyDelegationPrompts(
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
     const fanOut = documentFanOutDescriptor(child, documents);
+    const requestShape = isManifestReusedDelegationChild(child)
+      ? ''
+      : ` Use payload shape { request: { ... } }: put child request fields inside payload.request, not directly under payload.`;
     prompts[child.stage] = fanOut
-      ? `${existing}For each uploaded document, call ${delegationRequestActionName(child)} once for ${fanOut.current_document}. The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
+      ? `${existing}For each uploaded document, call ${delegationRequestActionName(child)} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
       : isManifestReusedDelegationChild(child)
       ? `${existing}Call ${delegationRequestActionName(child)} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
-      : `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+      : `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
   }
 }
 
@@ -1315,12 +1318,16 @@ function applyDelegationGuidance(
       ...existing,
       ...(fanOut ? [
         `Call ${delegationRequestActionName(child)} once for the projected ${fanOut.current_document}; deterministic payload enrichment supplies only that document slice.`,
+        `For ${delegationRequestActionName(child)}, emit payload: { request: { ... } }; put document_id, document_name, topic, context, and other child request fields inside request, not directly under payload.`,
         `Repeat ${delegationRequestActionName(child)} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
         `When ${fanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
       ] : [
         isManifestReusedDelegationChild(child)
         ? `Call ${delegationRequestActionName(child)} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
         : `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
+        ...(isManifestReusedDelegationChild(child) ? [] : [
+          `For ${delegationRequestActionName(child)}, emit payload: { request: { ... } }; put topic, query, context, and other child request fields inside request, not directly under payload.`,
+        ]),
         `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
         `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
       ]),

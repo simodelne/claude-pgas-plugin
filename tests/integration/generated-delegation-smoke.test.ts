@@ -141,6 +141,40 @@ describe('generated delegation smoke test', () => {
     }
   });
 
+  it('dispatches a synthesized child when the author emits a flat delegation payload', { timeout: 120_000 }, () => {
+    const artifact = artifactFromDomain(delegationDomain);
+    const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+    const childArtifacts = delegationArtifact.child_artifacts ?? [];
+    expect(childArtifacts).toHaveLength(1);
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-flat-delegation-render-'));
+
+    try {
+      const flatSmokeTest = flatDelegationRequestSmoke(artifact.smoke_test_ts);
+      renderStandaloneScaffold({
+        slug: 'delegation-parent-hermetic',
+        name: 'Delegation Parent Hermetic',
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedRegistrationTs: delegationArtifact.registration_ts,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedStageSources: artifact.stage_sources,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: flatSmokeTest,
+        synthesizedChildArtifacts: childArtifacts,
+      } as RenderStandaloneOptions & DelegationRenderOptions);
+      linkRootNodeModules(targetDir);
+
+      const output = runGeneratedSmokeTest(targetDir);
+      expect(output).toContain('1 passed');
+      expect(artifact.spec_yaml).toContain('payload: { request: { ... } }');
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
   it('boots synthesized parent and self-contained research-agent child through the route and proves settled result echo', { timeout: 120_000 }, () => {
     const slug = 'delegation-research-parent-hermetic';
     const name = 'Delegation Research Parent Hermetic';
@@ -340,4 +374,13 @@ function runGeneratedSmokeTest(targetDir: string): string {
     encoding: 'utf8',
     env: { ...process.env, CI: '1', RAYON_NUM_THREADS: '1' },
   });
+}
+
+function flatDelegationRequestSmoke(smokeTestTs: string): string {
+  const nestedRequest = "scripted(effect('request_research', { request: { intent: 'complete-child' } }, 'research_call'))";
+  const flatRequest = "scripted(effect('request_research', { intent: 'complete-child', topic: 'flat-topic-should-not-drive-child' }, 'research_call'))";
+  if (!smokeTestTs.includes(nestedRequest)) {
+    throw new Error('generated delegation smoke no longer contains the expected nested request dispatch');
+  }
+  return smokeTestTs.replace(nestedRequest, flatRequest);
 }
