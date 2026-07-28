@@ -84,7 +84,7 @@ interface ParsedSpec {
     channel?: string;
     result_path?: string;
     arg_descriptions?: Record<string, string>;
-    mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
+    mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string; coerce?: string; coerce_key?: string }>;
   }>;
 }
 
@@ -96,16 +96,21 @@ describe('reasoning contract weave', () => {
     expect(parsed.prompts.review).not.toContain('Perform the review stage');
     expect(parsed.prompts.review).toContain('Review the drafted memo stored at draft.result_json');
     expect(parsed.prompts.review).toContain('Respond with EXACTLY ONE terminal action');
+    expect(parsed.prompts.review).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"advance_review_to_revision","channel":"stage_output","payload":{}}]}');
+    expect(parsed.prompts.review).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
     expect(parsed.prompts.review).toContain('result_json must be a JSON object containing at least: decision (enum: approve | request_revision), rationale (string), quality_score (number), blocking (boolean), gaps (string_array; pass the argument as a JSON array string)');
     expect(parsed.prompts.review).toContain('items_json must be a JSON array of strings matching: review:decision:<decision>, review:quality:<quality_score>');
     expect(parsed.prompts.draft).toContain('Perform the draft stage for Memo Review.');
     expect(parsed.prompts.draft).toContain('Respond with EXACTLY ONE terminal action');
+    expect(parsed.prompts.draft).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"complete_draft","channel":"widget_output","payload":{}}]}');
   });
 
   it('appends per-field contract guidance while preserving base guidance', () => {
     const guidance = parsed.guidance.review.join('\n');
     expect(parsed.guidance.review[0]).toBe('Use the synthesized JSON-string scalar fields for structured handler results.');
     expect(guidance).toContain('Respond with EXACTLY ONE terminal action');
+    expect(guidance).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"advance_review_to_revision","channel":"stage_output","payload":{}}]}');
+    expect(guidance).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
     expect(guidance).toContain('decision (enum, one of: approve | request_revision): The review decision.');
     expect(guidance).toContain('gaps (string_array): Concrete memo gaps found during review.');
     expect(guidance).toContain('items_json templates: review:decision:<decision>, review:quality:<quality_score>.');
@@ -119,14 +124,21 @@ describe('reasoning contract weave', () => {
       expect(fromArgPaths).toEqual([
         ['review.raw_result_json', 'result_json'],
         ['review.raw_items_json', 'items_json'],
-        ['review.result.decision', 'decision'],
-        ['review.result.rationale', 'rationale'],
-        ['review.result.quality_score', 'quality_score'],
-        ['review.result.blocking', 'blocking'],
-        ['review.result.gaps', 'gaps'],
+        ['review.raw_result_fields.decision', 'decision'],
+        ['review.raw_result_fields.rationale', 'rationale'],
+        ['review.raw_result_fields.quality_score', 'quality_score'],
+        ['review.raw_result_fields.blocking', 'blocking'],
+        ['review.raw_result_fields.gaps', 'gaps'],
       ]);
       expect(action.result_path).toBe('review.output');
       expect(action.channel).toBe('stage_output');
+      expect(action.mutations.filter((mutation) => mutation.path.startsWith('review.raw_result_fields.'))).toEqual([
+        { op: 'MSet', path: 'review.raw_result_fields.decision', from_arg: 'decision' },
+        { op: 'MSet', path: 'review.raw_result_fields.rationale', from_arg: 'rationale' },
+        { op: 'MSet', path: 'review.raw_result_fields.quality_score', from_arg: 'quality_score' },
+        { op: 'MSet', path: 'review.raw_result_fields.blocking', from_arg: 'blocking' },
+        { op: 'MSet', path: 'review.raw_result_fields.gaps', from_arg: 'gaps' },
+      ]);
       expect(action.arg_descriptions?.decision).toBe('The review decision. One of: approve | request_revision.');
       expect(action.arg_descriptions?.quality_score).toBe('Overall memo quality from 0 to 100.');
       expect(action.arg_descriptions?.gaps).toBe('Concrete memo gaps found during review. Provide the value as a JSON array string.');
@@ -144,6 +156,12 @@ describe('reasoning contract weave', () => {
       'review.output.items_json': 'string',
       'review.raw_result_json': 'any',
       'review.raw_items_json': 'any',
+      'review.raw_result_fields': 'object',
+      'review.raw_result_fields.decision': 'any',
+      'review.raw_result_fields.rationale': 'any',
+      'review.raw_result_fields.quality_score': 'any',
+      'review.raw_result_fields.blocking': 'any',
+      'review.raw_result_fields.gaps': 'any',
       'review.result': 'object',
       'review.result.decision': 'string',
       'review.result.rationale': 'string',
@@ -172,9 +190,13 @@ describe('reasoning contract weave', () => {
   });
 
   it('adds the observability envelope to the generated reasoning handlers', () => {
-    expect(woven.handlers_ts).toContain("decision: resolveDomainValue<unknown>(\n        payload as HandlerPayload,\n        'decision',\n        resolveDomainValue<unknown>(payload as HandlerPayload, 'review.result.decision', null),\n      ),");
+    expect(woven.handlers_ts).toContain("decision: normalizeReasoningFieldValue(");
+    expect(woven.handlers_ts).toContain("'review.raw_result_fields.decision'");
+    expect(woven.handlers_ts).toContain("resolveDomainValue<unknown>(payload as HandlerPayload, 'review.result.decision', null)");
     expect(woven.handlers_ts).toContain("contract_conformant: reasoningOutputConformant(resultJson, fields, ['decision', 'rationale', 'quality_score', 'blocking', 'gaps']),");
     expect(woven.handlers_ts).toContain('function reasoningOutputConformant(');
+    expect(woven.handlers_ts).toContain('function normalizeReasoningFieldValue(');
+    expect(woven.handlers_ts).toContain("['mirror_review_result_fields', (snapshot) => mirrorReasoningResultFields(snapshot, 'review.output', 'review.raw_result_fields', 'review.raw_result_json', 'review.result', ['decision', 'rationale', 'quality_score', 'blocking', 'gaps'], ['gaps'])]");
     expect(woven.handlers_ts).toContain("resolveDomainValue<unknown>(payload as HandlerPayload, 'review.raw_result_json', undefined)");
     expect(woven.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
   });

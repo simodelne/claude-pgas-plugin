@@ -53,11 +53,6 @@ describe('generated contracted reasoning runtime shape tolerance', () => {
               gaps: ['none'],
             },
             items_json: ['review:decision:approve', 'review:quality:91'],
-            decision: 'approve',
-            rationale: 'The memo satisfies the review checklist.',
-            quality_score: 91,
-            blocking: false,
-            gaps: '["none"]',
           }, reviewChannel),
         ],
       });
@@ -77,6 +72,65 @@ describe('generated contracted reasoning runtime shape tolerance', () => {
         expect(snapshot.domain['review.result_json']).toBe(expectedResult);
         expect(snapshot.domain['review.output.result_json']).toBe(expectedResult);
         expect(snapshot.domain['review.items_json']).toBe(JSON.stringify(['review:decision:approve', 'review:quality:91']));
+        expect(snapshot.domain['review.result.rationale']).toBe('The memo satisfies the review checklist.');
+      } finally {
+        await harness.close();
+      }
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a single-key object for a nested result field without a pre-dispatch GKType repair', { timeout: 120_000 }, async () => {
+    const artifact = synthesizeProgramSpecFromDomain(contractRuntimeDomain(), {
+      reasoningContracts: { review: reviewContract() },
+    });
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const reviewChannel = parsed.action_map.complete_review.channel ?? 'widget_output';
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-contract-runtime-'));
+
+    try {
+      renderStandaloneScaffold({
+        slug: 'contract-runtime',
+        name: 'Contract Runtime',
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: artifact.smoke_test_ts,
+      });
+      linkRootNodeModules(targetDir);
+      const harness = await createTestHarness(await importProgramEntry(targetDir), {
+        programName: 'contract-runtime',
+        defaultChannel: 'user_text',
+        authorResponses: [
+          effect('begin_work', {}, 'widget_output'),
+          effect('complete_review', {
+            result_json: {
+              decision: 'approve',
+              rationale: 'The memo satisfies the review checklist.',
+              quality_score: 91,
+              blocking: false,
+              gaps: ['none'],
+            },
+            items_json: ['review:decision:approve', 'review:quality:91'],
+            decision: 'approve',
+            rationale: { rationale: 'The memo satisfies the review checklist.' },
+            quality_score: 91,
+            blocking: false,
+            gaps: '["none"]',
+          }, reviewChannel),
+        ],
+      });
+
+      try {
+        await harness.trigger('start review');
+        await harness.trigger('finish review');
+        const snapshot = await harness.snapshot();
+        expect(snapshot.mode).toBe('complete');
+        expect(snapshot.domain['review.result.rationale']).toBe('The memo satisfies the review checklist.');
       } finally {
         await harness.close();
       }
