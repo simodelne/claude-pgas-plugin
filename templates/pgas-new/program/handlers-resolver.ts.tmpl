@@ -12,6 +12,9 @@ export function resolveDomainValue<T>(
   if (payload.args && Object.prototype.hasOwnProperty.call(payload.args, key)) {
     return payload.args[key] as T;
   }
+  if (Object.prototype.hasOwnProperty.call(payload, key)) {
+    return payload[key] as T;
+  }
   if (payload.domain && Object.prototype.hasOwnProperty.call(payload.domain, key)) {
     return payload.domain[key] as T;
   }

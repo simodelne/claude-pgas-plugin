@@ -285,9 +285,11 @@ describe('confirmation_loop descriptor synthesis', () => {
       'summary.confirmation_loop.seed_state': 'string',
     });
     expect(parsed.prompts.review_work).toContain('Work through the work units one at a time');
+    expect(parsed.prompts.review_work).toContain('Respond with EXACTLY ONE terminal action');
     expect(parsed.prompts.review_work).toContain('the runtime selects that item');
     expect(parsed.prompts.review_work).toContain('use its active_item and progress counts');
     expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
+      expect.stringContaining('Respond with EXACTLY ONE terminal action'),
       expect.stringContaining('never write item statuses yourself'),
       expect.stringContaining('summary.confirmation_loop.active_item'),
       expect.stringContaining('not the full work_units.items collection'),
@@ -579,9 +581,9 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(() => assertConfirmationPairingTerminals(drifted)).toThrow(/write_item_directly/u);
   });
 
-  it('keeps no-interaction synthesis byte-identical to the pre-confirmation-loop baseline', () => {
+  it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '0a6a33a160669ea32c740a3f9201300e304ea0c53659e2e989f81eb0f3716073',
+      spec_yaml: '70ca5d8f9d8ac20691400a24b5e069ea2bd6e5953ea7a27bb6aefc655998b8f7',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '487b83115c463a60c3c53d3ccb21350e05a4f4d29a39d9f03ad77e804e56d04d',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
