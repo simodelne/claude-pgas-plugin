@@ -3103,8 +3103,15 @@ function actionMapEntryFor(
   const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
   const isContractedReasoningStage = contract !== undefined;
   const isResultPathStage = !isBootstrap && (action.archetype !== 'llm-reasoning' || isContractedReasoningStage);
-  const domainSpecDescription = domainSpec
-    ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpec)}`
+  const isDeterministicResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
+  const domainSpecForDescription = domainSpec && isDeterministicResultPathStage
+    ? deterministicActionDomainSpecDescription(domainSpec)
+    : domainSpec;
+  const domainSpecDescription = domainSpecForDescription
+    ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpecForDescription)}`
+    : '';
+  const deterministicResultPathInstruction = isDeterministicResultPathStage
+    ? ' This is a deterministic wrapper: emit this action with an EMPTY payload. Do NOT author result_json, items_json, bytes, or any output fields; the wrapper computes and stores the result deterministically.'
     : '';
   const reasoningEnvelopeDescription = isContractedReasoningStage
     ? ' The generated handler accepts result_json as either a native JSON object or a JSON string, and items_json as either a native JSON array or a JSON string; it canonicalizes both into JSON strings at the stage output path.'
@@ -3139,7 +3146,7 @@ function actionMapEntryFor(
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
       : action.archetype === 'llm-reasoning'
         ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${reasoningEnvelopeDescription}`
-        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`,
+        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${deterministicResultPathInstruction}`,
     ...(isBootstrap || action.archetype !== 'llm-reasoning' ? {} : {
       arg_descriptions: contract
         ? {
@@ -3158,6 +3165,16 @@ function actionMapEntryFor(
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
     channel: isResultPathStage ? 'stage_output' : 'widget_output',
+  };
+}
+
+function deterministicActionDomainSpecDescription(
+  domainSpec: StageDomainSpec,
+): Pick<StageDomainSpec, 'reads' | 'rules' | 'invariants'> {
+  return {
+    reads: domainSpec.reads,
+    rules: domainSpec.rules,
+    invariants: domainSpec.invariants,
   };
 }
 
