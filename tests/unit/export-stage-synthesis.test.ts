@@ -11,7 +11,11 @@ import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.j
 describe('PR-E2 export stage synthesis', () => {
   it('emits deterministic DOCX export stages, result_path wiring, artifact policy, and standalone export artifacts', async () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
-    const spec = load(artifact.spec_yaml) as { action_map: Record<string, Record<string, unknown>> };
+    const spec = load(artifact.spec_yaml) as {
+      action_map: Record<string, Record<string, unknown>>;
+      prompts: Record<string, string>;
+      guidance: Record<string, string[]>;
+    };
     const exportStage = artifact.stage_classification.find((stage) =>
       typeof stage === 'object' && stage && (stage as { slug?: unknown }).slug === 'export_document') as Record<string, unknown> | undefined;
 
@@ -22,6 +26,10 @@ describe('PR-E2 export stage synthesis', () => {
     });
     expect(spec.action_map.complete_export_document?.result_path).toBe('export_document.output');
     expect(spec.action_map.complete_export_document?.channel).toBe('stage_output');
+    expect(spec.prompts.export_document).toContain('Respond with EXACTLY ONE terminal action');
+    expect(spec.prompts.export_document).toContain('complete_export_document');
+    expect(spec.guidance.export_document.join('\n')).toContain('Respond with EXACTLY ONE terminal action');
+    expect(spec.guidance.export_document.join('\n')).toContain('complete_export_document');
 
     expect(artifact.registration_ts).toContain('artifactPolicy');
     expect(artifact.registration_ts).toContain("artifactType: 'docx_export'");

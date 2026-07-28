@@ -238,6 +238,8 @@ const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
 const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
 const DOCUMENT_SKIP_STATUS = 'no_documents_available';
 const PROPOSE_ITEM_ACTION = 'propose_item';
+const TERMINAL_ACTION_PROTOCOL =
+  'Respond with EXACTLY ONE terminal action per response: emit one native tool_call from the current mode vocabulary, with no extra terminal actions, no empty action names, and no free-form action JSON.';
 const CONTROL_PLANE_ACTIONS = [
   'record_user_note',
   'session_new',
@@ -423,6 +425,12 @@ export function synthesizeProgramSpecFromDomain(
     stageClassificationBySlug,
   );
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
+  const contractedReasoningOutputStages = new Set(
+    transitionActions
+      .filter((action) => action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source))
+      .map((action) => action.source),
+  );
+  const stageOutputMirrorStages = new Set([...flatMirrorStages, ...contractedReasoningOutputStages]);
   const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
   const suppressedTransitionActionNames = new Set(
     transitionActions
@@ -481,7 +489,7 @@ export function synthesizeProgramSpecFromDomain(
 
   applyTransitions(synthesizedModes, transitionActions, modeNames);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
-  applyStageOutputChannels(synthesizedModes, transitionActions);
+  applyStageOutputChannels(synthesizedModes, transitionActions, reasoningContractsBySlug);
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
   }
@@ -560,6 +568,7 @@ export function synthesizeProgramSpecFromDomain(
   for (const modeName of intermediateModes) {
     prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
+  applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames);
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
@@ -580,7 +589,7 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
-  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, flatMirrorStages);
+  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageOutputMirrorStages);
   if (completion.collection_lifecycle && confirmationLoops.length === 0) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
@@ -642,6 +651,11 @@ export function synthesizeProgramSpecFromDomain(
       schema[`${modeName}.items_json`] = 'string';
       const reasoningContract = reasoningContractsBySlug.get(modeName);
       if (reasoningContract) {
+        schema[`${modeName}.output`] = 'object';
+        schema[`${modeName}.output.result_json`] = 'string';
+        schema[`${modeName}.output.items_json`] = 'string';
+        schema[`${modeName}.raw_result_json`] = 'any';
+        schema[`${modeName}.raw_items_json`] = 'any';
         schema[`${modeName}.result`] = 'object';
         for (const field of reasoningContract.result_schema.fields) {
           schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
@@ -669,6 +683,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDelegationSchema(schema, delegationChildren, documents);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
+  applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
@@ -694,7 +709,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: './stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
-      flatMirrorStages,
+      flatMirrorStages: stageOutputMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
       delegationChildren,
@@ -848,9 +863,16 @@ function applyModeVocabularies(
   }
 }
 
-function applyStageOutputChannels(modes: MutableRecord, transitionActions: TransitionAction[]): void {
+function applyStageOutputChannels(
+  modes: MutableRecord,
+  transitionActions: TransitionAction[],
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+): void {
   for (const action of transitionActions) {
-    if (action.name === 'begin_work' || action.archetype === 'llm-reasoning') {
+    if (action.name === 'begin_work') {
+      continue;
+    }
+    if (action.archetype === 'llm-reasoning' && !reasoningContractsBySlug.has(action.source)) {
       continue;
     }
     const mode = recordField(modes, action.source);
@@ -904,10 +926,10 @@ function collectFlatMirrorStages(
 function applyStageOutputMirrorReactions(
   reactions: MutableRecord,
   intermediateModes: string[],
-  flatMirrorStages: ReadonlySet<string>,
+  mirrorStages: ReadonlySet<string>,
 ): void {
   for (const modeName of intermediateModes) {
-    if (!flatMirrorStages.has(modeName)) {
+    if (!mirrorStages.has(modeName)) {
       continue;
     }
     reactions[stageOutputMirrorReactionName(modeName)] = {
@@ -2311,7 +2333,8 @@ function applyConfirmationLoopPrompts(
     const itemLabel = lifecycle.item_label;
     const itemLabelPlural = `${itemLabel}s`;
     const existing = typeof prompts[loop.stage] === 'string' ? `${prompts[loop.stage]}\n` : '';
-    prompts[loop.stage] = `${existing}Work through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${confirmationLoopProposeActionName(loop, 0, loops.length)} with the proposal content for the active item; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`;
+    const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
+    prompts[loop.stage] = `${existing}${terminalActionInstruction([proposeAction])}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content. When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
   }
 }
 
@@ -2325,12 +2348,14 @@ function applyConfirmationLoopGuidance(
   }
   for (const loop of loops) {
     const existing = Array.isArray(guidance[loop.stage]) ? guidance[loop.stage] as string[] : [];
+    const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     guidance[loop.stage] = [
       ...existing,
-      `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${confirmationLoopProposeActionName(loop, 0, loops.length)}.`,
+      terminalActionInstruction([proposeAction]),
+      `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${proposeAction}.`,
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
-      `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${confirmationLoopProposeActionName(loop, 0, loops.length)} again or open another confirmation prompt.`,
+      `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`,
     ];
   }
 }
@@ -2953,16 +2978,32 @@ function actionMapEntryFor(
   reasoningContract?: ReasoningStageContract,
 ): MutableRecord {
   const isBootstrap = action.source === firstMode;
-  const isResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
   const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
+  const isContractedReasoningStage = contract !== undefined;
+  const isResultPathStage = !isBootstrap && (action.archetype !== 'llm-reasoning' || isContractedReasoningStage);
   const domainSpecDescription = domainSpec
     ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpec)}`
     : '';
+  const reasoningEnvelopeDescription = isContractedReasoningStage
+    ? ' The generated handler accepts result_json as either a native JSON object or a JSON string, and items_json as either a native JSON array or a JSON string; it canonicalizes both into JSON strings at the stage output path.'
+    : '';
+  const compositeReasoningMutations = !isBootstrap && action.archetype === 'llm-reasoning' && !isContractedReasoningStage
+    ? [
+        { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
+        { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
+      ]
+    : [];
+  const tolerantReasoningCaptureMutations = isContractedReasoningStage
+    ? [
+        { op: 'MSet', path: `${action.source}.raw_result_json`, value: {}, from_arg: 'result_json' },
+        { op: 'MSet', path: `${action.source}.raw_items_json`, value: [], from_arg: 'items_json' },
+      ]
+    : [];
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
-    ...(isBootstrap || isResultPathStage ? [] : [
-      { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
-      { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
+    ...compositeReasoningMutations,
+    ...tolerantReasoningCaptureMutations,
+    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? [] : [
       ...(contract ? contract.result_schema.fields.map((field) => ({
         op: 'MSet',
         path: `${action.source}.result.${field.name}`,
@@ -2975,13 +3016,13 @@ function actionMapEntryFor(
     description: isBootstrap
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
       : action.archetype === 'llm-reasoning'
-        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`
+        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${reasoningEnvelopeDescription}`
         : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`,
-    ...(isBootstrap || isResultPathStage ? {} : {
+    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? {} : {
       arg_descriptions: contract
         ? {
-            result_json: `JSON string result for the ${action.source} LLM reasoning stage. Must encode a JSON object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
-            items_json: `JSON string array of item strings produced by the ${action.source} LLM reasoning stage. Must match the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
+            result_json: `Optional tolerant result for the ${action.source} LLM reasoning stage. May be a native JSON object or a JSON string encoding an object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
+            items_json: `Optional tolerant item list produced by the ${action.source} LLM reasoning stage. May be a native JSON array or a JSON string array matching the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
             ...Object.fromEntries(contract.result_schema.fields.map((field) => [
               field.name,
               `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}`,
@@ -3123,15 +3164,39 @@ function renderHandlersSource(
       const reasoningContract = reasoningContractsBySlug.get(action.source);
       if (reasoningContract) {
         const coreFieldNames = reasoningContract.result_schema.fields.map((field) => field.name);
+        const stringArrayFieldNames = reasoningContract.result_schema.fields
+          .filter((field) => field.type === 'string_array')
+          .map((field) => field.name);
         const fieldResolvers = coreFieldNames
-          .map((name) => `      ${name}: resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(name)}, null),`)
+          .map((name) => `      ${name}: resolveDomainValue<unknown>(
+        payload as HandlerPayload,
+        ${tsString(name)},
+        resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.result.${name}`)}, null),
+      ),`)
           .join('\n');
         return `  async ${action.name}(payload) {
-    const resultJson = resolveDomainValue<string>(payload as HandlerPayload, 'result_json', '{}');
-    const itemsJson = resolveDomainValue<string>(payload as HandlerPayload, 'items_json', '[]');
     const fields = {
 ${fieldResolvers}
     };
+    const resultJson = normalizeReasoningResultJson(
+      resolveDomainValue<unknown>(
+        payload as HandlerPayload,
+        'result_json',
+        resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.raw_result_json`)}, undefined),
+      ),
+      fields,
+      [${stringArrayFieldNames.map(tsString).join(', ')}],
+    );
+    const itemsJson = normalizeReasoningItemsJson(
+      resolveDomainValue<unknown>(
+        payload as HandlerPayload,
+        'items_json',
+        resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.raw_items_json`)}, undefined),
+      ),
+      [${reasoningContract.items_schema.templates.map(tsString).join(', ')}],
+      fields,
+      [${stringArrayFieldNames.map(tsString).join(', ')}],
+    );
     return {
       kind: 'llm_reasoning_stage_output',
       action: ${tsString(action.name)},
@@ -3174,8 +3239,9 @@ ${fieldResolvers}
   const documentActionHandlers = options.documents
     ? renderDocumentActionHandlers(options.documents)
     : '';
+  const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
-    ? bodyActions.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
+    ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
   const reactionImport = options.includeReactionHandlers
@@ -3259,6 +3325,82 @@ function reasoningOutputConformant(
     // pattern); compare against the composite value's JSON text.
     return typeof arg === 'string' && JSON.stringify(record[field]) === arg;
   });
+}
+
+function normalizeReasoningResultJson(
+  value: unknown,
+  fields: Record<string, unknown>,
+  stringArrayFields: readonly string[],
+): string {
+  const normalized = canonicalJsonForTopLevel(value, 'object');
+  if (normalized !== undefined) {
+    return normalized;
+  }
+  return JSON.stringify(normalizeReasoningFields(fields, stringArrayFields));
+}
+
+function normalizeReasoningItemsJson(
+  value: unknown,
+  templates: readonly string[],
+  fields: Record<string, unknown>,
+  stringArrayFields: readonly string[],
+): string {
+  const normalized = canonicalJsonForTopLevel(value, 'array');
+  if (normalized !== undefined) {
+    return normalized;
+  }
+  const normalizedFields = normalizeReasoningFields(fields, stringArrayFields);
+  return JSON.stringify(templates.map((template) =>
+    template.replace(/<([A-Za-z0-9_]+)>/gu, (_match, fieldName: string) =>
+      reasoningItemToken(normalizedFields[fieldName]))));
+}
+
+function canonicalJsonForTopLevel(value: unknown, topLevel: 'object' | 'array'): string | undefined {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  const topLevelMatches = topLevel === 'array'
+    ? Array.isArray(parsed)
+    : !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  if (!topLevelMatches) {
+    return undefined;
+  }
+  return JSON.stringify(parsed);
+}
+
+function normalizeReasoningFields(
+  fields: Record<string, unknown>,
+  stringArrayFields: readonly string[],
+): Record<string, unknown> {
+  const stringArrayFieldSet = new Set(stringArrayFields);
+  return Object.fromEntries(Object.entries(fields).map(([field, value]) => {
+    if (stringArrayFieldSet.has(field) && typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed)) {
+          return [field, parsed];
+        }
+      } catch {
+        return [field, value];
+      }
+    }
+    return [field, value];
+  }));
+}
+
+function reasoningItemToken(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value) ?? String(value);
+  }
+  return String(value);
 }`
     : '';
 
@@ -5069,9 +5211,6 @@ function renderSmokeTestSource(
     if (action.archetype === 'llm-reasoning') {
       const reasoningContract = reasoningContractsBySlug.get(action.source);
       if (reasoningContract) {
-        // The action's declared channel is widget_output (actionMapEntryFor);
-        // the canned effect must ride that channel or the handler's
-        // contract-conformance envelope is unreachable (Codex fix, spec §6.7).
         const canned = reasoningContract.canned_example;
         const cannedFieldArgs = reasoningContract.result_schema.fields
           .map((field) => {
@@ -5089,7 +5228,7 @@ function renderSmokeTestSource(
           result_json: JSON.stringify(${JSON.stringify(canned.result)}),
           items_json: JSON.stringify(${JSON.stringify(canned.items)}),
 ${cannedFieldArgs}
-        }, 'widget_output'),`;
+        }, 'stage_output'),`;
       }
       return `        effect(${tsString(action.name)}, {
           result_json: JSON.stringify({ stage: ${tsString(action.source)}, status: 'reasoned' }),
@@ -8678,6 +8817,21 @@ function promptForStage(
   return [`Perform the ${modeName} stage for ${programName}.`, ...domainSpecSuffix].join('\n');
 }
 
+function applyTerminalActionPrompts(
+  prompts: MutableRecord,
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+  suppressedActionNames: ReadonlySet<string>,
+): void {
+  for (const [modeName, actions] of transitionActionsBySource) {
+    const activeActions = actions.filter((action) => !suppressedActionNames.has(action.name));
+    if (activeActions.length === 0) {
+      continue;
+    }
+    const existing = typeof prompts[modeName] === 'string' ? `${prompts[modeName]}\n` : '';
+    prompts[modeName] = `${existing}${terminalActionInstruction(activeActions.map((action) => action.name))}`;
+  }
+}
+
 function guidanceFor(
   modeNames: string[],
   delegation: Record<string, unknown>,
@@ -8711,6 +8865,35 @@ function guidanceFor(
     }
     return [modeName, stageGuidance];
   }));
+}
+
+function applyTerminalActionGuidance(
+  guidance: MutableRecord,
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+  suppressedActionNames: ReadonlySet<string>,
+): void {
+  for (const [modeName, actions] of transitionActionsBySource) {
+    const activeActions = actions.filter((action) => !suppressedActionNames.has(action.name));
+    if (activeActions.length === 0) {
+      continue;
+    }
+    const existing = Array.isArray(guidance[modeName]) ? guidance[modeName] as string[] : [];
+    guidance[modeName] = [
+      ...existing,
+      terminalActionInstruction(activeActions.map((action) => action.name)),
+    ];
+  }
+}
+
+function terminalActionInstruction(actionNames: string[]): string {
+  const names = unique(actionNames).filter((name) => name.trim().length > 0);
+  if (names.length === 1) {
+    return `Respond with EXACTLY ONE terminal action per response: call ${names[0]} as the single native tool_call when this mode's work is ready. Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
+  }
+  if (names.length > 1) {
+    return `Respond with EXACTLY ONE terminal action per response: call exactly one of ${names.join(' | ')} as the single native tool_call when this mode's work is ready. Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
+  }
+  return TERMINAL_ACTION_PROTOCOL;
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {

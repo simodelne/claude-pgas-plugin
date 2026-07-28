@@ -328,9 +328,9 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(runAllTerminalReaction(reaction, '[not json')).toBe(false);
   });
 
-  it('keeps no-descriptor synthesis byte-identical to the pre-lifecycle baseline', () => {
+  it('keeps no-descriptor generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '9dcfe499925d995bc46442ba71b847b271380bc01e6cfd78f48f643fc8f09a9a',
+      spec_yaml: 'cdfd4b51b8b205825365fb747854f29474207580243a93b7b898f1ccd9cda3fe',
       contracts_ts: '9cf1c34fb09d664aef1bbb2b9cf31cb54a6e2943c81007cd561d0975dd2d43af',
       handlers_ts: '487b83115c463a60c3c53d3ccb21350e05a4f4d29a39d9f03ad77e804e56d04d',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
@@ -339,7 +339,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     });
   });
 
-  it('keeps descriptors with no llm-managed transitions byte-identical to the Phase 1 baseline', () => {
+  it('keeps descriptors with no llm-managed transitions stable apart from synthesized spec guidance', () => {
     const noLlmLifecycle = {
       ...clone(genericLifecycle),
       transitions: [
@@ -355,7 +355,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     };
 
     expect(hashArtifact(synthesizeProgramSpecFromDomain(domainWithLifecycle(noLlmLifecycle)))).toEqual({
-      spec_yaml: '45116c560ca1d62b69c103f97f5b12f458f8f6222037b8ad6eb7d45673d4247c',
+      spec_yaml: 'eb91cf3a66f7178ac33089cfbec6aef3baf7403059b722d8490486c6a34bd316',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '12b3a449739578f1d5bf6e59a820e1d9251bb1a4eef0352efa1226e6e843b3d2',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
