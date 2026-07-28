@@ -462,7 +462,11 @@ describe('delegation children descriptor synthesis gate', () => {
     });
     expect(parsed.guidance.dispatch_research.join('\n')).not.toContain('delegation intake captured');
     expect(parsed.guidance.dispatch_research.join('\n')).toContain('Call request_research exactly once');
+    expect(parsed.guidance.dispatch_research.join('\n')).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"request_research","channel":"research_call","payload":{}}]}');
+    expect(parsed.guidance.dispatch_research.join('\n')).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
     expect(parsed.prompts.dispatch_research).toContain('Call request_research once with a request object');
+    expect(parsed.prompts.dispatch_research).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"request_research","channel":"research_call","payload":{}}]}');
+    expect(parsed.prompts.dispatch_research).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
     expect(artifact.handlers_ts).toContain("['settle_research_delegation', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain('settleDelegationResult(');
     expect(artifact.smoke_test_ts).toContain('generated delegation smoke');

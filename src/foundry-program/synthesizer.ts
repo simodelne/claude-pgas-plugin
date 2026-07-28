@@ -219,6 +219,11 @@ interface TransitionAction {
   audit_note?: string;
 }
 
+interface TerminalActionDescriptor {
+  name: string;
+  channel: string;
+}
+
 interface PlannedTransitionAction {
   name: string;
   source: string;
@@ -238,8 +243,10 @@ const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
 const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
 const DOCUMENT_SKIP_STATUS = 'no_documents_available';
 const PROPOSE_ITEM_ACTION = 'propose_item';
+const TERMINAL_ACTION_GENERIC_EXAMPLE =
+  'Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"<action>","channel":"<channel>","payload":{}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.';
 const TERMINAL_ACTION_PROTOCOL =
-  'Respond with EXACTLY ONE terminal action per response: emit one native tool_call from the current mode vocabulary, with no extra terminal actions, no empty action names, and no free-form action JSON.';
+  `Respond with EXACTLY ONE terminal action per response: emit one native tool_call from the current mode vocabulary, with no extra terminal actions, no empty action names, and no free-form action JSON. ${TERMINAL_ACTION_GENERIC_EXAMPLE}`;
 const CONTROL_PLANE_ACTIONS = [
   'record_user_note',
   'session_new',
@@ -569,7 +576,7 @@ export function synthesizeProgramSpecFromDomain(
   for (const modeName of intermediateModes) {
     prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
-  applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames);
+  applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
@@ -591,6 +598,7 @@ export function synthesizeProgramSpecFromDomain(
     },
   };
   applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageOutputMirrorStages);
+  applyReasoningFieldMirrorReactions(recordField(spec, 'reactions'), reasoningContractsBySlug);
   if (completion.collection_lifecycle && confirmationLoops.length === 0) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
@@ -658,8 +666,10 @@ export function synthesizeProgramSpecFromDomain(
         schema[`${modeName}.output.items_json`] = 'string';
         schema[`${modeName}.raw_result_json`] = 'any';
         schema[`${modeName}.raw_items_json`] = 'any';
+        schema[`${modeName}.raw_result_fields`] = 'object';
         schema[`${modeName}.result`] = 'object';
         for (const field of reasoningContract.result_schema.fields) {
+          schema[`${modeName}.raw_result_fields.${field.name}`] = 'any';
           schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
         }
       }
@@ -685,7 +695,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDelegationSchema(schema, delegationChildren, documents);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
-  applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames);
+  applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
@@ -941,8 +951,29 @@ function applyStageOutputMirrorReactions(
   }
 }
 
+function applyReasoningFieldMirrorReactions(
+  reactions: MutableRecord,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+): void {
+  for (const [stage, contract] of reasoningContractsBySlug) {
+    reactions[reasoningFieldMirrorReactionName(stage)] = {
+      event: 'AfterMutation',
+      watch: unique([
+        `${stage}.output`,
+        `${stage}.raw_result_json`,
+        ...contract.result_schema.fields.map((field) => `${stage}.raw_result_fields.${field.name}`),
+      ]),
+      write_scope: contract.result_schema.fields.map((field) => `${stage}.result.${field.name}`),
+    };
+  }
+}
+
 function stageOutputMirrorReactionName(stage: string): string {
   return `mirror_${safeIdentifier(stage)}_output`;
+}
+
+function reasoningFieldMirrorReactionName(stage: string): string {
+  return `mirror_${safeIdentifier(stage)}_result_fields`;
 }
 
 function applyCollectionLifecycleReactions(
@@ -1319,14 +1350,16 @@ function applyDelegationPrompts(
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
     const fanOut = documentFanOutDescriptor(child, documents);
+    const requestAction = delegationRequestActionName(child);
+    const terminalInstruction = terminalActionInstruction([{ name: requestAction, channel: delegationChannelName(child) }]);
     const requestShape = isManifestReusedDelegationChild(child)
       ? ''
       : ` Use payload shape { request: { ... } }: put child request fields inside payload.request, not directly under payload.`;
     prompts[child.stage] = fanOut
-      ? `${existing}For each uploaded document, call ${delegationRequestActionName(child)} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
+      ? `${existing}${terminalInstruction}\nFor each uploaded document, call ${requestAction} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
       : isManifestReusedDelegationChild(child)
-      ? `${existing}Call ${delegationRequestActionName(child)} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
-      : `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+      ? `${existing}${terminalInstruction}\nCall ${requestAction} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
+      : `${existing}${terminalInstruction}\nCall ${requestAction} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
   }
 }
 
@@ -1338,19 +1371,21 @@ function applyDelegationGuidance(
   for (const child of children) {
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
     const fanOut = documentFanOutDescriptor(child, documents);
+    const requestAction = delegationRequestActionName(child);
     guidance[child.stage] = [
       ...existing,
+      terminalActionInstruction([{ name: requestAction, channel: delegationChannelName(child) }]),
       ...(fanOut ? [
-        `Call ${delegationRequestActionName(child)} once for the projected ${fanOut.current_document}; deterministic payload enrichment supplies only that document slice.`,
-        `For ${delegationRequestActionName(child)}, emit payload: { request: { ... } }; put document_id, document_name, topic, context, and other child request fields inside request, not directly under payload.`,
-        `Repeat ${delegationRequestActionName(child)} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
+        `Call ${requestAction} once for the projected ${fanOut.current_document}; deterministic payload enrichment supplies only that document slice.`,
+        `For ${requestAction}, emit payload: { request: { ... } }; put document_id, document_name, topic, context, and other child request fields inside request, not directly under payload.`,
+        `Repeat ${requestAction} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
         `When ${fanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
       ] : [
         isManifestReusedDelegationChild(child)
-        ? `Call ${delegationRequestActionName(child)} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
-        : `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
+        ? `Call ${requestAction} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
+        : `Call ${requestAction} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
         ...(isManifestReusedDelegationChild(child) ? [] : [
-          `For ${delegationRequestActionName(child)}, emit payload: { request: { ... } }; put topic, query, context, and other child request fields inside request, not directly under payload.`,
+          `For ${requestAction}, emit payload: { request: { ... } }; put topic, query, context, and other child request fields inside request, not directly under payload.`,
         ]),
         `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
         `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
@@ -2345,10 +2380,14 @@ function applyConfirmationLoopPrompts(
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     const completionActionNames = completionActions.map((action) => action.name);
+    const terminalActions = [
+      { name: proposeAction, channel: 'widget_output' },
+      ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
+    ];
     const completionInstruction = completionActionNames.length > 0
       ? ` When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
       : ` When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
-    prompts[loop.stage] = `${existing}${terminalActionInstruction([proposeAction, ...completionActionNames])}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
+    prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
   }
 }
 
@@ -2366,9 +2405,13 @@ function applyConfirmationLoopGuidance(
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     const completionActionNames = completionActions.map((action) => action.name);
+    const terminalActions = [
+      { name: proposeAction, channel: 'widget_output' },
+      ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
+    ];
     guidance[loop.stage] = [
       ...existing,
-      terminalActionInstruction([proposeAction, ...completionActionNames]),
+      terminalActionInstruction(terminalActions),
       `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${proposeAction}.`,
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
@@ -3085,7 +3128,7 @@ function actionMapEntryFor(
     ...(isBootstrap || action.archetype !== 'llm-reasoning' ? [] : [
       ...(contract ? contract.result_schema.fields.map((field) => ({
         op: 'MSet',
-        path: `${action.source}.result.${field.name}`,
+        path: `${action.source}.raw_result_fields.${field.name}`,
         from_arg: field.name,
       })) : []),
     ]),
@@ -3246,22 +3289,36 @@ function renderHandlersSource(
           .filter((field) => field.type === 'string_array')
           .map((field) => field.name);
         const fieldResolvers = coreFieldNames
-          .map((name) => `      ${name}: resolveDomainValue<unknown>(
-        payload as HandlerPayload,
+          .map((name) => `      ${name}: normalizeReasoningFieldValue(
+        resolveDomainValue<unknown>(
+          payload as HandlerPayload,
+          ${tsString(name)},
+          resolveDomainValue<unknown>(
+            payload as HandlerPayload,
+            ${tsString(`${action.source}.raw_result_fields.${name}`)},
+            resolveReasoningRecordField(
+              aggregateResultFields,
+              ${tsString(name)},
+              resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.result.${name}`)}, null),
+            ),
+          ),
+        ),
         ${tsString(name)},
-        resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.result.${name}`)}, null),
+        [${stringArrayFieldNames.map(tsString).join(', ')}],
       ),`)
           .join('\n');
         return `  async ${action.name}(payload) {
+    const rawResultJson = resolveDomainValue<unknown>(
+      payload as HandlerPayload,
+      'result_json',
+      resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.raw_result_json`)}, undefined),
+    );
+    const aggregateResultFields = extractReasoningResultFields(rawResultJson);
     const fields = {
 ${fieldResolvers}
     };
     const resultJson = normalizeReasoningResultJson(
-      resolveDomainValue<unknown>(
-        payload as HandlerPayload,
-        'result_json',
-        resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(`${action.source}.raw_result_json`)}, undefined),
-      ),
+      rawResultJson,
       fields,
       [${stringArrayFieldNames.map(tsString).join(', ')}],
     );
@@ -3322,10 +3379,29 @@ ${fieldResolvers}
     ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
-  const reactionImport = options.includeReactionHandlers
-    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers || usesDocumentFanOutHandlers ? 'ReactionResult, ' : ''}`
+  const reasoningFieldMirrorReactionEntries = options.includeReactionHandlers
+    ? [...contractActionSources].map((stage) => {
+        const contract = reasoningContractsBySlug.get(stage);
+        const fieldNames = contract?.result_schema.fields.map((field) => field.name) ?? [];
+        const stringArrayFieldNames = contract?.result_schema.fields
+          .filter((field) => field.type === 'string_array')
+          .map((field) => field.name) ?? [];
+        return `,
+  [${tsString(reasoningFieldMirrorReactionName(stage))}, (snapshot) => mirrorReasoningResultFields(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.raw_result_fields`)}, ${tsString(`${stage}.raw_result_json`)}, ${tsString(`${stage}.result`)}, [${fieldNames.map(tsString).join(', ')}], [${stringArrayFieldNames.map(tsString).join(', ')}])]`;
+      }).join('')
     : '';
-  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers || usesDocumentFanOutHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
+  const hasReactionEntries = Boolean(
+    stageOutputMirrorReactionEntries ||
+    reasoningFieldMirrorReactionEntries ||
+    usesConfirmationLoopHandlers ||
+    usesDelegationHandlers ||
+    usesDocumentReactionHandlers ||
+    usesDocumentFanOutHandlers,
+  );
+  const reactionImport = options.includeReactionHandlers
+    ? `ReactionHandler, ${hasReactionEntries ? 'ReactionResult, ' : ''}`
+    : '';
+  const reactionMapConstructor = hasReactionEntries ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
@@ -3362,13 +3438,13 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
 
-// Observability only: the hard reasoning-output enforcement is the engine's
-// GKType check on each typed <stage>.result.<field> path. This envelope makes
+// Observability only: typed <stage>.result.<field> paths are mirrored from
+// normalized handler output after tolerant raw capture. This envelope makes
 // composite/field divergence visible in session logs without throwing.
 function reasoningOutputConformant(
   resultJson: string | undefined,
@@ -3403,6 +3479,51 @@ function reasoningOutputConformant(
     // pattern); compare against the composite value's JSON text.
     return typeof arg === 'string' && JSON.stringify(record[field]) === arg;
   });
+}
+
+function normalizeReasoningFieldValue(
+  value: unknown,
+  fieldName: string,
+  stringArrayFields: readonly string[],
+): unknown {
+  let candidate = value;
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const record = candidate as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 1 && Object.prototype.hasOwnProperty.call(record, fieldName)) {
+      candidate = record[fieldName];
+    }
+  }
+  if (stringArrayFields.includes(fieldName) && Array.isArray(candidate)) {
+    return JSON.stringify(candidate);
+  }
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    return JSON.stringify(candidate);
+  }
+  return candidate;
+}
+
+function extractReasoningResultFields(value: unknown): Record<string, unknown> {
+  let candidate = value;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return {};
+  }
+  return candidate as Record<string, unknown>;
+}
+
+function resolveReasoningRecordField(
+  record: Record<string, unknown>,
+  fieldName: string,
+  fallback: unknown,
+): unknown {
+  return Object.prototype.hasOwnProperty.call(record, fieldName) ? record[fieldName] : fallback;
 }
 
 function normalizeReasoningResultJson(
@@ -3927,6 +4048,57 @@ function mirrorStageOutput(
   }
   if (typeof record.items_json === 'string' && snapshot.get(itemsPath) !== record.items_json) {
     mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
+}`;
+}
+
+function reasoningFieldMirrorReactionHelper(): string {
+  return `
+
+function mirrorReasoningResultFields(
+  snapshot: ReadonlyMap<string, unknown>,
+  outputPath: string,
+  rawFieldsRootPath: string,
+  rawResultJsonPath: string,
+  resultRootPath: string,
+  fieldNames: readonly string[],
+  stringArrayFields: readonly string[],
+): ReactionResult | undefined {
+  const rawAggregateFields = extractReasoningResultFields(snapshot.get(rawResultJsonPath));
+  const output = snapshot.get(outputPath);
+  const outputRecord = output && typeof output === 'object' && !Array.isArray(output)
+    ? (output as Record<string, unknown>).fields
+    : undefined;
+  const outputFields = outputRecord && typeof outputRecord === 'object' && !Array.isArray(outputRecord)
+    ? outputRecord as Record<string, unknown>
+    : {};
+  const mutations: ReactionResult['mutations'] = [];
+  for (const field of fieldNames) {
+    const rawFieldPath = \`\${rawFieldsRootPath}.\${field}\`;
+    const outputValue = Object.prototype.hasOwnProperty.call(outputFields, field)
+      ? outputFields[field]
+      : undefined;
+    const rawFieldValue = snapshot.get(rawFieldPath);
+    const aggregateValue = Object.prototype.hasOwnProperty.call(rawAggregateFields, field)
+      ? rawAggregateFields[field]
+      : undefined;
+    const value = normalizeReasoningFieldValue(
+      outputValue !== undefined
+        ? outputValue
+        : rawFieldValue !== undefined
+          ? rawFieldValue
+          : aggregateValue,
+      field,
+      stringArrayFields,
+    );
+    if (value === undefined) {
+      continue;
+    }
+    const path = \`\${resultRootPath}.\${field}\`;
+    if (JSON.stringify(snapshot.get(path)) !== JSON.stringify(value)) {
+      mutations.push({ op: 'MSet' as const, path, value });
+    }
   }
   return mutations.length > 0 ? { mutations } : undefined;
 }`;
@@ -6553,7 +6725,7 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
   const completeStage = recordField(actionMap, `complete_${middleStage}`);
   const mutations = Array.isArray(completeStage.mutations) ? completeStage.mutations as MutableRecord[] : [];
   for (const mutation of mutations) {
-    if (mutation.path === `${middleStage}.result.seeded_topic`) {
+    if (mutation.path === `${middleStage}.raw_result_fields.seeded_topic`) {
       mutation.value = '';
       mutation.from_arg = 'seeded_topic';
       mutation.from_state = 'inputs.request.topic';
@@ -8899,6 +9071,8 @@ function applyTerminalActionPrompts(
   prompts: MutableRecord,
   transitionActionsBySource: Map<string, TransitionAction[]>,
   suppressedActionNames: ReadonlySet<string>,
+  firstMode: string,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
 ): void {
   for (const [modeName, actions] of transitionActionsBySource) {
     const activeActions = actions.filter((action) => !suppressedActionNames.has(action.name));
@@ -8906,7 +9080,9 @@ function applyTerminalActionPrompts(
       continue;
     }
     const existing = typeof prompts[modeName] === 'string' ? `${prompts[modeName]}\n` : '';
-    prompts[modeName] = `${existing}${terminalActionInstruction(activeActions.map((action) => action.name))}`;
+    prompts[modeName] = `${existing}${terminalActionInstruction(activeActions.map((action) =>
+      terminalActionDescriptorForTransition(action, firstMode, reasoningContractsBySlug),
+    ))}`;
   }
 }
 
@@ -8949,6 +9125,8 @@ function applyTerminalActionGuidance(
   guidance: MutableRecord,
   transitionActionsBySource: Map<string, TransitionAction[]>,
   suppressedActionNames: ReadonlySet<string>,
+  firstMode: string,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
 ): void {
   for (const [modeName, actions] of transitionActionsBySource) {
     const activeActions = actions.filter((action) => !suppressedActionNames.has(action.name));
@@ -8958,20 +9136,61 @@ function applyTerminalActionGuidance(
     const existing = Array.isArray(guidance[modeName]) ? guidance[modeName] as string[] : [];
     guidance[modeName] = [
       ...existing,
-      terminalActionInstruction(activeActions.map((action) => action.name)),
+      terminalActionInstruction(activeActions.map((action) =>
+        terminalActionDescriptorForTransition(action, firstMode, reasoningContractsBySlug),
+      )),
     ];
   }
 }
 
-function terminalActionInstruction(actionNames: string[]): string {
-  const names = unique(actionNames).filter((name) => name.trim().length > 0);
+function terminalActionDescriptorForTransition(
+  action: TransitionAction,
+  firstMode: string,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+): TerminalActionDescriptor {
+  const isBootstrap = action.source === firstMode;
+  const hasContract = reasoningContractsBySlug.has(action.source);
+  const hasResultPath = !isBootstrap && (action.archetype !== 'llm-reasoning' || hasContract);
+  return {
+    name: action.name,
+    channel: hasResultPath ? 'stage_output' : 'widget_output',
+  };
+}
+
+function terminalActionInstruction(actions: TerminalActionDescriptor[]): string {
+  const descriptors = uniqueTerminalActionDescriptors(actions);
+  const names = descriptors.map((action) => action.name).filter((name) => name.trim().length > 0);
+  const example = descriptors.length > 0
+    ? terminalActionExample(descriptors[0] as TerminalActionDescriptor)
+    : TERMINAL_ACTION_GENERIC_EXAMPLE;
   if (names.length === 1) {
-    return `Respond with EXACTLY ONE terminal action per response: call ${names[0]} as the single native tool_call when this mode's work is ready. Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
+    return `Respond with EXACTLY ONE terminal action per response: call ${names[0]} as the single native tool_call when this mode's work is ready. ${example} Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
   }
   if (names.length > 1) {
-    return `Respond with EXACTLY ONE terminal action per response: call exactly one of ${names.join(' | ')} as the single native tool_call when this mode's work is ready. Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
+    return `Respond with EXACTLY ONE terminal action per response: call exactly one of ${names.join(' | ')} as the single native tool_call when this mode's work is ready. ${example} Do not emit multiple tool_calls, empty action names, or free-form action JSON.`;
   }
   return TERMINAL_ACTION_PROTOCOL;
+}
+
+function terminalActionExample(action: TerminalActionDescriptor): string {
+  return `Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"${action.name}","channel":"${action.channel}","payload":{}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.`;
+}
+
+function uniqueTerminalActionDescriptors(actions: TerminalActionDescriptor[]): TerminalActionDescriptor[] {
+  const seen = new Set<string>();
+  const result: TerminalActionDescriptor[] = [];
+  for (const action of actions) {
+    if (action.name.trim().length === 0) {
+      continue;
+    }
+    const key = `${action.name}\u0000${action.channel}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(action);
+  }
+  return result;
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {
