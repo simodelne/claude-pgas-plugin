@@ -2283,13 +2283,14 @@ interface ExportSection {
 }
 
 function sectionsFromDomain(domain: Record<string, unknown>, stage: string): ExportSection[] {
-  const sections: ExportSection[] = approvedReportSectionsFromDomain(domain);
+  const contentCollections = exportContentCollectionsFromDomain(domain);
+  const sections: ExportSection[] = approvedContentSectionsFromDomain(domain, contentCollections);
   for (const key of Object.keys(domain).sort()) {
-    if (key.startsWith(stage + '.') || isReportSectionLifecyclePath(key) || isRawSourceOrCorpusPath(key)) {
+    if (key.startsWith(stage + '.') || isNonContentExportPath(key, contentCollections)) {
       continue;
     }
     const value = domain[key];
-    const section = sectionForDomainValue(key, value);
+    const section = sectionForDomainValue(key, value, contentCollections);
     if (section) {
       sections.push(section);
     }
@@ -2299,8 +2300,8 @@ function sectionsFromDomain(domain: Record<string, unknown>, stage: string): Exp
     : [{ title: humanizePath(${tsString(stage)}), body: 'No accumulated domain state was available for export.' }];
 }
 
-function sectionForDomainValue(path: string, value: unknown): ExportSection | undefined {
-  if (isReportSectionLifecyclePath(path) || isRawSourceOrCorpusPath(path)) {
+function sectionForDomainValue(path: string, value: unknown, contentCollections: readonly string[]): ExportSection | undefined {
+  if (isNonContentExportPath(path, contentCollections)) {
     return undefined;
   }
   if (isStageOutput(value)) {
@@ -2326,33 +2327,53 @@ function sectionForDomainValue(path: string, value: unknown): ExportSection | un
   return undefined;
 }
 
-function approvedReportSectionsFromDomain(domain: Record<string, unknown>): ExportSection[] {
+function approvedContentSectionsFromDomain(domain: Record<string, unknown>, contentCollections: readonly string[]): ExportSection[] {
   const sections: ExportSection[] = [];
-  for (const [index, item] of reportSectionRecordsFromDomain(domain)) {
-    const status = stringField(item, 'status')?.toLowerCase();
-    if (status && status !== 'accepted' && status !== 'approved') {
-      continue;
+  for (const collectionPath of contentCollections) {
+    for (const [index, item] of contentRecordsFromDomain(domain, collectionPath)) {
+      const status = stringField(item, 'status')?.toLowerCase();
+      if (status && status !== 'accepted' && status !== 'approved') {
+        continue;
+      }
+      const body = exportBodyField(item);
+      if (!body || body.trim().length === 0) {
+        continue;
+      }
+      sections.push({
+        title: stringField(item, 'title') ?? stringField(item, 'section_kind') ?? humanizePath(collectionPath) + ' ' + String(index + 1),
+        body,
+      });
     }
-    const body = stringField(item, 'final_text')
-      ?? stringField(item, 'approved_text')
-      ?? stringField(item, 'proposed_text')
-      ?? stringField(item, 'body')
-      ?? stringField(item, 'text')
-      ?? stringField(item, 'summary');
-    if (!body || body.trim().length === 0) {
-      continue;
-    }
-    sections.push({
-      title: stringField(item, 'title') ?? stringField(item, 'section_kind') ?? 'Report Section ' + String(index + 1),
-      body,
-    });
   }
   return sections;
 }
 
-function reportSectionRecordsFromDomain(domain: Record<string, unknown>): Array<[number, Record<string, unknown>]> {
+function exportContentCollectionsFromDomain(domain: Record<string, unknown>): string[] {
+  const candidates = new Set<string>();
+  for (const key of Object.keys(domain).sort()) {
+    if (key.endsWith('.items') && Array.isArray(domain[key])) {
+      candidates.add(key.slice(0, -'.items'.length));
+      continue;
+    }
+    const marker = '.items.';
+    const markerIndex = key.indexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+    const collectionPath = key.slice(0, markerIndex);
+    const indexText = key.slice(markerIndex + marker.length).split('.', 1)[0];
+    if (collectionPath.length > 0 && isNonNegativeIntegerText(indexText)) {
+      candidates.add(collectionPath);
+    }
+  }
+  return [...candidates]
+    .filter((collectionPath) => contentRecordsFromDomain(domain, collectionPath).length > 0)
+    .sort();
+}
+
+function contentRecordsFromDomain(domain: Record<string, unknown>, collectionPath: string): Array<[number, Record<string, unknown>]> {
   const byIndex = new Map<number, Record<string, unknown>>();
-  const directItems = domain['work.report_sections.items'];
+  const directItems = domain[collectionPath + '.items'];
   if (Array.isArray(directItems)) {
     directItems.forEach((item, index) => {
       if (isRecordValue(item)) {
@@ -2361,19 +2382,25 @@ function reportSectionRecordsFromDomain(domain: Record<string, unknown>): Array<
     });
   }
   for (const key of Object.keys(domain).sort()) {
-    const match = key.match(/^work\\.report_sections\\.items\\.(\\d+)(?:\\.(.+))?$/u);
-    if (!match) {
+    const itemPathPrefix = collectionPath + '.items.';
+    if (!key.startsWith(itemPathPrefix)) {
       continue;
     }
-    const index = Number(match[1]);
+    const remainder = key.slice(itemPathPrefix.length);
+    const parts = remainder.split('.');
+    const indexText = parts[0];
+    if (!isNonNegativeIntegerText(indexText)) {
+      continue;
+    }
+    const index = Number(indexText);
     const existing = byIndex.get(index) ?? {};
-    const field = match[2];
+    const field = parts.slice(1).join('.');
     const value = domain[key];
-    if (!field && isRecordValue(value)) {
+    if (field.length === 0 && isRecordValue(value)) {
       byIndex.set(index, { ...existing, ...value });
       continue;
     }
-    if (field) {
+    if (field.length > 0) {
       existing[field] = value;
       byIndex.set(index, existing);
     }
@@ -2381,13 +2408,27 @@ function reportSectionRecordsFromDomain(domain: Record<string, unknown>): Array<
   return [...byIndex.entries()].sort(([left], [right]) => left - right);
 }
 
+function exportBodyField(record: Record<string, unknown>): string | undefined {
+  return stringField(record, 'final_text')
+    ?? stringField(record, 'approved_text')
+    ?? stringField(record, 'proposed_text')
+    ?? stringField(record, 'draft_text')
+    ?? stringField(record, 'body')
+    ?? stringField(record, 'text')
+    ?? stringField(record, 'summary');
+}
+
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === 'string' ? value : undefined;
 }
 
-function isReportSectionLifecyclePath(path: string): boolean {
-  return path === 'work.report_sections' || path.startsWith('work.report_sections.');
+function isNonNegativeIntegerText(value: string | undefined): boolean {
+  return typeof value === 'string' && /^\\d+$/u.test(value);
+}
+
+function isNonContentExportPath(path: string, contentCollections: readonly string[]): boolean {
+  return isRawSourceOrCorpusPath(path) || isConfirmationLoopInternalStatePath(path, contentCollections);
 }
 
 function isRawSourceOrCorpusPath(path: string): boolean {
@@ -2402,6 +2443,48 @@ function isRawSourceOrCorpusPath(path: string): boolean {
     || normalized.endsWith('.current_document.text')
     || normalized.includes('.current_document.text.')
     || normalized.includes('.fan_out.results');
+}
+
+function isConfirmationLoopInternalStatePath(path: string, contentCollections: readonly string[]): boolean {
+  const normalized = path.toLowerCase();
+  if (normalized === 'inputs.user_decision' || normalized.startsWith('inputs.user_decision.')) {
+    return true;
+  }
+  if (
+    normalized === 'summary.confirmation_loop'
+    || normalized.startsWith('summary.confirmation_loop.')
+    || normalized.includes('pending_approval')
+    || normalized.includes('pending-approval')
+    || normalized.startsWith('decisions.pending_')
+    || normalized.includes('.decisions.pending_')
+  ) {
+    return true;
+  }
+  for (const collectionPath of contentCollections) {
+    if (
+      path === collectionPath
+      || path === collectionPath + '.items'
+      || path.startsWith(collectionPath + '.items.')
+    ) {
+      return true;
+    }
+    if (!path.startsWith(collectionPath + '.')) {
+      continue;
+    }
+    const relative = path.slice(collectionPath.length + 1).toLowerCase();
+    if (
+      relative === 'all_terminal'
+      || relative === 'current_index'
+      || relative.startsWith('confirmation_summary')
+      || relative.startsWith('confirmation_loop')
+      || relative.startsWith('pending_')
+      || relative.includes('.pending_')
+      || relative.endsWith('_violation_json')
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isStageOutput(value: unknown): value is { result_json: string; items_json?: string; digest?: string } {
