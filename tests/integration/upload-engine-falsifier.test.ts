@@ -67,7 +67,7 @@ describe('upload route-level engine falsifier', () => {
 
     await recordFalsifier('F-5', failures, async () => {
       const evidence = await runUndeclaredChannelScenario();
-      // Installed 3.21.0 maps this spec-channel validation failure to ClientInputError/422.
+      // The installed engine maps this spec-channel validation failure to ClientInputError/422.
       // The design expected 400; the rejection reason and message are the route-level proof.
       expect(evidence.status).toBe(422);
       expect(evidence.reason).toBe('channel_not_declared');
