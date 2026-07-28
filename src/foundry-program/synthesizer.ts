@@ -303,7 +303,10 @@ export function synthesizeProgramSpecFromDomain(
   );
   const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
   const documents = normalizeDocumentsDescriptor(rawDocuments);
-  const delegation = normalizeDocumentSliceDelegation(rawDelegation, documents);
+  const delegation = normalizeDelegationInputEnrichmentTargets(
+    normalizeDocumentSliceDelegation(rawDelegation, documents),
+    documents,
+  );
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
@@ -1779,6 +1782,85 @@ function isDocumentSlicePayloadTarget(target: string): boolean {
     target === 'request.document_text' ||
     target === 'document_intake.work_product' ||
     target === 'document_intake.text';
+}
+
+function normalizeDelegationInputEnrichmentTargets(
+  delegation: DelegationDescriptor,
+  documents: DocumentsDescriptor | undefined,
+): DelegationDescriptor {
+  if (!Array.isArray(delegation.children) || delegation.children.length === 0) {
+    return delegation;
+  }
+  const preferredTargets = preferredDelegationPayloadTargets(delegation.children, documents);
+  const targetSources = new Map<string, string>();
+  let mutated = false;
+  const children = delegation.children.map((child) => {
+    const payloadMap: Record<string, string> = {};
+    let childMutated = false;
+    for (const [target, source] of Object.entries(child.payload_map)) {
+      const preferredSource = preferredTargets.get(target);
+      let nextTarget = target;
+      if (preferredSource !== undefined && source !== preferredSource) {
+        nextTarget = delegationContextTargetForSource(source, targetSources);
+      } else {
+        const existingSource = targetSources.get(target);
+        if (existingSource !== undefined && existingSource !== source) {
+          nextTarget = delegationContextTargetForSource(source, targetSources);
+        }
+      }
+      payloadMap[nextTarget] = source;
+      targetSources.set(nextTarget, source);
+      if (nextTarget !== target) {
+        childMutated = true;
+      }
+    }
+    if (!childMutated) {
+      return child;
+    }
+    mutated = true;
+    return { ...child, payload_map: payloadMap };
+  });
+  return mutated ? { ...delegation, children } : delegation;
+}
+
+function preferredDelegationPayloadTargets(
+  children: DelegationChildDescriptor[],
+  documents: DocumentsDescriptor | undefined,
+): Map<string, string> {
+  const preferred = new Map<string, string>();
+  if (!documents) {
+    return preferred;
+  }
+  const documentTextPath = documentsCurrentDocumentTextPath(documents);
+  for (const child of children) {
+    for (const [target, source] of Object.entries(child.payload_map)) {
+      if (source === documentTextPath && isDocumentSlicePayloadTarget(target)) {
+        preferred.set(target, source);
+      }
+    }
+  }
+  return preferred;
+}
+
+function delegationContextTargetForSource(source: string, targetSources: ReadonlyMap<string, string>): string {
+  const sourceBase = source.replace(/\.(result_json|items_json)$/u, '');
+  const slug = sourceBase
+    .replace(/[^A-Za-z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+    .toLowerCase() || 'context';
+  let candidate = `domain_context.${slug}`;
+  if (targetSources.get(candidate) === source) {
+    return candidate;
+  }
+  let suffix = 2;
+  while (targetSources.has(candidate)) {
+    candidate = `domain_context.${slug}_${String(suffix)}`;
+    if (targetSources.get(candidate) === source) {
+      return candidate;
+    }
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function applyDocumentSliceTransitionActions(
@@ -4021,7 +4103,7 @@ function advanceDocumentDelegationFanOut(
     mutations.push({ op: 'MSet' as const, path: config.completePath, value: true });
   } else {
     mutations.push(
-      ...documentSliceMutations(config.currentDocumentPath, nextDocument),
+      ...(documentSliceMutations(config.currentDocumentPath, nextDocument) ?? []),
       { op: 'MSet' as const, path: config.completePath, value: false },
     );
   }
@@ -6020,6 +6102,10 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
   schema['inputs.domain_context.target_program'] = 'string';
   schema['inputs.domain_context.delegation_chain'] = 'array';
   schema['inputs.domain_context.original_request'] = 'string';
+  const delegatedInputPaths = delegatedChildInputPaths(child);
+  for (const inputPath of delegatedInputPaths) {
+    declareDelegatedInputPath(schema, inputPath);
+  }
 
   const projection = recordField(spec, 'projection');
   for (const modeName of ['receive', middleStage, 'complete']) {
@@ -6036,6 +6122,7 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
       'inputs.domain_context',
       'inputs.domain_context.source_program',
       'inputs.domain_context.original_request',
+      ...delegatedInputPaths,
     ]);
   }
 
@@ -6058,6 +6145,23 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
   const rendered = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(rendered);
   return rendered;
+}
+
+function delegatedChildInputPaths(child: DelegationChildDescriptor): string[] {
+  return unique(Object.keys(child.payload_map).map((target) => `inputs.${target}`));
+}
+
+function declareDelegatedInputPath(schema: MutableRecord, inputPath: string): void {
+  const segments = inputPath.split('.');
+  for (let index = 1; index < segments.length; index += 1) {
+    const path = segments.slice(0, index).join('.');
+    if (schema[path] === undefined) {
+      schema[path] = 'object';
+    }
+  }
+  if (schema[inputPath] === undefined || schema[inputPath] === 'object') {
+    schema[inputPath] = 'string';
+  }
 }
 
 function reasoningFieldTypeFor(value: string): ReasoningStageContract['result_schema']['fields'][number]['type'] {

@@ -107,6 +107,8 @@ describe('dynamic document delegation fan-out synthesis', () => {
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.text', target: 'request.topic' }");
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.id', target: 'request.document_id' }");
     expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.name', target: 'request.document_name' }");
+    expect(artifact.handlers_ts).toContain('...(documentSliceMutations(config.currentDocumentPath, nextDocument) ?? [])');
+    expect(artifact.handlers_ts).not.toContain('...documentSliceMutations(config.currentDocumentPath, nextDocument),');
     expect(artifact.smoke_test_ts).toContain('document fan-out review smoke');
     expect(artifact.smoke_test_ts).toContain('five document review delegations');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
