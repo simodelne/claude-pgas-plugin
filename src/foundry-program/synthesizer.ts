@@ -2380,7 +2380,15 @@ function applyConfirmationLoopProjection(
   for (const loop of loops) {
     const modeProjection = recordField(projection, loop.stage);
     const collectionPaths = confirmationLoopCollectionProjectionPaths(loop, lifecycle);
-    modeProjection.include = confirmationLoopApproveProjectionPaths(loop);
+    const existingInclude = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+    modeProjection.include = unique([
+      ...existingInclude.filter((path) =>
+        !path.endsWith('.items_json') &&
+        path !== loop.collection &&
+        !path.startsWith(`${loop.collection}.`)),
+      ...confirmationLoopApproveProjectionPaths(loop),
+      ...confirmationLoopActiveItemProjectionPaths(loop, lifecycle),
+    ]);
     if (!Array.isArray(modeProjection.exclude)) {
       modeProjection.exclude = [];
     }
@@ -2424,6 +2432,17 @@ function confirmationLoopApproveProjectionPaths(loop: ConfirmationLoopDescriptor
   ]);
 }
 
+function confirmationLoopActiveItemProjectionPaths(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
+  const activeItemPath = `${confirmationLoopSummaryPath(loop)}.active_item`;
+  return unique([
+    activeItemPath,
+    ...confirmationLoopActiveItemFields(loop, lifecycle).map((field) => `${activeItemPath}.${field}`),
+  ]);
+}
+
 function confirmationLoopCollectionProjectionPaths(
   loop: ConfirmationLoopDescriptor,
   lifecycle: CollectionLifecycleDescriptor,
@@ -2464,7 +2483,7 @@ function applyConfirmationLoopPrompts(
     const completionInstruction = completionActionNames.length > 0
       ? ` When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
       : ` When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
-    prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
+    prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
   }
 }
 
@@ -2490,6 +2509,7 @@ function applyConfirmationLoopGuidance(
       ...existing,
       terminalActionInstruction(terminalActions),
       `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${proposeAction}.`,
+      'Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content.',
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
       ...(completionActionNames.length > 0
