@@ -1,21 +1,18 @@
 import { isRecord } from '../util/guards.js';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { loadSpecWithPatterns, reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
+import { reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
-import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
-  type StageArchetype,
 } from './stage-classifier.js';
 import {
   REASONING_CONTRACT_VERSION,
@@ -23,216 +20,68 @@ import {
   runtimeTypeNameFor,
   type ReasoningStageContract,
 } from './reasoning-contract.js';
+import type {
+  CollectionLifecycleDescriptor,
+  CollectionStorageRepresentation,
+  Completion,
+  ConfirmationLoopDecisionDescriptor,
+  ConfirmationLoopDescriptor,
+  DelegationChildrenValidationContext,
+  DocumentsValidationContext,
+  IntakeTransition,
+  Interaction,
+  MutableRecord,
+  PlannedTransitionAction,
+  Stage,
+  StageArtifactDescriptor,
+  StageArtifactDescriptorInput,
+  StageDomainSpec,
+  StageInput,
+  SynthesizeProgramSpecOptions,
+  SynthesizedChildArtifact,
+  SynthesizedSpec,
+  TerminalActionDescriptor,
+  TransitionAction,
+} from './synthesizer/types.js';
+import {
+  channelsForBootstrap,
+  cloneRecord,
+  guardFieldForTransition,
+  guardFromField,
+  initialInputPath,
+  normalizeGuardField,
+  normalizePgasChannelId,
+  recordField,
+  recordOrEmpty,
+  safeIdentifier,
+  toPascalCase,
+  tsString,
+  unique,
+} from './synthesizer/shared.js';
+import {
+  actionMapEntryFor,
+  actionsBySourceMode,
+  decorateTransitionActions,
+  exportRenderHookActionName,
+  exportRenderPendingPath,
+  exportRenderPendingReactionName,
+  exportTransitionActions,
+  guardFieldsBySourceMode,
+  isExportTransitionAction,
+  outputProjectionFields,
+  planTransitionActions,
+} from './synthesizer/topology.js';
+import { renderRegistrationSource } from './synthesizer/registration-artifacts.js';
+import { validateSynthesizedSpec } from './synthesizer/validation.js';
+export type {
+  DelegationChildrenValidationContext,
+  DocumentsValidationContext,
+  SynthesizeProgramSpecOptions,
+  SynthesizedChildArtifact,
+  SynthesizedSpec,
+} from './synthesizer/types.js';
+export { assertPreconditionVocabularyAlignment } from './synthesizer/validation.js';
 
-type CollectionStorageRepresentation = 'json_string' | 'indexed_array';
-
-interface Stage {
-  slug: string;
-  is_bootstrap?: boolean;
-  is_terminal?: boolean;
-  kind?: string;
-  export_kind?: string;
-  domain_spec?: StageDomainSpec;
-  emit_artifact?: StageArtifactDescriptorInput | StageArtifactDescriptorInput[];
-}
-
-type StageInput = Stage | string;
-
-interface StageDomainSpec {
-  reads: string[];
-  produces: Record<string, unknown>;
-  rules: string[];
-  invariants: string[];
-}
-
-interface StageArtifactDescriptorInput {
-  type?: unknown;
-  title?: unknown;
-  summary?: unknown;
-  payload_ref?: unknown;
-}
-
-interface StageArtifactDescriptor {
-  stage: string;
-  artifactType: string;
-  title: string;
-  summary: string;
-  payloadRef: string;
-}
-
-interface IntakeTransition {
-  from: string;
-  to: string;
-  trigger?: string;
-  guard?: Record<string, unknown>;
-  guard_field?: string;
-}
-
-interface Completion {
-  final_stage: string;
-  guard_field: string;
-  collection_lifecycle?: CollectionLifecycleDescriptor;
-}
-
-interface Interaction {
-  confirmation_loops: ConfirmationLoopDescriptor[];
-}
-
-export interface DelegationChildrenValidationContext {
-  programSlug: string;
-  programName: string;
-  stages: Array<{
-    slug: string;
-    is_bootstrap?: boolean;
-    is_terminal?: boolean;
-    domain_spec?: StageDomainSpec;
-  }>;
-  actionNames: Iterable<string>;
-  channelNames: Iterable<string>;
-  schemaPaths: Iterable<string>;
-  documents?: DocumentsDescriptor;
-}
-
-export interface DocumentsValidationContext {
-  stages: Array<{
-    slug: string;
-    is_bootstrap?: boolean;
-    is_terminal?: boolean;
-  }>;
-  delegation?: Record<string, unknown>;
-}
-
-interface CollectionLifecycleDescriptor {
-  version: number;
-  name: string;
-  item_label: string;
-  storage: {
-    items_path: string;
-    event_path: string;
-    violation_path: string;
-    representation: CollectionStorageRepresentation;
-  };
-  item: {
-    id_field: string;
-    status_field: string;
-    schema: Record<string, unknown>;
-  };
-  statuses: Array<{
-    name: string;
-    initial?: boolean;
-    terminal?: boolean;
-  }>;
-  transitions: Array<{
-    from: string;
-    to: string;
-    stage: string;
-    action: string;
-    managed_by: 'llm' | 'reaction';
-    trigger?: string;
-    guard_field?: string;
-  }>;
-  aggregate: {
-    guard_field: string;
-    terminal_statuses: string[];
-    require_non_empty: boolean;
-  };
-}
-
-interface ConfirmationLoopDecisionDescriptor {
-  to: string;
-  requires_instruction?: boolean;
-  instruction_path?: string;
-  re_propose?: boolean;
-}
-
-interface ConfirmationLoopSeedDescriptor {
-  source_stage: string;
-  id_prefix?: string;
-}
-
-interface ConfirmationLoopDescriptor {
-  collection: string;
-  proposed_status: string;
-  seed: ConfirmationLoopSeedDescriptor;
-  item_id_field?: string;
-  item_title_field?: string;
-  decisions: Record<string, ConfirmationLoopDecisionDescriptor>;
-  one_proposed_at_a_time: true;
-  aggregate: {
-    guard_field: string;
-    terminal_statuses: string[];
-  };
-  stage: string;
-  summary_path?: string;
-  violation_path?: string;
-  pending_action_path?: string;
-}
-
-export interface SynthesizedSpec {
-  spec_yaml: string;
-  mode_names: string[];
-  sha256: string;
-  registration_ts?: string;
-  contracts_ts: string;
-  handlers_ts: string;
-  handlers_index_ts: string;
-  tools_ts: string;
-  smoke_test_ts: string;
-  stage_sources?: Record<string, string>;
-  capability_gaps?: CapabilityGap[];
-  export_surfaces?: ExportSurfaces;
-  document_extraction_surfaces?: DocumentExtractionSurfaces;
-  export_descriptors?: ExportStageDescriptor[];
-  child_artifacts?: SynthesizedChildArtifact[];
-  stage_classification: ClassifiedStage[];
-  body_stage_slugs: string[];
-  synthesis_context: SynthesisContext;
-}
-
-export interface SynthesizedChildArtifact extends Omit<SynthesizedSpec, 'child_artifacts' | 'synthesis_context'> {
-  slug: string;
-  name: string;
-  synthesis_context: SynthesisContext;
-}
-
-export interface SynthesizeProgramSpecOptions {
-  targetKind?: 'standalone_repo' | 'existing_repo';
-  integrations?: WiringIntegration[];
-  availablePrograms?: WiringAvailableProgram[];
-  reasoningContracts?: Record<string, ReasoningStageContract>;
-}
-
-type MutableRecord = Record<string, unknown>;
-
-interface TransitionAction {
-  name: string;
-  source: string;
-  target: string;
-  guardField?: string;
-  archetype: StageArchetype;
-  adapter_kind?: 'in_memory_mock' | 'repo_integration';
-  export_kind?: 'export_docx' | 'export_html';
-  integration_name?: string;
-  integration_import?: string;
-  integration_method?: string;
-  integration_gap?: boolean;
-  audit_note?: string;
-}
-
-interface TerminalActionDescriptor {
-  name: string;
-  channel: string;
-  payloadExample?: Record<string, string>;
-}
-
-interface PlannedTransitionAction {
-  name: string;
-  source: string;
-  target: string;
-  guardField?: string;
-}
-
-const PGAS_CHANNEL_ID_MAX_LENGTH = 64;
 const COLLECTION_LIFECYCLE_EVENT_CHANNEL = 'lifecycle_event';
 const COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE = '';
 const USER_CONFIRMATION_CHANNEL = 'user_confirmation';
@@ -2947,88 +2796,6 @@ function confirmationLoopSeedForcedEmptyFields(
     .filter((field) => field === 'proposed_text' || field === 'user_instruction' || instructionFields.has(field));
 }
 
-function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
-  const fieldsByMode = new Map<string, string[]>();
-  for (const transition of transitionActions) {
-    const guardField = transition.guardField;
-    if (!guardField) continue;
-    fieldsByMode.set(transition.source, unique([...(fieldsByMode.get(transition.source) ?? []), guardField]));
-  }
-  return fieldsByMode;
-}
-
-function planTransitionActions(
-  transitions: IntakeTransition[],
-  completion: Completion,
-  firstMode: string,
-): PlannedTransitionAction[] {
-  const grouped = new Map<string, IntakeTransition[]>();
-  for (const transition of transitions) {
-    grouped.set(transition.from, [...(grouped.get(transition.from) ?? []), transition]);
-  }
-
-  const usedActionNames = new Set<string>();
-  const planned = new Map<IntakeTransition, PlannedTransitionAction>();
-
-  for (const [source, siblingTransitions] of grouped) {
-    const isBranch = siblingTransitions.length > 1;
-    const usedGuardFields = new Set<string>();
-    const completionGuard = siblingTransitions.some((sibling) => sibling.to === completion.final_stage)
-      ? normalizeGuardField(completion.guard_field)
-      : undefined;
-
-    for (const transition of siblingTransitions) {
-      const baseGuard = guardFieldForTransition(transition, completion);
-      const preservesCompletionGuard = transition.to === completion.final_stage && baseGuard === completionGuard;
-      const guardField = isBranch && (
-        !baseGuard ||
-        usedGuardFields.has(baseGuard) ||
-        (!preservesCompletionGuard && baseGuard === completionGuard)
-      )
-        ? uniqueGuardField(`${source}.${safeIdentifier(transition.to)}_selected`, usedGuardFields)
-        : baseGuard;
-      if (guardField) {
-        usedGuardFields.add(guardField);
-      }
-
-      planned.set(transition, {
-        name: uniqueActionName(actionNameForTransition(transition, firstMode, isBranch), usedActionNames),
-        source,
-        target: transition.to,
-        ...(guardField ? { guardField } : {}),
-      });
-    }
-  }
-
-  return transitions.map((transition) => {
-    const action = planned.get(transition);
-    if (!action) {
-      throw new Error(`missing planned action for transition ${transition.from}->${transition.to}`);
-    }
-    return action;
-  });
-}
-
-function decorateTransitionActions(
-  actions: PlannedTransitionAction[],
-  stageClassificationBySlug: Map<string, ClassifiedStage>,
-): TransitionAction[] {
-  return actions.map((action) => {
-    const classification = stageClassificationBySlug.get(action.source);
-    return {
-      ...action,
-      archetype: classification?.archetype ?? 'pure-compute',
-      ...(classification?.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
-      ...(classification?.export_kind ? { export_kind: classification.export_kind } : {}),
-      ...(classification?.integration_name ? { integration_name: classification.integration_name } : {}),
-      ...(classification?.integration_import ? { integration_import: classification.integration_import } : {}),
-      ...(classification?.integration_method ? { integration_method: classification.integration_method } : {}),
-      ...(classification?.integration_gap ? { integration_gap: true } : {}),
-      ...(classification?.audit_note ? { audit_note: classification.audit_note } : {}),
-    };
-  });
-}
-
 function exportDescriptorsFor(
   stages: Stage[],
   demands: ReadonlyArray<{ capability: string }>,
@@ -3267,176 +3034,6 @@ function matchIntegration(stage: ClassifiedStage, integrations: WiringIntegratio
       .filter(Boolean),
   );
   return integrations.find((integration) => tokens.has(integration.name.toLowerCase()));
-}
-
-function actionsBySourceMode(actions: TransitionAction[]): Map<string, TransitionAction[]> {
-  const actionsBySource = new Map<string, TransitionAction[]>();
-  for (const action of actions) {
-    actionsBySource.set(action.source, [...(actionsBySource.get(action.source) ?? []), action]);
-  }
-  return actionsBySource;
-}
-
-function exportTransitionActions(actions: TransitionAction[]): TransitionAction[] {
-  return actions.filter(isExportTransitionAction);
-}
-
-function isExportTransitionAction(action: TransitionAction): boolean {
-  return action.export_kind === 'export_docx' || action.export_kind === 'export_html';
-}
-
-function exportRenderHookActionName(stage: string): string {
-  return `render_${safeIdentifier(stage)}_export`;
-}
-
-function exportRenderPendingReactionName(stage: string): string {
-  return `mark_${safeIdentifier(stage)}_export_render_pending`;
-}
-
-function exportRenderPendingPath(stage: string): string {
-  return `${stage}.render_pending`;
-}
-
-function outputProjectionFields(
-  modeName: string,
-  stageClassificationBySlug: Map<string, ClassifiedStage>,
-  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
-  flatMirrorStages: ReadonlySet<string>,
-): string[] {
-  const classification = stageClassificationBySlug.get(modeName);
-  if (classification?.archetype !== 'llm-reasoning') {
-    return flatMirrorStages.has(modeName)
-      ? [`${modeName}.output`, `${modeName}.result_json`, `${modeName}.items_json`]
-      : [`${modeName}.output`];
-  }
-  return reasoningContractsBySlug.has(modeName)
-    ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`]
-    : [`${modeName}.result_json`, `${modeName}.items_json`];
-}
-
-function actionMapEntryFor(
-  action: TransitionAction,
-  firstMode: string,
-  domainSpec?: StageDomainSpec,
-  reasoningContract?: ReasoningStageContract,
-): MutableRecord {
-  const isBootstrap = action.source === firstMode;
-  const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
-  const isContractedReasoningStage = contract !== undefined;
-  const isResultPathStage = !isBootstrap && (action.archetype !== 'llm-reasoning' || isContractedReasoningStage);
-  const isDeterministicResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
-  const domainSpecForDescription = domainSpec && isDeterministicResultPathStage
-    ? deterministicActionDomainSpecDescription(domainSpec)
-    : domainSpec;
-  const domainSpecDescription = domainSpecForDescription
-    ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpecForDescription)}`
-    : '';
-  const deterministicResultPathInstruction = isDeterministicResultPathStage
-    ? ' This is a deterministic wrapper: emit this action with an EMPTY payload. Do NOT author result_json, items_json, bytes, or any output fields; the wrapper computes and stores the result deterministically.'
-    : '';
-  const reasoningEnvelopeDescription = isContractedReasoningStage
-    ? ' The generated handler accepts result_json as either a native JSON object or a JSON string, and items_json as either a native JSON array or a JSON string; it canonicalizes both into JSON strings at the stage output path.'
-    : '';
-  const compositeReasoningMutations = !isBootstrap && action.archetype === 'llm-reasoning' && !isContractedReasoningStage
-    ? [
-        { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
-        { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
-      ]
-    : [];
-  const tolerantReasoningCaptureMutations = isContractedReasoningStage
-    ? [
-        { op: 'MSet', path: `${action.source}.raw_result_json`, value: {}, from_arg: 'result_json' },
-        { op: 'MSet', path: `${action.source}.raw_items_json`, value: [], from_arg: 'items_json' },
-      ]
-    : [];
-  const mutations = [
-    ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
-    ...compositeReasoningMutations,
-    ...tolerantReasoningCaptureMutations,
-    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? [] : [
-      ...(contract ? contract.result_schema.fields.map((field) => ({
-        op: 'MSet',
-        path: `${action.source}.raw_result_fields.${field.name}`,
-        from_arg: field.name,
-      })) : []),
-    ]),
-  ];
-
-  return {
-    description: isBootstrap
-      ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
-      : action.archetype === 'llm-reasoning'
-        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${reasoningEnvelopeDescription}`
-        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${deterministicResultPathInstruction}`,
-    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? {} : {
-      arg_descriptions: contract
-        ? {
-            result_json: `Optional tolerant result for the ${action.source} LLM reasoning stage. May be a native JSON object or a JSON string encoding an object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
-            items_json: `Optional tolerant item list produced by the ${action.source} LLM reasoning stage. May be a native JSON array or a JSON string array matching the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
-            ...Object.fromEntries(contract.result_schema.fields.map((field) => [
-              field.name,
-              `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}`,
-            ])),
-          }
-        : {
-            result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
-            items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
-          },
-    }),
-    ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
-    mutations,
-    channel: isResultPathStage ? 'stage_output' : 'widget_output',
-  };
-}
-
-function deterministicActionDomainSpecDescription(
-  domainSpec: StageDomainSpec,
-): Pick<StageDomainSpec, 'reads' | 'rules' | 'invariants'> {
-  return {
-    reads: domainSpec.reads,
-    rules: domainSpec.rules,
-    invariants: domainSpec.invariants,
-  };
-}
-
-function actionNameForTransition(transition: IntakeTransition, firstMode: string, isBranch: boolean): string {
-  if (transition.from === firstMode && !isBranch) {
-    return 'begin_work';
-  }
-  if (isBranch) {
-    return `advance_${safeIdentifier(transition.from)}_to_${safeIdentifier(transition.to)}`;
-  }
-  return `complete_${safeIdentifier(transition.from)}`;
-}
-
-function uniqueActionName(base: string, used: Set<string>): string {
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-
-  let suffix = 2;
-  while (used.has(`${base}_${suffix}`)) {
-    suffix += 1;
-  }
-  const name = `${base}_${suffix}`;
-  used.add(name);
-  return name;
-}
-
-function uniqueGuardField(base: string, used: Set<string>): string {
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-
-  let suffix = 2;
-  while (used.has(`${base}_${suffix}`)) {
-    suffix += 1;
-  }
-  const field = `${base}_${suffix}`;
-  used.add(field);
-  return field;
 }
 
 // Confirmation-loop completion actions are declarative topology actions: the spec
@@ -7527,119 +7124,6 @@ function artifactPolicyForExportDescriptors(
   };
 }
 
-function renderRegistrationSource(
-  pascalName: string,
-  policies: {
-    delegationPolicy?: { allowedTargetPrograms: string[]; inputEnrichment: Array<{ source: string; target: string }> };
-    delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
-    artifactPolicy?: ProgramArtifactPolicy;
-    queryPolicy?: { allowedWorldQueryPrefixes: string[]; mode: 'enforce' };
-  } = {},
-  options: {
-    exportHookChannel?: string;
-  } = {},
-): string {
-  const policyEntries = [
-    policies.delegationPolicy
-      ? `    delegationPolicy: ${renderTsValue(policies.delegationPolicy)},`
-      : '',
-    policies.delegationResultPolicy
-      ? `    delegationResultPolicy: ${renderTsValue(policies.delegationResultPolicy)},`
-      : '',
-    policies.artifactPolicy
-      ? `    artifactPolicy: ${renderTsValue(policies.artifactPolicy)},`
-      : '',
-    policies.queryPolicy
-      ? `    queryPolicy: ${renderTsValue(policies.queryPolicy)},`
-      : '',
-  ].filter(Boolean).join('\n');
-  const handlerImports = options.exportHookChannel
-    ? 'handlers, reactionHandlers, createExportHookAdapter'
-    : 'handlers, reactionHandlers';
-  const exportHookAdapterRegistration = options.exportHookChannel
-    ? `      adapters.outputs.set(${tsString(options.exportHookChannel)}, createExportHookAdapter());\n`
-    : '';
-  const specLoadSnippet = options.exportHookChannel
-    ? `  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
-    : `  const { spec } = loadSpecWithPatterns(specPath);\n`;
-  const decisionOnlyRegistryPromptHelper = options.exportHookChannel
-    ? `
-
-function withDecisionOnlyRegistryPrompts<T extends {
-  modes?: Map<string, { decisionOnly?: boolean }>;
-  prompts?: Map<string, string>;
-}>(spec: T): T {
-  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
-    return spec;
-  }
-  const prompts = new Map(spec.prompts);
-  for (const [modeName, mode] of spec.modes) {
-    if (mode.decisionOnly === true && !prompts.has(modeName)) {
-      prompts.set(modeName, 'Decision-only auto-transition mode.');
-    }
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(spec);
-  delete descriptors.prompts;
-  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
-  Object.defineProperties(clone, descriptors);
-  Object.defineProperty(clone, 'prompts', {
-    value: prompts,
-    enumerable: true,
-    configurable: true,
-  });
-  return clone;
-}
-`
-    : '';
-  return `import {
-  createProgramAdapters,
-  createToolRegistry,
-  loadSpecWithPatterns,
-  type ProgramEntry,
-} from '@simodelne/pgas-server/plugin.js';
-import { ${handlerImports} } from './handlers.js';
-import { register${pascalName}Tools } from './tools.js';
-
-export function create${pascalName}ProgramEntry(): ProgramEntry {
-  const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
-${specLoadSnippet}  const toolRegistry = createToolRegistry();
-  register${pascalName}Tools(toolRegistry);
-
-  return {
-    spec,
-    reactionHandlers,
-${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
-      const adapters = createProgramAdapters(spec, ctx, handlers);
-      if (spec.tools) {
-        for (const [name, decl] of spec.tools) {
-          if (toolRegistry.has(name)) {
-            adapters.outputs.set(decl.channelId, toolRegistry.createAdapter(name));
-          }
-        }
-      }
-${exportHookAdapterRegistration}      return adapters;
-    },
-  };
-}
-${decisionOnlyRegistryPromptHelper}
-`;
-}
-
-function renderTsValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(renderTsValue).join(', ')}]`;
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .map(([key, entryValue]) => `${key}: ${renderTsValue(entryValue)}`);
-    return `{ ${entries.join(', ')} }`;
-  }
-  if (typeof value === 'string') {
-    return tsString(value);
-  }
-  return JSON.stringify(value);
-}
-
 function renderReuseDelegationSmokeTestSource(
   slug: string,
   name: string,
@@ -8604,55 +8088,6 @@ function reachesFinalStage(
   }
   seen.add(mode);
   return (bySource.get(mode) ?? []).some((action) => reachesFinalStage(action.target, finalStage, bySource, new Set(seen)));
-}
-
-function safeIdentifier(value: string): string {
-  const normalized = value.trim().replace(/[^a-zA-Z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
-  return normalized.length > 0 ? normalized : 'stage';
-}
-
-function normalizePgasChannelId(value: string): string {
-  const lowered = value.trim().toLowerCase();
-  if (/\bfrontend_intake\b/u.test(lowered) || /\bfrontend\b[\s\S]*\bstructured\s+intake\b/u.test(lowered)) {
-    return 'frontend_intake';
-  }
-  if (/\buser_text\b/u.test(lowered)) {
-    return 'user_text';
-  }
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/gu, '_')
-    .replace(/_+/gu, '_')
-    .replace(/^_+|_+$/gu, '');
-  const bounded = slug
-    .slice(0, PGAS_CHANNEL_ID_MAX_LENGTH)
-    .replace(/^_+|_+$/gu, '');
-  return bounded.length > 0 ? bounded : 'user_text';
-}
-
-function tsString(value: string): string {
-  return `'${value.replace(/\\/gu, '\\\\').replace(/'/gu, "\\'")}'`;
-}
-
-function guardFieldForTransition(transition: IntakeTransition, completion: Completion): string | undefined {
-  const transitionGuard = normalizeGuardField(transition.guard_field);
-  if (transition.to === completion.final_stage) {
-    return transitionGuard ?? normalizeGuardField(completion.guard_field);
-  }
-  return transitionGuard;
-}
-
-function guardFromField(field: string | undefined): Record<string, unknown> | undefined {
-  const normalized = normalizeGuardField(field);
-  if (!normalized) return undefined;
-  return { kind: 'FieldTruthy', path: normalized };
-}
-
-function normalizeGuardField(field: string | undefined): string | undefined {
-  if (typeof field !== 'string') return undefined;
-  const trimmed = field.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function createCollectionLifecycleAllTerminalReaction(value: unknown): ReactionHandler {
@@ -9764,71 +9199,6 @@ function uniqueTerminalActionDescriptors(actions: TerminalActionDescriptor[]): T
   return result;
 }
 
-function channelsForBootstrap(entryChannel: string): string[] {
-  return unique([entryChannel, 'system_mode_entry', 'widget_output']);
-}
-
-function initialInputPath(entryChannel: string): string {
-  return `inputs.initial_${safeIdentifier(entryChannel)}`;
-}
-
-function validateSynthesizedSpec(specYaml: string): void {
-  const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-'));
-  try {
-    const specPath = join(dir, 'specs.yml');
-    writeFileSync(specPath, specYaml);
-    loadSpecWithPatterns(specPath);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-  const parsed = load(specYaml);
-  assertPreconditionVocabularyAlignment(parsed);
-  assertConfirmationPairingTerminals(parsed);
-}
-
-/**
- * Locks the precondition-vocabulary invariant on every synthesized spec: each
- * mode's `preconditions` keys must be a subset of that mode's `vocabulary`.
- * A precondition keyed on an action the mode cannot emit is dead — the engine
- * warns on dead preconditions today and will reject them as ERRORS in a
- * future release (pgas#620). Synthesized specs currently emit no
- * `preconditions` at all, so this holds by construction; the assertion exists
- * to fail synthesis loudly if a future generator change regresses that.
- */
-export function assertPreconditionVocabularyAlignment(spec: unknown): void {
-  if (!isRecord(spec)) {
-    throw new Error('precondition vocabulary alignment requires a parsed spec object');
-  }
-  const modes = spec.modes;
-  if (!isRecord(modes)) {
-    throw new Error('precondition vocabulary alignment requires spec.modes to be a mapping');
-  }
-  for (const [modeName, mode] of Object.entries(modes)) {
-    if (!isRecord(mode)) {
-      throw new Error(`synthesized mode "${modeName}" must be a mapping`);
-    }
-    const vocabulary = new Set(
-      Array.isArray(mode.vocabulary)
-        ? (mode.vocabulary as unknown[]).filter((entry): entry is string => typeof entry === 'string')
-        : [],
-    );
-    const preconditions = mode.preconditions;
-    if (preconditions === undefined || preconditions === null) {
-      continue;
-    }
-    if (!isRecord(preconditions)) {
-      throw new Error(`synthesized mode "${modeName}" preconditions must be a mapping of action name to predicates`);
-    }
-    for (const actionName of Object.keys(preconditions)) {
-      if (!vocabulary.has(actionName)) {
-        throw new Error(
-          `synthesized mode "${modeName}" declares a precondition for action "${actionName}" that is not in the mode's vocabulary — dead preconditions become engine errors (pgas#620)`,
-        );
-      }
-    }
-  }
-}
-
 function assertStages(stages: Stage[]): void {
   if (!Array.isArray(stages)) {
     throw new Error('intake.stages_json must decode to an array');
@@ -10884,37 +10254,4 @@ function domainValue(domain: Record<string, unknown>, path: string): unknown {
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
-}
-
-function recordField(parent: MutableRecord, key: string): MutableRecord {
-  const value = parent[key];
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`expected object field: ${key}`);
-  }
-  return value as MutableRecord;
-}
-
-function recordOrEmpty(value: unknown): MutableRecord {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as MutableRecord
-    : {};
-}
-
-function cloneRecord(value: unknown): MutableRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('expected object to clone');
-  }
-  return JSON.parse(JSON.stringify(value)) as MutableRecord;
-}
-
-function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
-}
-
-function toPascalCase(value: string): string {
-  return value
-    .split(/[^a-zA-Z0-9]+/u)
-    .filter(Boolean)
-    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
-    .join('');
 }
