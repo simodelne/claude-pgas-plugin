@@ -30,6 +30,25 @@ describe('foundry capability registry (#166 PR-1)', () => {
     }
   });
 
+  it('formats long live-proof capability evidence as documented multiline sections', () => {
+    for (const capability of [
+      'per_item_confirmation',
+      'delegation_child_session',
+      'delegation_research_agent',
+      'export_docx_plain',
+    ]) {
+      const entry = capabilityEntry(capability);
+      expect(entry, capability).toBeDefined();
+      const evidence = entry!.evidence;
+
+      expect(evidence, capability).toContain('\n');
+      expect(evidence, capability).toMatch(/^Summary: /u);
+      expect(evidence, capability).toMatch(/\nProofs: /u);
+      expect(evidence, capability).toMatch(/\nLimitations: /u);
+      expect(evidence, capability).toMatch(/\nLast verified: /u);
+    }
+  });
+
   it('classifies the load-bearing Contract-Revision capabilities by current synthesis status', () => {
     expect(capabilityStatus('linear_stage_chain')).toBe('synthesizes');
     expect(capabilityStatus('collection_lifecycle_aggregate')).toBe('synthesizes');

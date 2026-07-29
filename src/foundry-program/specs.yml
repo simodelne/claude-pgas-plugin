@@ -891,7 +891,7 @@ action_map:
   run_parallel_static_checks:
     description: |
       OPTIONAL parallel fan-out. Packs independent static checks (import
-      boundary, declared-mode terminal reachability, evidence shape) into ONE
+      boundary, declared terminal-mode presence, evidence shape) into ONE
       action whose children run CONCURRENTLY and aggregate into a single
       combined envelope at graduation.composite_checks. The single-call
       npm_typecheck / npm_test / run_static_verification actions remain the

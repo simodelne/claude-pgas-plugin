@@ -123,7 +123,7 @@ export function createStandaloneArtifactPlan(
       artifact('repl', 'src/repl/index.ts', 'Stream-rendering REPL client using SSE triggers and WebSocket lifecycle events.', 'branch_write', [
         'control-plane-test',
       ]),
-      artifact('repl', 'src/repl/renderer.ts', 'Maps PGAS session events to @clack/prompts output — renderAction, renderWidget, renderModeChange, renderError.', 'branch_write', [
+      artifact('repl', 'src/repl/renderer.ts', 'Maps PGAS session events to terminal output helpers — renderAction, renderWidget, renderModeChange, renderError.', 'branch_write', [
         'control-plane-test',
       ]),
       artifact('spec', `src/programs/${slug}/specs.yml`, 'Declare PGAS modes, governance, notebook, and control_plane.', 'branch_write', [

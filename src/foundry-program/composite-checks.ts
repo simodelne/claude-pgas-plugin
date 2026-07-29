@@ -78,18 +78,18 @@ export function createStaticCheckChildren(): CompositeEffectChild[] {
       },
     },
     {
-      id: 'spec_modes',
-      name: 'declared-mode terminal-reachability',
+      id: 'terminal_mode_presence',
+      name: 'declared terminal-mode presence',
       run: async (ctx) => {
         const modes = toStringArray(packedArgs(ctx).modes);
         if (modes.length === 0) {
-          throw new Error('spec_modes: no modes declared in packed payload');
+          throw new Error('terminal_mode_presence: no modes declared in packed payload');
         }
         const hasTerminal = modes.includes('complete') || modes.includes('blocked');
         if (!hasTerminal) {
-          throw new Error('spec_modes: no terminal mode (complete|blocked) declared');
+          throw new Error('terminal_mode_presence: no terminal mode (complete|blocked) declared');
         }
-        return { check: 'spec_modes', count: modes.length, terminal: true };
+        return { check: 'terminal_mode_presence', count: modes.length, terminalModePresent: true };
       },
     },
     {

@@ -86,11 +86,13 @@ describe('run_parallel_static_checks (foundry opt-in handler path)', () => {
     expect(envelope.children.map((c) => c.id).sort()).toEqual([
       'evidence_shape',
       'import_boundary',
-      'spec_modes',
+      'terminal_mode_presence',
     ]);
     expect(envelope.children.every((c) => c.status === 'succeeded')).toBe(true);
     const importChild = envelope.children.find((c) => c.id === 'import_boundary');
     expect(importChild?.output).toMatchObject({ scanned: 2, violations: 0 });
+    const terminalChild = envelope.children.find((c) => c.id === 'terminal_mode_presence');
+    expect(terminalChild?.output).toMatchObject({ check: 'terminal_mode_presence', terminalModePresent: true });
   });
 
   it('aggregates to "partial" when one packed check fails, leaving the others succeeded', async () => {
@@ -106,7 +108,7 @@ describe('run_parallel_static_checks (foundry opt-in handler path)', () => {
     expect(importChild?.status).toBe('failed');
     expect(importChild?.error?.message).toContain('disallowed import');
     // The independent checks still succeed — failure is isolated per child.
-    expect(envelope.children.find((c) => c.id === 'spec_modes')?.status).toBe('succeeded');
+    expect(envelope.children.find((c) => c.id === 'terminal_mode_presence')?.status).toBe('succeeded');
     expect(envelope.children.find((c) => c.id === 'evidence_shape')?.status).toBe('succeeded');
   });
 

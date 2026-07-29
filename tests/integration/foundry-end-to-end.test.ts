@@ -178,7 +178,7 @@ describe('foundry end-to-end acceptance gate', () => {
       expect(envelope?.children?.map((child) => child.id).sort()).toEqual([
         'evidence_shape',
         'import_boundary',
-        'spec_modes',
+        'terminal_mode_presence',
       ]);
       expect(envelope?.children?.every((child) => child.status === 'succeeded')).toBe(true);
     } finally {

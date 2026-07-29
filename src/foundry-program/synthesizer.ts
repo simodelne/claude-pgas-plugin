@@ -573,7 +573,6 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
-  applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyScaleSafeProjectionPolicy(projection);
   removeExportDecisionOnlyStageEntries(projection, exportActions);
   spec.projection = projection;
