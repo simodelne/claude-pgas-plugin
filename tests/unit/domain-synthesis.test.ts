@@ -1261,6 +1261,58 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     });
   });
 
+  it.each([
+    ['globalThis.fetch alias', 'const network = globalThis.fetch; void network;', /banned capability.*fetch/u],
+    ['fetch identifier alias', 'const network = fetch; void network;', /banned capability.*fetch/u],
+    ['indirect process.env read', "const globalRecord = globalThis as unknown as Record<string, any>; const env = globalRecord['process']['env']; const leaked = env['CRM_BASE_URL']; void leaked;", /banned capability.*process\.env/u],
+  ])('rejects %s before the stage-body VM runs', async (_label, unsafeLine, expected) => {
+    // The rest of the body satisfies the fee-model domain gate. A pass here means
+    // the safety scanner allowed capability access that the VM exposes.
+    await withCache(async (cacheDir) => {
+      await expect(
+        synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
+          cacheDir,
+          maxAttempts: 1,
+          providerUrl: 'http://provider.local/v1',
+          model: 'qwen36-27b',
+          generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  ${unsafeLine}
+  const effortOutput = input.domain['effort_estimation.output'] as Record<string, unknown>;
+  const effort = JSON.parse(String(effortOutput.result_json)) as Record<string, unknown>;
+  const roleHours = JSON.parse(String(effort.role_hours_json)) as Record<string, number>;
+  const phaseHours = JSON.parse(String(effort.phase_hours_json)) as Record<string, Record<string, number>>;
+  const intake = JSON.parse(String(input.domain['inputs.initial_frontend_intake'])) as Record<string, unknown>;
+  const rateCard = intake.rate_card as Record<string, number>;
+  const params = intake.pricing_parameters as Record<string, number | string>;
+  const currency = String(params.currency ?? intake.currency ?? 'USD');
+  const jurisdictionMultiplier = Number(params.jurisdiction_multiplier ?? 1);
+  const riskContingencyPct = Number(params.risk_contingency_pct ?? 0);
+  const discountPct = Number(params.discount_pct ?? 0);
+  const capPremiumPct = Number(params.cap_premium_pct ?? 0);
+  const retainerPct = Number(params.retainer_pct ?? 0);
+  const hoursTotal = Number(effort.hours_total);
+  const hourlyTotal = Object.entries(roleHours).reduce((sum, [role, hours]) => sum + Number(hours) * Number(rateCard[role] ?? 0), 0) * jurisdictionMultiplier;
+  const fixedQuote = hourlyTotal * (1 + riskContingencyPct / 100) * (1 - discountPct / 100);
+  const cappedQuote = fixedQuote * (1 + capPremiumPct / 100);
+  const retainerQuote = fixedQuote * (retainerPct / 100);
+  const blendedRate = hourlyTotal / hoursTotal;
+  const parameters = { rate_card: rateCard, role_hours: roleHours, phase_hours: phaseHours, jurisdiction_multiplier: jurisdictionMultiplier, risk_contingency_pct: riskContingencyPct, discount_pct: discountPct, cap_premium_pct: capPremiumPct, retainer_pct: retainerPct, currency };
+  const result = { stage: input.stage, parameters_json: JSON.stringify(parameters), hourly_total: Math.round(hourlyTotal * 100) / 100, fixed_quote: Math.round(fixedQuote * 100) / 100, capped_quote: Math.round(cappedQuote * 100) / 100, blended_rate: Math.round(blendedRate * 100) / 100, retainer_quote: Math.round(retainerQuote * 100) / 100, currency };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify(['fixed_quote:' + result.fixed_quote, 'capped_quote:' + result.capped_quote]),
+    digest: '',
+  };
+}
+`,
+        }),
+      ).rejects.toThrow(expected);
+    });
+  });
+
   it('rejects pure-compute bodies that still contain stub markers', async () => {
     // Fee-proposal stage so the fallback cannot mask the stub rejection (#93).
     await withCache(async (cacheDir) => {

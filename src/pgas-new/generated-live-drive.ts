@@ -882,7 +882,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         PGAS_OPENAI_BASE_URL: proxy.url,
         PGAS_OPENAI_MODEL: options.model,
         PGAS_MODEL: options.model,
-        PGAS_OPENAI_API_KEY: process.env.PGAS_OPENAI_API_KEY ?? 'local',
+        PGAS_OPENAI_API_KEY: options.env?.PGAS_OPENAI_API_KEY ?? process.env.PGAS_OPENAI_API_KEY ?? 'local',
         PGAS_OPENAI_TOOL_CHOICE: process.env.PGAS_OPENAI_TOOL_CHOICE ?? 'required',
         PGAS_OPENAI_DISABLE_THINKING: process.env.PGAS_OPENAI_DISABLE_THINKING ?? '1',
         PGAS_OPENAI_TEMPERATURE: process.env.PGAS_OPENAI_TEMPERATURE ?? '0.2',
@@ -1025,6 +1025,23 @@ export function renderLiveDriveRunnerSource(
   exportScript?: GeneratedLiveDriveExportScript,
   extractionScript?: GeneratedLiveDriveExtractionScript,
 ): string {
+  const selectedScripts = [
+    confirmationScript,
+    delegationScript,
+    uploadScript,
+    exportScript,
+    extractionScript,
+  ].filter(Boolean).length;
+  if (selectedScripts > 1) {
+    return renderCompositeLiveDriveRunnerSource(
+      slug,
+      Boolean(confirmationScript),
+      delegationScript?.childProgram,
+      Boolean(uploadScript),
+      Boolean(exportScript),
+      Boolean(extractionScript),
+    );
+  }
   if (extractionScript) {
     return renderExtractionLiveDriveRunnerSource(slug);
   }
@@ -1041,6 +1058,1126 @@ export function renderLiveDriveRunnerSource(
     return renderConfirmationLiveDriveRunnerSource(slug);
   }
   return renderEntryOnlyLiveDriveRunnerSource(slug);
+}
+
+function renderCompositeLiveDriveRunnerSource(
+  slug: string,
+  hasConfirmationScript: boolean,
+  childProgram: string | undefined,
+  hasUploadScript: boolean,
+  hasExportScript: boolean,
+  hasExtractionScript: boolean,
+): string {
+  const pascal = toPascalCase(slug);
+  const childPascal = childProgram ? toPascalCase(childProgram) : '';
+  const childImport = childProgram
+    ? `import { create${childPascal}ProgramEntry } from '../src/programs/${childProgram}/registration.js';\n`
+    : '';
+  const extractionImports = hasExtractionScript
+    ? "import { deflateRawSync } from 'node:zlib';\n" +
+      `import { renderStructuredDocxDocument } from '../src/programs/${slug}/export/docx.js';\n`
+    : '';
+  const programs = [
+    `{ name: '${slug}', entry: create${pascal}ProgramEntry() }`,
+    ...(childProgram ? [`{ name: '${childProgram}', entry: create${childPascal}ProgramEntry() }`] : []),
+  ].join(',\n      ');
+  const scriptConstants = [
+    hasConfirmationScript
+      ? "const confirmationScript = parseConfirmationScript(process.env.PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT ?? '');"
+      : 'const confirmationScript: ConfirmationScript | null = null;',
+    childProgram
+      ? "const delegationScript = parseDelegationScript(process.env.PGAS_LIVE_DRIVE_DELEGATION_SCRIPT ?? '');"
+      : 'const delegationScript: DelegationScript | null = null;',
+    hasUploadScript
+      ? "const uploadScript = parseUploadScript(process.env.PGAS_LIVE_DRIVE_UPLOAD_SCRIPT ?? '');"
+      : 'const uploadScript: UploadScript | null = null;',
+    hasExportScript
+      ? "const exportScript = parseExportScript(process.env.PGAS_LIVE_DRIVE_EXPORT_SCRIPT ?? '');"
+      : 'const exportScript: ExportScript | null = null;',
+    hasExtractionScript
+      ? "const extractionScript = parseExtractionScript(process.env.PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT ?? '');"
+      : 'const extractionScript: ExtractionScript | null = null;',
+  ].join('\n');
+
+  return `import { writeFileSync } from 'node:fs';
+${extractionImports}import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${childImport}
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const UPLOADS_DIR = process.env.PGAS_LIVE_DRIVE_UPLOADS_DIR ?? '';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+${scriptConstants}
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+}
+
+interface ConfirmationScript {
+  channel: string;
+  itemsPath: string;
+  statusField: string;
+  proposedStatus: string;
+  fallbackDecision: string;
+  decisions: Array<{ decision: string; instruction?: string }>;
+  decisionTable: Record<string, string>;
+  terminalStatuses: string[];
+}
+
+interface DelegationScript {
+  resultPath: string;
+  settledPath: string;
+  degradedPath: string;
+  stage: string;
+  childProgram: string;
+}
+
+interface UploadScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+  expectedCharCount: number;
+}
+
+interface ExportScript {
+  resultPath: string;
+  stage: string;
+  nonce: string;
+}
+
+interface ExtractionScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+}
+
+interface UploadAttempt {
+  attempted: boolean;
+  uploadAccepted: boolean;
+  uploadedFileId: string | null;
+  fileRef: Record<string, unknown> | null;
+}
+
+interface ExtractionAttempt extends UploadAttempt {
+  expectedCharCount: number;
+  sentinelNotInRawUpload: boolean;
+}
+
+interface StatusHistoryItem {
+  index: number;
+  id?: string;
+  title?: string;
+  status: string | null;
+}
+
+interface StatusHistoryEntry {
+  round: number;
+  items: StatusHistoryItem[];
+  decision?: { index: number; decision: string; instruction?: string };
+}
+
+async function main(): Promise<void> {
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [
+      ${programs},
+    ],
+    devMode: true,
+    ...(UPLOADS_DIR.length > 0 ? { storage: { uploadsDir: UPLOADS_DIR } } : {}),
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    domain_context: { query: INITIAL_TEXT },
+  });
+  const sessionId = created.sessionId;
+
+  const statusHistory: StatusHistoryEntry[] = [];
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let scriptIndex = 0;
+  let upload = noUploadAttempt();
+  let extraction = noExtractionAttempt();
+  let state = await readState(client, sessionId);
+  if (confirmationScript) recordStatusSnapshot(statusHistory, state, confirmationScript);
+
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    if (confirmationScript) {
+      const proposed = findProposedItem(state.world, confirmationScript);
+      if (proposed) {
+        const fallbackDecision = { decision: confirmationScript.fallbackDecision };
+        const decision = scriptIndex < confirmationScript.decisions.length
+          ? confirmationScript.decisions[scriptIndex] as { decision: string; instruction?: string }
+          : fallbackDecision;
+        if (scriptIndex < confirmationScript.decisions.length) scriptIndex += 1;
+        const before = state.roundCount;
+        const payload = buildConfirmationPayload(confirmationScript, proposed, decision);
+        try {
+          await triggerWithDeadline(client, sessionId, { channel: confirmationScript.channel, payload });
+        } catch (error) {
+          if (/terminal/iu.test(String(error))) break;
+          await writeTimeoutReportIfNeeded(error, client, sessionId, state, triggers, drivers, statusHistory, upload, extraction);
+          throw error;
+        }
+        triggers += 1;
+        state = await waitForRound(client, sessionId, before);
+        recordStatusSnapshot(statusHistory, state, confirmationScript, {
+          index: proposed.index,
+          decision: canonicalConfirmationDecision(decision.decision),
+          ...(decision.instruction ? { instruction: decision.instruction } : {}),
+        });
+        continue;
+      }
+    }
+
+    if (uploadScript && !upload.attempted && state.mode === uploadScript.stage) {
+      upload = await uploadFixture(client, sessionId, uploadScript);
+      if (upload.fileRef) {
+        const before = state.roundCount;
+        try {
+          await triggerWithDeadline(client, sessionId, {
+            channel: 'document_upload',
+            payload: { 'inputs.document_intake.file_refs': [upload.fileRef] },
+          });
+        } catch (error) {
+          if (/terminal/iu.test(String(error))) break;
+          await writeTimeoutReportIfNeeded(error, client, sessionId, state, triggers, drivers, statusHistory, upload, extraction);
+          throw error;
+        }
+        triggers += 1;
+        state = await waitForRoundOrUploadLanding(client, sessionId, before, upload.uploadedFileId);
+        if (confirmationScript) recordStatusSnapshot(statusHistory, state, confirmationScript);
+        continue;
+      }
+    }
+
+    if (extractionScript && !extraction.attempted && state.mode === extractionScript.stage) {
+      extraction = await uploadDeflatedDocxFixture(client, sessionId, extractionScript);
+      if (extraction.fileRef) {
+        const before = state.roundCount;
+        try {
+          await triggerWithDeadline(client, sessionId, {
+            channel: 'document_upload',
+            payload: { 'inputs.document_intake.file_refs': [extraction.fileRef] },
+          });
+        } catch (error) {
+          if (/terminal/iu.test(String(error))) break;
+          await writeTimeoutReportIfNeeded(error, client, sessionId, state, triggers, drivers, statusHistory, upload, extraction);
+          throw error;
+        }
+        triggers += 1;
+        state = await waitForRoundOrUploadLanding(client, sessionId, before, extraction.uploadedFileId);
+        if (confirmationScript) recordStatusSnapshot(statusHistory, state, confirmationScript);
+        continue;
+      }
+    }
+
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      await writeTimeoutReportIfNeeded(error, client, sessionId, state, triggers, drivers, statusHistory, upload, extraction);
+      throw error;
+    }
+    triggers += 1;
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+    if (confirmationScript) recordStatusSnapshot(statusHistory, state, confirmationScript);
+  }
+
+  state = await readState(client, sessionId);
+  if (confirmationScript) recordStatusSnapshot(statusHistory, state, confirmationScript);
+  const exportReport = exportScript ? await exportReportFromArtifacts(client, sessionId, exportScript) : null;
+  writeDriveReport({ session_id: sessionId, state, triggers, drivers, statusHistory, upload, extraction, exportReport });
+  process.exit(0);
+}
+
+async function writeTimeoutReportIfNeeded(
+  error: unknown,
+  client: PgasClient,
+  sessionId: string,
+  fallback: DriveState,
+  triggers: number,
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'],
+  statusHistory: StatusHistoryEntry[],
+  upload: UploadAttempt,
+  extraction: ExtractionAttempt,
+): Promise<void> {
+  if (!isTriggerInFlightTimeout(error)) return;
+  const state = await safeReadState(client, sessionId, fallback);
+  const exportReport = exportScript ? await safeExportReportFromArtifacts(client, sessionId, exportScript) : null;
+  writeDriveReport({
+    session_id: sessionId,
+    state,
+    triggers,
+    drivers,
+    statusHistory,
+    upload,
+    extraction,
+    exportReport,
+    timeout_kind: 'trigger_in_flight',
+    error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+  });
+  process.exit(1);
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function waitForRoundOrUploadLanding(
+  client: PgasClient,
+  sessionId: string,
+  before: number,
+  fileId: string | null,
+): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && !refsLanded(latest.world, fileId) && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+  };
+}
+
+function parseConfirmationScript(raw: string): ConfirmationScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT is required for confirmation live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT must be an object');
+  }
+  const decisions = Array.isArray(parsed.decisions)
+    ? parsed.decisions.flatMap((entry) => {
+        if (!isRecord(entry) || typeof entry.decision !== 'string' || entry.decision.length === 0) return [];
+        return [{
+          decision: entry.decision,
+          ...(typeof entry.instruction === 'string' && entry.instruction.length > 0 ? { instruction: entry.instruction } : {}),
+        }];
+      })
+    : [];
+  const decisionTable = isRecord(parsed.decisionTable)
+    ? Object.fromEntries(Object.entries(parsed.decisionTable).flatMap(([decision, status]) =>
+        typeof status === 'string' ? [[decision, status]] : []))
+    : {};
+  const terminalStatuses = Array.isArray(parsed.terminalStatuses)
+    ? parsed.terminalStatuses.filter((status): status is string => typeof status === 'string' && status.length > 0)
+    : [];
+  const script = {
+    channel: stringField(parsed, 'channel'),
+    itemsPath: stringField(parsed, 'itemsPath'),
+    statusField: stringField(parsed, 'statusField'),
+    proposedStatus: stringField(parsed, 'proposedStatus'),
+    fallbackDecision: typeof parsed.fallbackDecision === 'string' && parsed.fallbackDecision.length > 0
+      ? parsed.fallbackDecision
+      : 'approve',
+    decisions,
+    decisionTable,
+    terminalStatuses,
+  };
+  if (!script.channel || !script.itemsPath || !script.statusField || !script.proposedStatus) {
+    throw new Error('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT is missing required channel/itemsPath/statusField/proposedStatus');
+  }
+  return script;
+}
+
+function parseDelegationScript(raw: string): DelegationScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT is required for delegation live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    settledPath: stringField(parsed, 'settledPath'),
+    degradedPath: stringField(parsed, 'degradedPath'),
+    stage: stringField(parsed, 'stage'),
+    childProgram: stringField(parsed, 'childProgram'),
+  };
+  if (!script.resultPath || !script.settledPath || !script.degradedPath || !script.stage || !script.childProgram) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT is missing required resultPath/settledPath/degradedPath/stage/childProgram');
+  }
+  return script;
+}
+
+function parseUploadScript(raw: string): UploadScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT is required for upload live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    sourceReadyPath: stringField(parsed, 'sourceReadyPath'),
+    stage: stringField(parsed, 'stage'),
+    sentinel: stringField(parsed, 'sentinel'),
+    expectedCharCount: numberField(parsed, 'expectedCharCount'),
+  };
+  if (!script.resultPath || !script.sourceReadyPath || !script.stage || !script.sentinel || script.expectedCharCount <= 0) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT is missing required resultPath/sourceReadyPath/stage/sentinel/expectedCharCount');
+  }
+  return script;
+}
+
+function parseExportScript(raw: string): ExportScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT is required for export live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    stage: stringField(parsed, 'stage'),
+    nonce: stringField(parsed, 'nonce'),
+  };
+  if (!script.resultPath || !script.stage || !script.nonce) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT is missing required resultPath/stage/nonce');
+  }
+  return script;
+}
+
+function parseExtractionScript(raw: string): ExtractionScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT is required for extraction live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    sourceReadyPath: stringField(parsed, 'sourceReadyPath'),
+    stage: stringField(parsed, 'stage'),
+    sentinel: stringField(parsed, 'sentinel'),
+  };
+  if (!script.resultPath || !script.sourceReadyPath || !script.stage || !script.sentinel) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT is missing required resultPath/sourceReadyPath/stage/sentinel');
+  }
+  return script;
+}
+
+function recordStatusSnapshot(
+  history: StatusHistoryEntry[],
+  state: DriveState,
+  script: ConfirmationScript,
+  decision?: StatusHistoryEntry['decision'],
+): void {
+  if (!decision && history[history.length - 1]?.round === state.roundCount) {
+    return;
+  }
+  history.push({
+    round: state.roundCount,
+    items: statusItemsFromWorld(state.world, script),
+    ...(decision ? { decision } : {}),
+  });
+}
+
+function findProposedItem(world: Record<string, unknown>, script: ConfirmationScript): StatusHistoryItem | null {
+  return statusItemsFromWorld(world, script).find((item) => item.status === script.proposedStatus) ?? null;
+}
+
+function statusItemsFromWorld(world: Record<string, unknown>, script: ConfirmationScript): StatusHistoryItem[] {
+  const itemsByIndex = new Map<number, StatusHistoryItem>();
+  const arrayValue = world[script.itemsPath];
+  if (Array.isArray(arrayValue)) {
+    arrayValue.forEach((item, index) => {
+      if (!isRecord(item)) return;
+      itemsByIndex.set(index, {
+        index,
+        ...optionalStringValue('id', firstString(item.id, item.item_id)),
+        ...optionalStringValue('title', firstString(item.title, item.name)),
+        status: typeof item[script.statusField] === 'string' ? item[script.statusField] : null,
+      });
+    });
+  }
+  const prefix = script.itemsPath + '.';
+  for (const [path, value] of Object.entries(world)) {
+    if (!path.startsWith(prefix)) continue;
+    const match = path.slice(prefix.length).match(/^(\\d+)\\.([^.]*)$/u);
+    if (!match) continue;
+    const index = Number(match[1]);
+    const field = match[2] as string;
+    const current = itemsByIndex.get(index) ?? { index, status: null };
+    if (field === script.statusField) {
+      current.status = typeof value === 'string' ? value : null;
+    } else if ((field === 'id' || field === 'item_id') && typeof value === 'string') {
+      current.id = value;
+    } else if ((field === 'title' || field === 'name') && typeof value === 'string') {
+      current.title = value;
+    }
+    itemsByIndex.set(index, current);
+  }
+  return [...itemsByIndex.values()].sort((left, right) => left.index - right.index);
+}
+
+function buildConfirmationPayload(
+  script: ConfirmationScript,
+  target: StatusHistoryItem,
+  decision: { decision: string; instruction?: string },
+): Record<string, unknown> {
+  void script;
+  void target;
+  const canonicalDecision = canonicalConfirmationDecision(decision.decision);
+  const instruction = decision.instruction ?? '';
+  return { decision: canonicalDecision, ...(instruction.length > 0 ? { instruction } : {}) };
+}
+
+function canonicalConfirmationDecision(decision: string): string {
+  if (decision === 'revise') return 'request_revision';
+  if (decision === 'skip') return 'reject';
+  return decision;
+}
+
+async function uploadFixture(client: PgasClient, sessionId: string, script: UploadScript): Promise<UploadAttempt> {
+  const fixtureText = buildUploadFixtureText(script.sentinel);
+  const actualBytes = new TextEncoder().encode(fixtureText).length;
+  if (actualBytes !== script.expectedCharCount) {
+    throw new Error('upload fixture byte length mismatch: expected ' + String(script.expectedCharCount) + ' actual ' + String(actualBytes));
+  }
+  const form = new FormData();
+  form.append('files', new Blob([fixtureText], { type: 'text/plain' }), 'pgas-upload-live-drive-' + String(Date.now()) + '.txt');
+  const uploaded = await client.files.upload(sessionId, form);
+  const files = isRecord(uploaded) && Array.isArray(uploaded.files)
+    ? uploaded.files.filter(isRecord)
+    : [];
+  const fileRef = files[0] ?? null;
+  const fileId = fileRef ? stringValue(fileRef.fileId) : null;
+  return {
+    attempted: true,
+    uploadAccepted: fileId !== null,
+    uploadedFileId: fileId,
+    fileRef,
+  };
+}
+
+function buildUploadFixtureText(sentinel: string): string {
+  return [
+    'PGAS upload live-drive fixture.',
+    'Sentinel: ' + sentinel,
+    'This ASCII source document exists only for the upload live-drive gate.',
+    'The generated program must read these exact bytes through request.documents content_text.',
+  ].join('\\n');
+}
+
+async function uploadDeflatedDocxFixture(
+  client: PgasClient,
+  sessionId: string,
+  script: ExtractionScript,
+): Promise<ExtractionAttempt> {
+  const fixture = buildDeflatedDocxFixture(script.sentinel);
+  if (zipCompressionKind(fixture.bytes) !== 'docx_deflate') {
+    throw new Error('extraction fixture was not DEFLATE-compressed');
+  }
+  const raw = Buffer.from(fixture.bytes);
+  const sentinelBytes = Buffer.from(script.sentinel, 'utf8');
+  const sentinelNotInRawUpload = !raw.includes(sentinelBytes) && !raw.toString('base64').includes(script.sentinel);
+  const form = new FormData();
+  form.append('files', new Blob([fixture.bytes], { type: DOCX_MIME }), 'pgas-extraction-live-drive-' + String(Date.now()) + '.docx');
+  const uploaded = await client.files.upload(sessionId, form);
+  const files = isRecord(uploaded) && Array.isArray(uploaded.files)
+    ? uploaded.files.filter(isRecord)
+    : [];
+  const fileRef = files[0] ?? null;
+  const fileId = fileRef ? stringValue(fileRef.fileId) : null;
+  return {
+    attempted: true,
+    uploadAccepted: fileId !== null,
+    uploadedFileId: fileId,
+    fileRef,
+    expectedCharCount: fixture.expectedCharCount,
+    sentinelNotInRawUpload,
+  };
+}
+
+function buildDeflatedDocxFixture(sentinel: string): { bytes: Uint8Array; expectedCharCount: number } {
+  const title = 'PGAS DOCX Extraction Live Drive';
+  const sectionTitle = 'Source';
+  const body = [
+    'Nonce: ' + sentinel,
+    'This DEFLATE-compressed DOCX fixture is authored inside the live-drive runner.',
+    'The generated program must inflate OOXML and extract this exact body text.',
+  ];
+  const expectedText = [title, sectionTitle, ...body].join('\\n');
+  const storeDocx = renderStructuredDocxDocument({
+    title,
+    sections: [{ title: sectionTitle, body }],
+  });
+  return {
+    bytes: rezipDeflate(storeDocx),
+    expectedCharCount: expectedText.length,
+  };
+}
+
+function rezipDeflate(storeDocxBytes: Uint8Array): Uint8Array {
+  const entries = parseStoreZipEntries(storeDocxBytes);
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = new TextEncoder().encode(entry.name);
+    const compressed = asUint8Array(deflateRawSync(entry.data));
+    const crc = crc32(entry.data);
+    const local = concat([
+      u32(0x04034b50), u16(20), u16(0), u16(8), u16(0), u16(0), u32(crc),
+      u32(compressed.length), u32(entry.data.length), u16(nameBytes.length), u16(0), nameBytes, compressed,
+    ]);
+    chunks.push(local);
+    central.push(concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(8), u16(0), u16(0), u32(crc),
+      u32(compressed.length), u32(entry.data.length), u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(offset), nameBytes,
+    ]));
+    offset += local.length;
+  }
+  const centralOffset = offset;
+  const centralBytes = concat(central);
+  const end = concat([
+    u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+    u32(centralBytes.length), u32(centralOffset), u16(0),
+  ]);
+  return concat([...chunks, centralBytes, end]);
+}
+
+function parseStoreZipEntries(bytes: Uint8Array): Array<{ name: string; data: Uint8Array }> {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const entries: Array<{ name: string; data: Uint8Array }> = [];
+  let offset = 0;
+  while (offset + 4 <= bytes.length && dv.getUint32(offset, true) === 0x04034b50) {
+    const method = dv.getUint16(offset + 8, true);
+    const compressedSize = dv.getUint32(offset + 18, true);
+    const nameLength = dv.getUint16(offset + 26, true);
+    const extraLength = dv.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (method !== 0 || dataEnd > bytes.length) {
+      throw new Error('expected a valid STORE zip entry');
+    }
+    entries.push({
+      name: new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength)),
+      data: bytes.subarray(dataStart, dataEnd),
+    });
+    offset = dataEnd;
+  }
+  return entries;
+}
+
+function zipCompressionKind(bytes: Uint8Array): string {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  let sawEntry = false;
+  let sawDeflate = false;
+  while (offset + 4 <= bytes.length && dv.getUint32(offset, true) === 0x04034b50) {
+    sawEntry = true;
+    const method = dv.getUint16(offset + 8, true);
+    const compressedSize = dv.getUint32(offset + 18, true);
+    const nameLength = dv.getUint16(offset + 26, true);
+    const extraLength = dv.getUint16(offset + 28, true);
+    if (method === 8) {
+      sawDeflate = true;
+    } else if (method !== 0) {
+      return 'docx_unknown';
+    }
+    const dataEnd = offset + 30 + nameLength + extraLength + compressedSize;
+    if (dataEnd > bytes.length) {
+      return 'docx_unknown';
+    }
+    offset = dataEnd;
+  }
+  if (!sawEntry) return 'docx_unknown';
+  return sawDeflate ? 'docx_deflate' : 'docx_store';
+}
+
+async function exportReportFromArtifacts(
+  client: PgasClient,
+  sessionId: string,
+  script: ExportScript,
+): Promise<Record<string, unknown>> {
+  let artifactsRaw: unknown = [];
+  let artifact_error: string | undefined;
+  try {
+    artifactsRaw = await client.sessions.systemArtifacts({ program: '${slug}', artifactType: 'docx_export' });
+  } catch (error) {
+    artifact_error = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  }
+  const artifact_records = artifactRecords(artifactsRaw);
+  const artifact_record = artifact_records.find((record) =>
+    record.artifactType === 'docx_export' && record.payloadRef === script.resultPath) ?? null;
+  const worldResponse = await client.sessions.world(sessionId);
+  const world = isRecord(worldResponse.domain) ? worldResponse.domain : {};
+  const payloadRef = typeof artifact_record?.payloadRef === 'string' ? artifact_record.payloadRef : script.resultPath;
+  const payload = recordFromWorldPath(world, payloadRef);
+  const result = resultFromPayload(payload);
+  const docx_base64 = typeof result.docx_base64 === 'string' && result.docx_base64.length > 0
+    ? result.docx_base64
+    : null;
+  const bytes = docx_base64 ? Buffer.from(docx_base64, 'base64') : Buffer.alloc(0);
+  const documentXml = docx_base64 ? extractStoreZipEntryText(bytes, 'word/document.xml') : null;
+  return {
+    artifact_records,
+    artifact_record,
+    payload_ref: payloadRef,
+    docx_base64,
+    docx_bytes: bytes.length,
+    nonce_present: documentXml !== null && documentXml.includes(script.nonce),
+    default_absent: documentXml !== null && !documentXml.includes('Client authorized signatory'),
+    zip_store_ooxml: documentXml !== null,
+    extracted_text_sample: documentXml?.slice(0, 4_000) ?? '',
+    ...(artifact_error ? { artifact_error } : {}),
+  };
+}
+
+async function safeExportReportFromArtifacts(
+  client: PgasClient,
+  sessionId: string,
+  script: ExportScript,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await exportReportFromArtifacts(client, sessionId, script);
+  } catch (error) {
+    return { error: error instanceof Error ? (error.stack ?? error.message) : String(error) };
+  }
+}
+
+function artifactRecords(raw: unknown): Array<Record<string, unknown>> {
+  const container = isRecord(raw) && Array.isArray(raw.artifacts) ? raw.artifacts : Array.isArray(raw) ? raw : [];
+  return container.filter(isRecord);
+}
+
+function resultFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const resultJson = typeof payload.result_json === 'string' ? parseJsonValue(payload.result_json) : undefined;
+  if (isRecord(resultJson)) {
+    return { ...payload, ...resultJson };
+  }
+  return payload;
+}
+
+function extractStoreZipEntryText(bytes: Uint8Array, entryName: string): string | null {
+  const buffer = Buffer.from(bytes);
+  if (buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) {
+    return null;
+  }
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 4 <= buffer.length) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) {
+      break;
+    }
+    if (signature !== 0x04034b50 || offset + 30 > buffer.length) {
+      return null;
+    }
+    const method = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const uncompressedSize = buffer.readUInt32LE(offset + 22);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    if (method !== 0 || compressedSize !== uncompressedSize) {
+      return null;
+    }
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (nameStart + nameLength > buffer.length || dataEnd > buffer.length) {
+      return null;
+    }
+    const name = buffer.subarray(nameStart, nameStart + nameLength).toString('utf8');
+    entries.set(name, buffer.subarray(dataStart, dataEnd));
+    offset = dataEnd;
+  }
+  const contentTypes = entries.get('[Content_Types].xml')?.toString('utf8') ?? '';
+  if (!contentTypes.includes('wordprocessingml.document.main+xml')) {
+    return null;
+  }
+  return entries.get(entryName)?.toString('utf8') ?? null;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  statusHistory: StatusHistoryEntry[];
+  upload: UploadAttempt;
+  extraction: ExtractionAttempt;
+  exportReport: Record<string, unknown> | null;
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  const statusHistory = input.statusHistory;
+  const exportReport = input.exportReport;
+  writeReport({
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    status_history: statusHistory,
+    delegation: delegationScript ? delegationReportFromWorld(input.state.world, delegationScript) : null,
+    upload: uploadScript ? uploadReportFromWorld(input.state.world, uploadScript, input.upload) : null,
+    export: exportScript ? exportReport : null,
+    extraction: extractionScript ? extractionReportFromWorld(input.state.world, extractionScript, input.extraction) : null,
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  });
+}
+
+function delegationReportFromWorld(world: Record<string, unknown>, script: DelegationScript): Record<string, unknown> {
+  const result = recordFromWorldPath(world, script.resultPath);
+  const status = stringValue(result.status);
+  const sessionId = stringValue(result.sessionId);
+  const rounds = numberValue(result.rounds);
+  const settled = valueAtWorldPath(world, script.settledPath) === true;
+  const degraded = valueAtWorldPath(world, script.degradedPath) === true;
+  const degradeReason = stringValue(valueAtWorldPath(world, degradeReasonPath(script))) ?? '';
+  return {
+    child_program: script.childProgram,
+    result_status: status,
+    child_session_id: sessionId,
+    child_rounds: rounds ?? 0,
+    optional: result.optional === true,
+    settled,
+    degraded,
+    degrade_reason: degradeReason,
+    exported_fields: exportedFields(result),
+  };
+}
+
+function uploadReportFromWorld(world: Record<string, unknown>, script: UploadScript, upload: UploadAttempt): Record<string, unknown> {
+  const source = recordFromWorldPath(world, script.resultPath);
+  const fullText = typeof source.full_text === 'string' ? source.full_text : '';
+  return {
+    source_status: stringValue(source.status),
+    char_count: numberValue(source.char_count) ?? 0,
+    expected_char_count: script.expectedCharCount,
+    source_ready: valueAtWorldPath(world, script.sourceReadyPath) === true,
+    full_text_excerpt: fullText.slice(0, 4_000),
+    sentinel_present: fullText.includes(script.sentinel),
+    uploaded_file_id: upload.uploadedFileId,
+    refs_landed: refsLanded(world, upload.uploadedFileId),
+    upload_accepted: upload.uploadAccepted,
+  };
+}
+
+function extractionReportFromWorld(
+  world: Record<string, unknown>,
+  script: ExtractionScript,
+  extraction: ExtractionAttempt,
+): Record<string, unknown> {
+  const source = recordFromWorldPath(world, script.resultPath);
+  const fullText = typeof source.full_text === 'string' ? source.full_text : '';
+  return {
+    source_status: stringValue(source.status),
+    char_count: numberValue(source.char_count) ?? 0,
+    expected_char_count: extraction.expectedCharCount,
+    source_ready: valueAtWorldPath(world, script.sourceReadyPath) === true,
+    full_text_excerpt: fullText.slice(0, 4_000),
+    sentinel_present: fullText.includes(script.sentinel),
+    uploaded_file_id: extraction.uploadedFileId,
+    refs_landed: refsLanded(world, extraction.uploadedFileId),
+    upload_accepted: extraction.uploadAccepted,
+    extraction_kind: stringValue(source.extraction_kind),
+    sentinel_not_in_raw_upload: extraction.sentinelNotInRawUpload,
+  };
+}
+
+function refsLanded(world: Record<string, unknown>, fileId: string | null): boolean {
+  if (!fileId) {
+    return false;
+  }
+  if (valueAtWorldPath(world, 'inputs.document_intake.file_refs.0.fileId') === fileId) {
+    return true;
+  }
+  const directRefs = valueAtWorldPath(world, 'inputs.document_intake.file_refs');
+  if (Array.isArray(directRefs) && directRefs.some((ref) => isRecord(ref) && ref.fileId === fileId)) {
+    return true;
+  }
+  const root = valueAtWorldPath(world, 'inputs.document_intake');
+  return isRecord(root) &&
+    Array.isArray(root.file_refs) &&
+    root.file_refs.some((ref) => isRecord(ref) && ref.fileId === fileId);
+}
+
+function recordFromWorldPath(world: Record<string, unknown>, path: string): Record<string, unknown> {
+  const direct = valueAtWorldPath(world, path);
+  const record = isRecord(direct) ? { ...direct } : {};
+  const prefix = path + '.';
+  for (const [key, value] of Object.entries(world)) {
+    if (!key.startsWith(prefix)) continue;
+    const field = key.slice(prefix.length);
+    if (field.length > 0 && !field.includes('.')) {
+      record[field] = value;
+    }
+  }
+  return record;
+}
+
+function exportedFields(result: Record<string, unknown>): Record<string, unknown> {
+  const reserved = new Set(['status', 'sessionId', 'rounds', 'mode', 'reason', 'optional', 'result']);
+  const fields: Record<string, unknown> = {};
+  if (isRecord(result.result)) {
+    Object.assign(fields, result.result);
+  }
+  for (const [key, value] of Object.entries(result)) {
+    if (!reserved.has(key)) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+
+function degradeReasonPath(script: DelegationScript): string {
+  return script.degradedPath.endsWith('.degraded')
+    ? script.degradedPath.slice(0, -'.degraded'.length) + '.degrade_reason'
+    : script.degradedPath + '.reason';
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function noUploadAttempt(): UploadAttempt {
+  return {
+    attempted: false,
+    uploadAccepted: false,
+    uploadedFileId: null,
+    fileRef: null,
+  };
+}
+
+function noExtractionAttempt(): ExtractionAttempt {
+  return {
+    attempted: false,
+    uploadAccepted: false,
+    uploadedFileId: null,
+    fileRef: null,
+    expectedCharCount: 0,
+    sentinelNotInRawUpload: false,
+  };
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+  const result = (round as { result?: unknown }).result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+  const terminal = (result as { terminal?: unknown }).terminal;
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+  const name = (terminal as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return [];
+  const payload = (terminal as { payload?: unknown }).payload;
+  return [{ name, payload_excerpt: JSON.stringify(payload ?? null).slice(0, 4_000) }];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function optionalStringValue(key: 'id' | 'title', value: string | null): { id?: string; title?: string } {
+  return value ? { [key]: value } : {};
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function numberField(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff]!;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+  }
+  return value >>> 0;
+});
+
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function u16(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function u32(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function asUint8Array(value: Uint8Array): Uint8Array {
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
+main().catch((error: unknown) => {
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
+  process.exit(1);
+});
+`;
 }
 
 function renderEntryOnlyLiveDriveRunnerSource(slug: string): string {

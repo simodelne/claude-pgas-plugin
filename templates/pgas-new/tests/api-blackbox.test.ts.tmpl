@@ -17,28 +17,36 @@ function stubHandles() {
 }
 
 describe('{{SLUG}} API black-box contract', () => {
-  it('creates and reads a session through the in-process external API transport', async () => {
+  it('creates and reads a session through app and fetch API transports', async () => {
     const server = await createPgasServer({
       programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
       drivers: stubHandles(),
       devMode: true,
     });
 
-    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
-    const httpClient = createPgasClient(fetchTransport({ baseUrl: 'http://127.0.0.1:0', token: 'dev-token' }));
+    try {
+      const { port } = await server.start();
+      const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+      const httpClient = createPgasClient(fetchTransport({ baseUrl: `http://127.0.0.1:${port}`, token: 'dev-token' }));
 
-    const programs = await client.programs.list();
-    const session = await client.sessions.create({
-      program: '{{SLUG}}',
-      domain_context: { query: 'static black-box verification' },
-    });
-    const envelope = await client.sessions.get(session.sessionId);
-    const world = await client.sessions.world(session.sessionId);
-    const normalized = normalizeSessionDomain(world.domain);
+      const programs = await client.programs.list();
+      const httpPrograms = await httpClient.programs.list();
+      const session = await client.sessions.create({
+        program: '{{SLUG}}',
+        domain_context: { query: 'static black-box verification' },
+      });
+      const envelope = await client.sessions.get(session.sessionId);
+      const httpEnvelope = await httpClient.sessions.get(session.sessionId);
+      const world = await client.sessions.world(session.sessionId);
+      const normalized = normalizeSessionDomain(world.domain);
 
-    expect(programs).toBeDefined();
-    expect(envelope.sessionId).toBe(session.sessionId);
-    expect(normalized).toBeDefined();
-    expect(httpClient).toBeDefined();
+      expect(JSON.stringify(programs)).toContain('{{SLUG}}');
+      expect(JSON.stringify(httpPrograms)).toContain('{{SLUG}}');
+      expect(envelope.sessionId).toBe(session.sessionId);
+      expect(httpEnvelope.sessionId).toBe(session.sessionId);
+      expect(normalized).toHaveProperty('inputs.initial_user_text');
+    } finally {
+      await server.close();
+    }
   });
 });

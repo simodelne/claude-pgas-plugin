@@ -240,6 +240,29 @@ describe('template renderer', () => {
     }
   });
 
+  it('throws when existing-repo registration source cannot be stamped with frontendSpecPath', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-frontend-spec-anchor-'));
+    try {
+      expect(() => renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'anchor-drift',
+        name: 'Anchor Drift',
+        synthesizedSpecYaml: 'name: anchor-drift\n',
+        synthesizedRegistrationTs: [
+          "import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';",
+          'const spec = {} as ProgramEntry["spec"];',
+          'export function createAnchorDriftProgramEntry(): ProgramEntry {',
+          '  return { spec, createAdapters: () => ({}) } as ProgramEntry;',
+          '}',
+          '',
+        ].join('\n'),
+      })).toThrow(/frontendSpecPath.*registration/u);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('renders required public PGAS v2 imports and no banned imports', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-imports-'));
     try {
@@ -272,16 +295,29 @@ describe('template renderer', () => {
       expect(apiTest).toContain('appTransport');
       expect(apiTest).toContain('fetchTransport');
       expect(apiTest).toContain('normalizeSessionDomain');
+      expect(apiTest).toContain('await server.start()');
+      expect(apiTest).toContain('fetchTransport({ baseUrl: `http://127.0.0.1:${port}`');
+      expect(apiTest).toContain('await server.close()');
       expect(apiTest).toContain('await client.programs.list()');
       expect(apiTest).toContain('await client.sessions.create');
       expect(apiTest).toContain('await client.sessions.get');
       expect(apiTest).toContain('await client.sessions.world');
+      expect(apiTest).not.toContain("baseUrl: 'http://127.0.0.1:0'");
+      expect(apiTest).not.toContain('expect(httpClient).toBeDefined()');
       expect(liveTest).toContain('await client.sessions.create');
       expect(liveTest).toContain('await client.sessions.trigger');
       expect(liveTest).toContain('await client.sessions.get');
       expect(liveTest).toContain('await client.sessions.rounds');
+      expect(liveTest).toContain('const missingLiveProviderEnv');
+      expect(liveTest).toContain('expect(missingLiveProviderEnv.length).toBeGreaterThan(0)');
+      expect(liveTest).not.toContain('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation');
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
+      expect(deterministicTest).toContain('type TestHarnessAuthorResponse');
+      expect(deterministicTest).toContain("await harness.trigger('start deterministic scaffold')");
+      expect(deterministicTest).toContain("expect(snapshot.mode).toBe('complete')");
+      expect(deterministicTest).toContain('await harness.close()');
+      expect(deterministicTest).not.toContain('expect(harness).toBeDefined()');
 
       const renderedText = [registration, server, authorDriver, repl, apiTest, deterministicTest].join('\n');
       expect(renderedText).not.toMatch(/@simodelne\/pgas-server\/api/);

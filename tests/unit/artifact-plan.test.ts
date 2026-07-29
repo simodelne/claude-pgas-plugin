@@ -243,6 +243,13 @@ describe('artifact planner', () => {
     );
   });
 
+  it('rejects display names that cannot be safely interpolated into generated source', () => {
+    for (const name of ["Bad 'Name", 'Bad "Name"', 'Bad\nName', 'Bad # Name']) {
+      expect(() => createStandaloneArtifactPlan({ slug: 'unsafe-name', name })).toThrow(/invalid --name/u);
+      expect(() => createExistingRepoArtifactPlan({ slug: 'unsafe-name', name }, MANIFEST)).toThrow(/invalid --name/u);
+    }
+  });
+
   it('requires an existing-repo wiring manifest for attach planning', () => {
     expect(() =>
       createExistingRepoArtifactPlan(

@@ -127,11 +127,11 @@ describe('export render route-level falsifier (PR-10 / PR-E1)', () => {
       expect(docXml).not.toContain('A&B'); // raw ampersand would break the XML
       // the emoji (non-metachar) survives verbatim.
       expect(docXml).toContain('✅');
-      // documented, honest limitation: tag-shaped substrings are removed by stripHtml — the
-      // literal `<redacted>` does not survive as text (and cannot inject markup).
-      expect(docXml).not.toContain('redacted');
+      // tag-shaped literal text is preserved as escaped text, not stripped and not emitted as markup.
+      expect(docXml).toContain('&lt;redacted&gt;');
+      expect(docXml).toContain('redacted');
       expect(docXml.startsWith('<?xml')).toBe(true);
-      return { escaped: true, emoji_survived: true, tag_stripped: true };
+      return { escaped: true, emoji_survived: true, literal_tag_preserved: true };
     });
 
     // ── F-6: track-change export is honestly refused; no w:ins/w:del is ever emitted ──

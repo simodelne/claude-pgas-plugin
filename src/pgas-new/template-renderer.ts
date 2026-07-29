@@ -314,8 +314,10 @@ function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sour
 function injectFrontendSpecPath(registrationTs: string, frontendSpecPath: string): string {
   if (registrationTs.includes('frontendSpecPath:')) return registrationTs;
   const anchor = 'return {\n    spec,\n';
-  if (!registrationTs.includes(anchor)) return registrationTs;
-  return registrationTs.replace(anchor, `return {\n    spec,\n    frontendSpecPath: '${frontendSpecPath}',\n`);
+  if (!registrationTs.includes(anchor)) {
+    throw new Error('unable to patch frontendSpecPath into existing-repo registration; ProgramEntry return shape changed');
+  }
+  return registrationTs.replace(anchor, `return {\n    spec,\n    frontendSpecPath: ${JSON.stringify(frontendSpecPath)},\n`);
 }
 
 function existingRepoProgramRegistrationImport(manifest: WiringManifest, slug: string): string {
