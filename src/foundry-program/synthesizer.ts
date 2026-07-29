@@ -249,14 +249,23 @@ const TERMINAL_ACTION_GENERIC_EXAMPLE =
   'Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"<action>","channel":"<channel>","payload":{}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.';
 const TERMINAL_ACTION_PROTOCOL =
   `Respond with EXACTLY ONE terminal action per response: emit one native tool_call from the current mode vocabulary, with no extra terminal actions, no empty action names, and no free-form action JSON. ${TERMINAL_ACTION_GENERIC_EXAMPLE}`;
-const CONTROL_PLANE_ACTIONS = [
-  'record_user_note',
+const SESSION_CONTROL_ACTIONS = [
   'session_new',
   'session_abort_current',
   'session_status',
   'session_history',
   'session_resume',
   'session_help',
+];
+const ENGINE_NOTEBOOK_ACTIONS = [
+  'record_note',
+  'pin_note',
+  'unpin_note',
+  'delete_note',
+];
+const CONTROL_PLANE_ACTIONS = [
+  ...ENGINE_NOTEBOOK_ACTIONS,
+  ...SESSION_CONTROL_ACTIONS,
 ];
 const USER_DECISION_INGESTION_PATHS = [
   'inputs.user_decision',
@@ -462,7 +471,6 @@ export function synthesizeProgramSpecFromDomain(
     ...(delegationChildren.length > 0 ? { delegationPolicy: delegationPolicyForChildren(delegationChildren) } : {}),
     ...(artifactPolicy ? { artifactPolicy } : {}),
   };
-  const hasRegistrationPolicies = Object.keys(registrationPolicies).length > 0;
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -477,6 +485,7 @@ export function synthesizeProgramSpecFromDomain(
   spec.features = unique([
     ...(Array.isArray(spec.features) ? spec.features as string[] : []),
     'reactions',
+    'inline_world_query',
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
   ]);
@@ -543,7 +552,7 @@ export function synthesizeProgramSpecFromDomain(
 
   const projection: MutableRecord = {
     [firstMode]: {
-      include: unique([`inputs.${entryChannel}`, initialEntryPath, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
+      include: unique([`inputs.${entryChannel}`, initialEntryPath, 'notebook.*', 'notebook_pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
       exclude: [],
     },
   };
@@ -558,8 +567,8 @@ export function synthesizeProgramSpecFromDomain(
       include: unique([
         `inputs.${entryChannel}`,
         initialEntryPath,
-        'notebook.entries',
-        'notebook.pins',
+        'notebook.*',
+        'notebook_pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
         ...accumulatedOutputFieldsBefore(modeName),
         ...outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug, flatMirrorStages),
@@ -638,6 +647,7 @@ export function synthesizeProgramSpecFromDomain(
   const actionMap = recordField(spec, 'action_map');
   const placeholderActionName = ['example', 'action'].join('_');
   delete actionMap[placeholderActionName];
+  delete actionMap.record_user_note;
   if (!transitionActions.some((action) => action.name === 'begin_work')) {
     delete actionMap.begin_work;
   }
@@ -656,6 +666,8 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsActions(actionMap, documents);
   applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
+  applyEngineNotebookActions(actionMap);
+  applySessionControlActionDescriptions(actionMap);
   applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource, documents);
   applyConfirmationLoopPairing(spec, confirmationLoops);
 
@@ -666,6 +678,10 @@ export function synthesizeProgramSpecFromDomain(
   delete schema['work.example_items_json'];
   schema[`inputs.${entryChannel}`] = 'string';
   schema[initialEntryPath] = 'string';
+  delete schema['notebook.entries'];
+  delete schema['notebook.pins'];
+  schema['notebook.*'] = 'string';
+  schema.notebook_pins = 'array';
   schema[startedField] = 'boolean';
   for (const field of unique([...guardFieldsByMode.values()].flat())) {
     schema[field] = 'boolean';
@@ -712,6 +728,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
+  const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
@@ -719,6 +736,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
   removeExportDecisionOnlyStageEntries(recordField(spec, 'guidance'), exportActions);
+  applyEngineToolkitGuidance(recordField(spec, 'guidance'), synthesizedModes, queryPolicy.allowedWorldQueryPrefixes.length > 0);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -752,11 +770,12 @@ export function synthesizeProgramSpecFromDomain(
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
-    ...(hasRegistrationPolicies ? {
-      registration_ts: renderRegistrationSource(toPascalCase(slug), registrationPolicies, {
+    registration_ts: renderRegistrationSource(toPascalCase(slug), {
+      ...registrationPolicies,
+      queryPolicy,
+    }, {
         exportHookChannel: hasExportDecisionOnly ? EXPORT_HOOK_CHANNEL : undefined,
       }),
-    } : {}),
     ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
     ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
     ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
@@ -892,9 +911,15 @@ function applyModeVocabularies(
     const mode = recordField(modes, modeName);
     mode.vocabulary = [
       ...actions.map((action) => action.name),
-      ...CONTROL_PLANE_ACTIONS,
+      ...toolkitActionsForMode(mode),
     ];
   }
+}
+
+function toolkitActionsForMode(mode: MutableRecord): string[] {
+  const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+  const notebookActions = channels.includes('widget_output') ? ENGINE_NOTEBOOK_ACTIONS : [];
+  return [...notebookActions, ...SESSION_CONTROL_ACTIONS];
 }
 
 function applyStageOutputChannels(
@@ -1597,6 +1622,39 @@ function applyDocumentsActions(
       ],
       channel: 'widget_output',
     };
+  }
+}
+
+function applyEngineNotebookActions(actionMap: MutableRecord): void {
+  actionMap.record_note = {
+    description: 'Save or overwrite a working-memory note. Pass key and text.',
+    mutations: [{ op: 'MSet', path: 'notebook.*', value: '', from_arg: '*' }],
+    channel: 'widget_output',
+  };
+  actionMap.pin_note = {
+    description: 'Pin a note so its full body stays visible in later rounds.',
+    arg_descriptions: { key: 'The note key to pin.' },
+    mutations: [{ op: 'MAppend', path: 'notebook_pins', value: '', from_arg: 'key' }],
+    channel: 'widget_output',
+  };
+  actionMap.unpin_note = {
+    description: 'Unpin a previously pinned note.',
+    arg_descriptions: { key: 'The note key to unpin.' },
+    mutations: [{ op: 'MRemove', path: 'notebook_pins', value: '', from_arg: 'key' }],
+    channel: 'widget_output',
+  };
+  actionMap.delete_note = {
+    description: 'Clear a working-memory note you no longer need. Pass key.',
+    mutations: [{ op: 'MSet', path: 'notebook.*', value: '', from_arg: '*' }],
+    channel: 'widget_output',
+  };
+}
+
+function applySessionControlActionDescriptions(actionMap: MutableRecord): void {
+  for (const action of SESSION_CONTROL_ACTIONS) {
+    const existing = recordField(actionMap, action);
+    const label = action.replace(/^session_/u, '').replace(/_/gu, ' ');
+    existing.description = `Control-plane ${label} command. Session controls are for explicit control intent only; do not use ${action} for normal stage progression.`;
   }
 }
 
@@ -2364,7 +2422,7 @@ function applyConfirmationLoopIntentModeWiring(
     mode.vocabulary = [
       proposeAction,
       ...completionActions.map((action) => action.name),
-      ...CONTROL_PLANE_ACTIONS,
+      ...toolkitActionsForMode(mode),
     ];
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
@@ -3444,8 +3502,34 @@ function renderHandlersSource(
     ? `import { extractDocxText } from ${tsString(options.docxExtractorImport ?? './extract/docx.js')};`
     : '';
   const docxExtractorImportBlock = docxExtractorImport ? `${docxExtractorImport}\n` : '';
-  const sessionControlHandlers = CONTROL_PLANE_ACTIONS
-    .filter((action) => action !== 'record_user_note')
+  const notebookHandlers = `  async record_note(payload) {
+    return {
+      kind: 'note_recorded',
+      payload,
+    };
+  },
+
+  async pin_note(payload) {
+    return {
+      kind: 'note_pinned',
+      payload,
+    };
+  },
+
+  async unpin_note(payload) {
+    return {
+      kind: 'note_unpinned',
+      payload,
+    };
+  },
+
+  async delete_note(payload) {
+    return {
+      kind: 'note_deleted',
+      payload,
+    };
+  },`;
+  const sessionControlHandlers = SESSION_CONTROL_ACTIONS
     .map((action) => `  async ${action}(payload) {
     return {
       kind: 'session_control',
@@ -3796,13 +3880,7 @@ ${docxExtractorImportBlock}${stageImports ? `${stageImports}\n` : ''}
 // stages keep the runtime model's tool-call arguments as their source of truth.
 
 export const handlers: Record<string, ToolHandler> = {
-${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(payload) {
-    const note = resolveDomainValue<string>(payload as HandlerPayload, 'note', '');
-    return {
-      kind: 'note_recorded',
-      note,
-    };
-  },
+${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}${notebookHandlers}
 
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}${documentActionHandlers ? `\n\n${documentActionHandlers}` : ''}
 };${lifecycleIntentHelper}${exportHookAdapter}${reactionExport}${documentHelper}${conformanceHelper}
@@ -6488,7 +6566,7 @@ describe('generated confirmation-loop smoke', () => {
           effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
             ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Third proposal')},`).join('\n            ')}
           }),
-          effect('record_user_note', { note: 'All confirmation-loop items resolved.' }),
+          effect('session_status', { status: 'All confirmation-loop items resolved.' }),
         ]),
         observerHandle: {
           modelId: 'generated-confirmation-loop-smoke-observer',
@@ -7427,6 +7505,7 @@ function renderRegistrationSource(
     delegationPolicy?: { allowedTargetPrograms: string[]; inputEnrichment: Array<{ source: string; target: string }> };
     delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
     artifactPolicy?: ProgramArtifactPolicy;
+    queryPolicy?: { allowedWorldQueryPrefixes: string[]; mode: 'enforce' };
   } = {},
   options: {
     exportHookChannel?: string;
@@ -7441,6 +7520,9 @@ function renderRegistrationSource(
       : '',
     policies.artifactPolicy
       ? `    artifactPolicy: ${renderTsValue(policies.artifactPolicy)},`
+      : '',
+    policies.queryPolicy
+      ? `    queryPolicy: ${renderTsValue(policies.queryPolicy)},`
       : '',
   ].filter(Boolean).join('\n');
   const handlerImports = options.exportHookChannel
@@ -9487,6 +9569,98 @@ function guidanceFor(
     }
     return [modeName, stageGuidance];
   }));
+}
+
+function queryPolicyForDeclaredPaths(
+  schema: MutableRecord,
+  projection: MutableRecord,
+  stageDomainSpecBySlug: ReadonlyMap<string, StageDomainSpec>,
+): { allowedWorldQueryPrefixes: string[]; mode: 'enforce' } {
+  const schemaPaths = new Set(Object.keys(schema));
+  const candidatePaths = [
+    ...Object.values(projection).flatMap((rawProjection) =>
+      isRecord(rawProjection) && Array.isArray(rawProjection.include)
+        ? rawProjection.include as string[]
+        : [],
+    ),
+    ...[...stageDomainSpecBySlug.values()].flatMap((domainSpec) => domainSpec.reads),
+  ];
+  return {
+    allowedWorldQueryPrefixes: unique(candidatePaths
+      .flatMap((path) => queryPolicyPrefixesForDeclaredPath(path, schemaPaths))
+      .filter((path) => path.length > 0)
+      .sort()),
+    mode: 'enforce',
+  };
+}
+
+function queryPolicyPrefixesForDeclaredPath(path: string, schemaPaths: ReadonlySet<string>): string[] {
+  const declaredPath = declaredSchemaPathForQuery(path, schemaPaths);
+  return declaredPath ? queryPolicyPrefixesForSchemaPath(declaredPath) : [];
+}
+
+function declaredSchemaPathForQuery(path: string, schemaPaths: ReadonlySet<string>): string {
+  if (schemaPaths.has(path)) {
+    return path;
+  }
+  const parts = path.split('.');
+  for (let length = parts.length - 1; length > 0; length -= 1) {
+    const parentPath = parts.slice(0, length).join('.');
+    if (schemaPaths.has(parentPath)) {
+      return parentPath;
+    }
+  }
+  for (const schemaPath of schemaPaths) {
+    const wildcardIndex = schemaPath.indexOf('.*');
+    if (wildcardIndex < 0) {
+      continue;
+    }
+    const wildcardBase = schemaPath.slice(0, wildcardIndex);
+    if (path === wildcardBase || path.startsWith(`${wildcardBase}.`)) {
+      return schemaPath;
+    }
+  }
+  return '';
+}
+
+function queryPolicyPrefixesForSchemaPath(path: string): string[] {
+  if (path === 'notebook.*' || path === 'notebook_pins' || path.startsWith('notebook.')) {
+    return [];
+  }
+  const wildcardIndex = path.indexOf('.*');
+  if (wildcardIndex >= 0) {
+    return [path.slice(0, wildcardIndex)];
+  }
+  return [path];
+}
+
+function applyEngineToolkitGuidance(
+  guidance: MutableRecord,
+  modes: MutableRecord,
+  inlineQueryConfigured: boolean,
+): void {
+  for (const [modeName, rawMode] of Object.entries(modes)) {
+    if (!isRecord(rawMode) || rawMode.decision_only === true) {
+      continue;
+    }
+    const vocabulary = Array.isArray(rawMode.vocabulary) ? rawMode.vocabulary as string[] : [];
+    const hasNotebookActions = ENGINE_NOTEBOOK_ACTIONS.some((action) => vocabulary.includes(action));
+    const hasSessionControls = SESSION_CONTROL_ACTIONS.some((action) => vocabulary.includes(action));
+    const existing = Array.isArray(guidance[modeName]) ? guidance[modeName] as string[] : [];
+    guidance[modeName] = [
+      ...existing,
+      'Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool.',
+      inlineQueryConfigured
+        ? 'If the query tool is listed, use query({"path":"..."}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy.'
+        : 'No model-facing world query tool is configured in this mode; use only projected current state.',
+      hasNotebookActions
+        ? 'NOTEBOOK tools are durable working memory: use record_note for reusable facts, read_note before relying on older notes, pin_note/unpin_note for facts that must stay visible, and delete_note for stale notes.'
+        : 'Notebook write tools are not active in this mode; use any projected notebook state only as read-only context.',
+      ...(hasSessionControls ? [
+        'Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead.',
+      ] : []),
+    ];
+  }
 }
 
 function applyTerminalActionGuidance(

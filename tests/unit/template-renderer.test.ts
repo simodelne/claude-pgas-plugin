@@ -492,6 +492,7 @@ describe('template renderer', () => {
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
       const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
+      const registration = readFileSync(join(outDir, 'src/programs/pgas-new/registration.ts'), 'utf8');
       const parsed = load(spec) as {
         initial: string;
         terminal: string[];
@@ -517,7 +518,10 @@ describe('template renderer', () => {
     expect(parsed.modes.start.vocabulary).toEqual(
       expect.arrayContaining([
         'begin_work',
-        'record_user_note',
+        'record_note',
+        'pin_note',
+        'unpin_note',
+        'delete_note',
         'session_new',
         'session_abort_current',
         'session_status',
@@ -529,7 +533,10 @@ describe('template renderer', () => {
     expect(parsed.modes.working.vocabulary).toEqual(
       expect.arrayContaining([
         'example_action',
-        'record_user_note',
+        'record_note',
+        'pin_note',
+        'unpin_note',
+        'delete_note',
         'session_new',
         'session_abort_current',
         'session_status',
@@ -543,16 +550,18 @@ describe('template renderer', () => {
       example_action: 'complete',
     });
     expect(spec).toContain('control_plane:');
-    expect(spec).toContain('notebook.entries');
-    expect(spec).toContain('notebook.pins');
+    expect(spec).toContain('inline_world_query');
+    expect(spec).toContain('notebook.*');
+    expect(spec).toContain('notebook_pins');
+    expect(registration).toContain('queryPolicy');
     expect(parsed.projection.start.include).toEqual(
-      expect.arrayContaining(['inputs.user_text', 'notebook.entries', 'notebook.pins', 'work.started']),
+      expect.arrayContaining(['inputs.user_text', 'notebook.*', 'notebook_pins', 'work.started']),
     );
     expect(parsed.projection.working.include).toEqual(
       expect.arrayContaining([
         'inputs.user_text',
-        'notebook.entries',
-        'notebook.pins',
+        'notebook.*',
+        'notebook_pins',
         'work.example_ready',
         'work.example_result_json',
         'work.example_items_json',
@@ -560,16 +569,19 @@ describe('template renderer', () => {
     );
     expect(parsed.schema).toMatchObject({
       'inputs.user_text': 'string',
-      'notebook.entries': 'array',
-      'notebook.pins': 'array',
+      'notebook.*': 'string',
+      notebook_pins: 'array',
       'work.started': 'boolean',
       'work.example_ready': 'boolean',
       'work.example_result_json': 'string',
       'work.example_items_json': 'string',
     });
     expect(parsed.action_map.begin_work.mutations).toEqual([{ op: 'MSet', path: 'work.started', value: true }]);
-    expect(parsed.action_map.record_user_note.mutations).toEqual([
-      { op: 'MAppend', path: 'notebook.entries', from_arg: 'note' },
+    expect(parsed.action_map.record_note.mutations).toEqual([
+      { op: 'MSet', path: 'notebook.*', value: '', from_arg: '*' },
+    ]);
+    expect(parsed.action_map.pin_note.mutations).toEqual([
+      { op: 'MAppend', path: 'notebook_pins', value: '', from_arg: 'key' },
     ]);
     expect(parsed.action_map.example_action.mutations).toEqual(
       expect.arrayContaining([

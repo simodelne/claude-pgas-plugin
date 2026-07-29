@@ -159,7 +159,8 @@ describe('PR-E2 export stage synthesis', () => {
 
     expect(paths.filter((path) => path.includes('/export/'))).toEqual([]);
     expect(artifact.export_surfaces).toBeUndefined();
-    expect(artifact.registration_ts).toBeUndefined();
+    expect(artifact.registration_ts).toContain('queryPolicy');
+    expect(artifact.registration_ts).not.toContain('artifactPolicy');
   });
 
   it('renders approved content collections without workflow-stage output sections', async () => {

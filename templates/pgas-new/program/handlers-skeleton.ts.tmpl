@@ -1,5 +1,4 @@
 import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin.js';
-import { resolveDomainValue, type HandlerPayload } from './handlers/_resolver.js';
 
 // The synthesizer emits this template as a handler directory:
 // - handlers/index.ts
@@ -13,11 +12,31 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 
-  async record_user_note(payload) {
-    const note = resolveDomainValue<string>(payload as HandlerPayload, 'note', '');
+  async record_note(payload) {
     return {
       kind: 'note_recorded',
-      note,
+      payload,
+    };
+  },
+
+  async pin_note(payload) {
+    return {
+      kind: 'note_pinned',
+      payload,
+    };
+  },
+
+  async unpin_note(payload) {
+    return {
+      kind: 'note_unpinned',
+      payload,
+    };
+  },
+
+  async delete_note(payload) {
+    return {
+      kind: 'note_deleted',
+      payload,
     };
   },
 

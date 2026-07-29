@@ -16,6 +16,28 @@ export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
   return {
     spec,
     reactionHandlers,
+    queryPolicy: {
+      allowedWorldQueryPrefixes: [
+        'inputs.user_text',
+        'inputs.query_result.kind',
+        'inputs.query_result.value_json',
+        'inputs.query_meta.source_path',
+        'inputs.query_meta.source_channel',
+        'inputs.query_meta.continuation_round',
+        'inputs.query_meta.scope_redirect',
+        'inputs.query_meta.message',
+        'inputs.mode_entry',
+        'inputs.mode_entry.mode',
+        'inputs.mode_entry.from_mode',
+        'inputs.mode_entry.entry_round',
+        'governance.round_counter',
+        'work.started',
+        'work.example_ready',
+        'work.example_result_json',
+        'work.example_items_json',
+      ],
+      mode: 'enforce',
+    },
     createAdapters: (ctx) => {
       const adapters = createProgramAdapters(spec, ctx, handlers);
       if (spec.tools) {
