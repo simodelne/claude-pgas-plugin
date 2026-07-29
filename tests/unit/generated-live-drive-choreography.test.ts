@@ -221,6 +221,49 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).not.toContain('PGAS_LIVE_DRIVE_EXPORT_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
   });
+
+  it('renders a composable runner report shape when multiple feature scripts are selected', () => {
+    const source = renderLiveDriveRunnerSource(
+      'composite-live',
+      script,
+      {
+        resultPath: 'dispatch_research.delegation.research.result',
+        settledPath: 'dispatch_research.delegation.research.settled',
+        degradedPath: 'dispatch_research.delegation.research.degraded',
+        stage: 'dispatch_research',
+        childProgram: 'research',
+      },
+      {
+        resultPath: 'work.source',
+        sourceReadyPath: 'work.source_ready',
+        stage: 'ingest_source',
+        sentinel: 'PGAS-UPLOAD-SENTINEL-unit',
+        expectedCharCount: 72,
+      },
+      {
+        resultPath: 'export_document.output',
+        stage: 'export_document',
+        nonce: 'PGAS-EXPORT-NONCE-unit',
+      },
+      {
+        resultPath: 'work.extracted_source',
+        sourceReadyPath: 'work.extracted_source_ready',
+        stage: 'extract_source',
+        sentinel: 'PGAS-EXTRACTION-NONCE-unit',
+      },
+    );
+
+    expect(source).toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
+    expect(source).toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+    expect(source).toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
+    expect(source).toContain('PGAS_LIVE_DRIVE_EXPORT_SCRIPT');
+    expect(source).toContain('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT');
+    expect(source).toContain('status_history: statusHistory');
+    expect(source).toContain('delegation: delegationScript ? delegationReportFromWorld');
+    expect(source).toContain('upload: uploadScript ? uploadReportFromWorld');
+    expect(source).toContain('export: exportScript ? exportReport');
+    expect(source).toContain('extraction: extractionScript ? extractionReportFromWorld');
+  });
 });
 
 describe('generated delegation live-drive verdict helpers', () => {

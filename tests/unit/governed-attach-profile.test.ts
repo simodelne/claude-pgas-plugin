@@ -321,7 +321,7 @@ describe('SimoneOS governed attach profile', () => {
       ]));
 
       const registration = readFileSync(join(userFacingRepo, 'programs/governed-memo-mini/registration.ts'), 'utf8');
-      expect(registration).toContain("frontendSpecPath: 'programs/governed-memo-mini'");
+      expect(registration).toContain('frontendSpecPath: "programs/governed-memo-mini"');
 
       const frontendSpec = load(readFileSync(join(userFacingRepo, 'programs/governed-memo-mini/frontend.spec.yml'), 'utf8')) as FrontendSpec;
       expect(frontendSpec.program).toBe('governed-memo-mini');
@@ -414,10 +414,30 @@ describe('SimoneOS governed attach profile', () => {
       expect(curatorRequest).toContain('channels: [frontend]');
       expect(curatorRequest).toContain('qc/USER_FACING_PROGRAMS.txt');
       expect(curatorRequest).toContain('frontend/src/runtime/cutover/v2-programs.ts');
-      expect(curatorRequest).toContain("'governed-memo-mini': 'Governed Memo Mini'");
+      expect(curatorRequest).toContain('\'governed-memo-mini\': "Governed Memo Mini"');
     } finally {
       rmSync(backendOnlyRepo, { recursive: true, force: true });
       rmSync(userFacingRepo, { recursive: true, force: true });
+    }
+  });
+
+  it('derives governed attach frontend renderer imports and symbols from the selected slug', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-governed-renderer-slug-'));
+    try {
+      renderGovernedMemoAttachment(repoRoot, {
+        slug: 'policy-note',
+        name: 'Policy Note',
+        governedAttachFrontendMode: 'user-facing',
+      });
+
+      const curatorRequest = readFileSync(join(repoRoot, 'audit/PGAS-NEW-policy-note.curator-request.md'), 'utf8');
+      expect(curatorRequest).toContain('frontend/src/runtime/docx-authoring/register-policy-note.ts');
+      expect(curatorRequest).toContain('frontend/src/runtime/docx-authoring/__tests__/register-policy-note.test.ts');
+      expect(curatorRequest).toContain("import { registerPolicyNoteRenderers } from '../register-policy-note';");
+      expect(curatorRequest).toContain('registerPolicyNoteRenderers();');
+      expect(curatorRequest).not.toContain('../register-governed-memo-mini');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
     }
   });
 
@@ -553,14 +573,21 @@ describe('SimoneOS governed attach profile', () => {
 
 function renderGovernedMemoAttachment(
   repoRoot: string,
-  options: { governedAttachFrontendMode?: 'backend-only' | 'user-facing' } = {},
+  options: { governedAttachFrontendMode?: 'backend-only' | 'user-facing'; slug?: string; name?: string } = {},
 ) {
-  const artifact = synthesizeProgramSpecFromDomain(minimalGovernedMemoDomain());
+  const slug = options.slug ?? 'governed-memo-mini';
+  const name = options.name ?? 'Governed Memo Mini';
+  const artifact = synthesizeProgramSpecFromDomain({
+    ...minimalGovernedMemoDomain(),
+    'program.slug': slug,
+    'program.name': name,
+    'program.target_dir': `/tmp/${slug}`,
+  });
   const renderOptions: GovernedFrontendRenderOptions = {
     repoRoot,
     manifest: SIMONEOS_MANIFEST,
-    slug: 'governed-memo-mini',
-    name: 'Governed Memo Mini',
+    slug,
+    name,
     targetProfile: 'simoneos-governed-attach',
     governedAttachFrontendMode: options.governedAttachFrontendMode,
     synthesizedSpecYaml: artifact.spec_yaml,

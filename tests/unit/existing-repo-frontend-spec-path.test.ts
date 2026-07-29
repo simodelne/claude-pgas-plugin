@@ -67,6 +67,6 @@ describe('existing-repo registration frontendSpecPath', () => {
     });
 
     const registration = readFileSync(join(repo, 'programs', 'sample-attached', 'registration.ts'), 'utf8');
-    expect(registration).toContain("frontendSpecPath: 'programs/sample-attached'");
+    expect(registration).toContain('frontendSpecPath: "programs/sample-attached"');
   });
 });

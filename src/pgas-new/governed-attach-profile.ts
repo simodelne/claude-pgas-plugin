@@ -231,7 +231,7 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
 export function renderSimoneOsGovernedAttachRegistration(options: SimoneOsGovernedProgramOptions): string {
   const constantPrefix = toConstantPrefix(options.slug);
   const projectionName = `${toCamelCase(options.slug)}Projection`;
-  const frontendSpecPathLine = options.frontendSpecPath ? `    frontendSpecPath: '${options.frontendSpecPath}',\n` : '';
+  const frontendSpecPathLine = options.frontendSpecPath ? `    frontendSpecPath: ${tsString(options.frontendSpecPath)},\n` : '';
   const manifestDescription = options.frontendSpecPath
     ? 'Governed markdown memo drafting from recorded intake facts with an opt-in workspace frontend.'
     : 'Backend-only governed markdown memo drafting from recorded intake facts.';
@@ -252,7 +252,7 @@ const ${constantPrefix}_MANIFEST: ProgramEntry['manifest'] = {
 
 const ${constantPrefix}_PRESENTATION: ProgramEntry['presentation'] = {
   labels: {
-    program: '${options.name}',
+    program: ${tsString(options.name)},
     modes: {
       intake: 'Intake',
       draft_memo: 'Draft Memo',
@@ -279,7 +279,7 @@ const ${constantPrefix}_ARTIFACT_POLICY: ProgramEntry['artifactPolicy'] = {
   rules: [
     {
       artifactType: 'memo_markdown',
-      title: '${options.name} Markdown Memo',
+      title: ${tsString(`${options.name} Markdown Memo`)},
       summary: 'Markdown memo drafted from recorded intake facts.',
       payloadRef: 'work.memo_artifact',
       whenAnyPath: ['work.memo_artifact'],
@@ -330,7 +330,7 @@ ${frontendSpecPathLine}    createAdapters: (ctx) => createProgramAdapters(spec, 
 export function renderSimoneOsGovernedAttachFrontendSpec(options: SimoneOsGovernedProgramOptions): string {
   return `program: ${options.slug}
 display:
-  title: ${options.name}
+  title: ${yamlString(options.name)}
 
 modes:
   intake:
@@ -600,7 +600,7 @@ interface GovernedMemoMiniDerived {
 }
 
 const PROGRAM_SLUG = '${options.slug}';
-const PROGRAM_TITLE = '${options.name}';
+const PROGRAM_TITLE = ${tsString(options.name)};
 const STABLE_MEMO_ARTIFACT_ID = 'governed_memo_markdown';
 
 const PHASES = [
@@ -1214,13 +1214,14 @@ function renderFrontendCuratorSections(options: SimoneOsGovernedProgramOptions):
   const rendererPath = `frontend/src/runtime/docx-authoring/register-${options.slug}.ts`;
   const rendererTestPath = `frontend/src/runtime/docx-authoring/__tests__/register-${options.slug}.test.ts`;
   const mainImport = `import './runtime/docx-authoring/register-${options.slug}';`;
+  const rendererSymbol = rendererSymbolForSlug(options.slug);
   return [
     `### \`${rendererPath}\``,
     '',
     'Create this file:',
     '',
     '~~~ts',
-    renderGovernedMemoMarkdownRendererSource(),
+    renderGovernedMemoMarkdownRendererSource({ slug: options.slug, rendererSymbol }),
     '~~~',
     '',
     `### \`${rendererTestPath}\``,
@@ -1228,7 +1229,7 @@ function renderFrontendCuratorSections(options: SimoneOsGovernedProgramOptions):
     'Create this test file:',
     '',
     '~~~ts',
-    renderGovernedMemoMarkdownRendererTestSource(),
+    renderGovernedMemoMarkdownRendererTestSource({ slug: options.slug, rendererSymbol }),
     '~~~',
     '',
     '### `frontend/src/main.tsx`',
@@ -1284,7 +1285,7 @@ function renderFrontendCuratorSections(options: SimoneOsGovernedProgramOptions):
     'Insert this canonical display-name entry after `fee-proposal-drafter`:',
     '',
     '~~~ts',
-    `  '${options.slug}': '${options.name}',`,
+    `  '${options.slug}': ${tsString(options.name)},`,
     '~~~',
   ].join('\n');
 }
@@ -1335,11 +1336,11 @@ function renderFrontendUnifiedDiffShape(options: SimoneOsGovernedProgramOptions)
     '+++ b/frontend/src/lib/programNames.ts',
     '@@',
     "   'fee-proposal-drafter': 'Fee Proposal Drafter',",
-    `+  '${options.slug}': '${options.name}',`,
+    `+  '${options.slug}': ${tsString(options.name)},`,
   ].join('\n');
 }
 
-function renderGovernedMemoMarkdownRendererSource(): string {
+function renderGovernedMemoMarkdownRendererSource(options: { slug: string; rendererSymbol: string }): string {
   return [
     "import {",
     "  registerArtifactRenderer,",
@@ -1348,7 +1349,7 @@ function renderGovernedMemoMarkdownRendererSource(): string {
     '',
     'type RecordValue = Record<string, unknown>;',
     '',
-    'export function registerGovernedMemoMiniRenderers(): void {',
+    `export function ${options.rendererSymbol}(): void {`,
     "  registerArtifactRenderer('governed_memo_markdown', (domain) => {",
     "    const artifact = readRecord(domain.get('work.memo_artifact'));",
     "    const body = readString(domain.get('work.memo_artifact.body')) || readString(artifact.body);",
@@ -1383,27 +1384,27 @@ function renderGovernedMemoMarkdownRendererSource(): string {
     "  return base.length > 0 ? base : 'governed-memo';",
     '}',
     '',
-    'registerGovernedMemoMiniRenderers();',
+    `${options.rendererSymbol}();`,
   ].join('\n');
 }
 
-function renderGovernedMemoMarkdownRendererTestSource(): string {
+function renderGovernedMemoMarkdownRendererTestSource(options: { slug: string; rendererSymbol: string }): string {
   return [
     "import { afterEach, beforeEach, describe, expect, it } from 'vitest';",
     "import {",
     "  renderArtifact,",
     "  _clearArtifactRendererRegistryForTests,",
     "} from '../../host/artifact-renderer';",
-    "import { registerGovernedMemoMiniRenderers } from '../register-governed-memo-mini';",
+    `import { ${options.rendererSymbol} } from '../register-${options.slug}';`,
     '',
     'function makeDomain(entries: Array<[string, unknown]>): ReadonlyMap<string, unknown> {',
     '  return new Map(entries);',
     '}',
     '',
-    "describe('governed-memo-mini Markdown renderer', () => {",
+    `describe('${options.slug} Markdown renderer', () => {`,
     '  beforeEach(() => {',
     '    _clearArtifactRendererRegistryForTests();',
-    '    registerGovernedMemoMiniRenderers();',
+    `    ${options.rendererSymbol}();`,
     '  });',
     '',
     '  afterEach(() => {',
@@ -1515,10 +1516,22 @@ function toCamelCase(value: string): string {
   return `${pascal[0]?.toLowerCase() ?? ''}${pascal.slice(1)}`;
 }
 
+function rendererSymbolForSlug(slug: string): string {
+  return `register${toPascalCase(slug)}Renderers`;
+}
+
 function toConstantPrefix(value: string): string {
   return value
     .split(/[^a-zA-Z0-9]+/)
     .filter(Boolean)
     .map((part) => part.toUpperCase())
     .join('_');
+}
+
+function tsString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
 }

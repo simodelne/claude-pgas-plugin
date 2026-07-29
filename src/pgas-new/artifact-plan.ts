@@ -31,6 +31,7 @@ export interface ProgramIdentity {
 }
 
 const SAFE_PROGRAM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SAFE_PROGRAM_NAME = /^[A-Za-z0-9][A-Za-z0-9 .,_()/&+-]*$/;
 
 export function validateProgramIdentity(program: ProgramIdentity): ProgramIdentity {
   if (!SAFE_PROGRAM_SLUG.test(program.slug)) {
@@ -39,6 +40,9 @@ export function validateProgramIdentity(program: ProgramIdentity): ProgramIdenti
 
   if (program.name.trim().length === 0) {
     throw new Error('invalid --name: value must not be empty');
+  }
+  if (!SAFE_PROGRAM_NAME.test(program.name)) {
+    throw new Error('invalid --name: use letters, numbers, spaces, and .,_()/&+- only');
   }
 
   return program;

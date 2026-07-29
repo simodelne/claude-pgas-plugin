@@ -656,6 +656,7 @@ function scanSafety(
     allowedImports.add(options.allowedIntegrationImport);
   }
   const allowedProcessEnv = new Set(options.allowedProcessEnv ?? []);
+  const processAliases = new Set(['process']);
   const visit = (node: ts.Node): void => {
     if (error) return;
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -683,11 +684,20 @@ function scanSafety(
         return;
       }
     }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      if (isProcessObjectExpression(node.initializer, processAliases)) {
+        processAliases.add(node.name.text);
+      }
+    }
+    if (isFetchReference(node) && !options.allowFetch) {
+      error = 'banned capability: fetch';
+      return;
+    }
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Function') {
       error = 'banned capability: Function constructor';
       return;
     }
-    const envName = processEnvReadName(node);
+    const envName = processEnvReadName(node, processAliases);
     if (envName !== undefined) {
       if (envName === null || !allowedProcessEnv.has(envName)) {
         error = 'banned capability: process.env secret read';
@@ -717,25 +727,106 @@ function isBannedStageImport(specifier: string): boolean {
   ].includes(specifier);
 }
 
-function processEnvReadName(node: ts.Node): string | null | undefined {
-  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+function isFetchReference(node: ts.Node): boolean {
+  if (ts.isIdentifier(node) && node.text === 'fetch') {
+    return isIdentifierReference(node);
+  }
+  if (ts.isPropertyAccessExpression(node) && node.name.text === 'fetch') {
+    return true;
+  }
+  if (ts.isElementAccessExpression(node) && memberName(node) === 'fetch') {
+    return true;
+  }
+  return false;
+}
+
+function isIdentifierReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (!parent) return true;
+  if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent)) && parent.name === node) {
+    return false;
+  }
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+    return false;
+  }
+  if (ts.isPropertyAssignment(parent) && parent.name === node) {
+    return false;
+  }
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) {
+    return false;
+  }
+  return true;
+}
+
+function processEnvReadName(node: ts.Node, processAliases: ReadonlySet<string>): string | null | undefined {
+  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node.expression, processAliases)) {
     return node.name.text;
   }
-  if (ts.isElementAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+  if (ts.isElementAccessExpression(node) && isProcessEnvExpression(node.expression, processAliases)) {
     const argument = node.argumentExpression;
     return argument && ts.isStringLiteral(argument) ? argument.text : null;
   }
-  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node)) {
+  if (
+    (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+    isProcessEnvExpression(node, processAliases)
+  ) {
     return null;
   }
   return undefined;
 }
 
-function isProcessEnvExpression(node: ts.Expression): boolean {
-  return ts.isPropertyAccessExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === 'process' &&
-    node.name.text === 'env';
+function isProcessEnvExpression(node: ts.Expression, processAliases: ReadonlySet<string>): boolean {
+  const expression = unwrapExpression(node);
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    return memberName(expression) === 'env' && isProcessObjectExpression(expression.expression, processAliases);
+  }
+  return false;
+}
+
+function isProcessObjectExpression(node: ts.Expression, processAliases: ReadonlySet<string>): boolean {
+  const expression = unwrapExpression(node);
+  if (ts.isIdentifier(expression)) {
+    return processAliases.has(expression.text);
+  }
+  const path = memberPath(expression);
+  return path.length > 0 && path[path.length - 1] === 'process';
+}
+
+function memberPath(node: ts.Expression): string[] {
+  const expression = unwrapExpression(node);
+  if (ts.isIdentifier(expression)) {
+    return [expression.text];
+  }
+  if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+    return ['this'];
+  }
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    const name = memberName(expression);
+    if (!name) return [];
+    return [...memberPath(expression.expression), name];
+  }
+  return [];
+}
+
+function memberName(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): string | undefined {
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.name.text;
+  }
+  const argument = node.argumentExpression;
+  return argument && ts.isStringLiteral(argument) ? argument.text : undefined;
+}
+
+function unwrapExpression(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
 }
 
 function exportsRunStage(source: ts.SourceFile): boolean {
@@ -1258,7 +1349,7 @@ async function runRepoIntegrationLoopbackGate(
   }
 
   try {
-    const runStage = loadRunStageForBehavior(body, { env: { ...process.env } });
+    const runStage = loadRunStageForBehavior(body, { allowFetch: true, env: { ...process.env } });
     const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec, options.reasoningContracts);
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
@@ -1301,6 +1392,7 @@ async function runRepoIntegrationLoopbackGate(
 function loadRunStageForBehavior(
   body: string,
   options: {
+    allowFetch?: boolean;
     env?: Record<string, string | undefined>;
     modules?: Record<string, Record<string, unknown>>;
   } = {},
@@ -1319,8 +1411,8 @@ function loadRunStageForBehavior(
     module: moduleObject,
     Buffer,
     crypto: globalThis.crypto,
-    fetch,
-    process: { env: options.env ?? process.env },
+    ...(options.allowFetch ? { fetch } : {}),
+    ...(options.env ? { process: { env: options.env } } : {}),
     require: (specifier: string) => {
       const moduleExports = options.modules?.[specifier];
       if (!moduleExports) {

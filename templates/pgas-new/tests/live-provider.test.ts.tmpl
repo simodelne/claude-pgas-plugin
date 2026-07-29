@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
 
-const hasLiveProvider = Boolean(process.env.PGAS_LIVE_PROVIDER && process.env.PGAS_API_BASE && process.env.PGAS_API_TOKEN);
+const missingLiveProviderEnv = ['PGAS_LIVE_PROVIDER', 'PGAS_API_BASE', 'PGAS_API_TOKEN']
+  .filter((name) => !process.env[name]);
+const hasLiveProvider = missingLiveProviderEnv.length === 0;
 const requireLive = process.env.PGAS_REQUIRE_LIVE === '1';
 const liveIt = hasLiveProvider || requireLive ? it : it.skip;
 // Real LLM round trips routinely take 10-60s. The default 5s vitest timeout would
@@ -40,11 +42,10 @@ describe('{{SLUG}} live-provider graduation', () => {
     expect(process.env.PGAS_LIVE_PROVIDER).toBeTruthy();
   }, LIVE_PROVIDER_TIMEOUT_MS);
 
-  it('documents the live-provider graduation gate when env is absent', () => {
+  it('keeps live-provider graduation disabled until provider env is present', () => {
     if (!hasLiveProvider) {
-      expect('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation').toContain(
-        'PGAS_LIVE_PROVIDER',
-      );
+      expect(missingLiveProviderEnv.length).toBeGreaterThan(0);
+      expect(liveIt).toBe(it.skip);
     }
   });
 });

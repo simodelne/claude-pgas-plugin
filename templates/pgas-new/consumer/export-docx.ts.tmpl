@@ -53,7 +53,7 @@ function toParagraphs(body: string | string[]): string[] {
 
 function paragraph(text: string, style: 'Title' | 'Heading1' | 'Normal'): string {
   const styleRun = style === 'Normal' ? '' : `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>`;
-  return `<w:p>${styleRun}<w:r><w:t xml:space="preserve">${escapeXml(stripHtml(text))}</w:t></w:r></w:p>`;
+  return `<w:p>${styleRun}<w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 function contentTypesXml(): string {
@@ -140,10 +140,6 @@ function concat(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.length;
   }
   return output;
-}
-
-function stripHtml(value: string): string {
-  return value.replace(/<[^>]*>/gu, ' ').replace(/\s+/gu, ' ').trim();
 }
 
 function escapeXml(value: string): string {

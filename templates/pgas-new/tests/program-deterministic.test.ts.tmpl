@@ -1,14 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import { createTestHarness } from '@simodelne/pgas-server/testing.js';
+import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
 
 describe('{{SLUG}} deterministic runtime', () => {
-  it('creates a deterministic PGAS test harness', async () => {
+  it('drives the skeleton program through a deterministic trigger path', async () => {
     const harness = await createTestHarness(create{{PASCAL_NAME}}ProgramEntry(), {
       programName: '{{SLUG}}',
       defaultChannel: 'user_text',
+      authorResponses: [
+        effect('begin_work'),
+        effect('example_action'),
+      ],
     });
 
-    expect(harness).toBeDefined();
+    try {
+      await harness.trigger('start deterministic scaffold');
+      await harness.trigger('finish deterministic scaffold');
+      const snapshot = await harness.snapshot();
+
+      expect(snapshot.mode).toBe('complete');
+      expect(snapshot.domain).toMatchObject({
+        'work.started': true,
+        'work.example_ready': true,
+      });
+      expect(snapshot.rounds.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await harness.close();
+    }
   });
 });
+
+function effect(name: string): TestHarnessAuthorResponse {
+  return {
+    actions: [{
+      kind: 'EffectAction',
+      name,
+      channel: 'widget_output',
+      payload: {},
+    }],
+  };
+}
