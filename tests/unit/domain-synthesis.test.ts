@@ -235,6 +235,55 @@ function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
   };
 }
 
+function exportKindReloadArtifact(): SynthesizedArtifact {
+  return {
+    ...artifactWithContext(),
+    mode_names: ['intake', 'compose_memo', 'export_document', 'complete'],
+    stage_classification: [
+      { slug: 'compose_memo', archetype: 'pure-compute', rationale: 'compose memo deterministically' },
+      { slug: 'export_document', archetype: 'pure-compute', export_kind: 'export_docx', rationale: 'render deterministic DOCX export' },
+    ],
+    body_stage_slugs: ['export_document'],
+    export_descriptors: undefined,
+    synthesis_context: {
+      program_slug: 'export-kind-reload',
+      program_name: 'Export Kind Reload',
+      purpose: 'Compose a memo and render a deterministic DOCX export.',
+      entry_channel: 'user_text',
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'compose_memo' },
+        {
+          slug: 'export_document',
+          domain_spec: {
+            reads: ['compose_memo.output.result_json'],
+            produces: {
+              result_json: {
+                stage: 'string',
+                docx_base64: 'string',
+                docx_bytes: 'number',
+                sha256: 'string',
+                section_count: 'number',
+              },
+              items_json: ['docx_export:<sha256>'],
+            },
+            rules: ['Render accumulated stage state into a deterministic DOCX export.'],
+            invariants: ['Do not call an LLM or provider while rendering export bytes.'],
+          },
+        },
+        { slug: 'complete', is_terminal: true },
+      ],
+      transitions: [
+        { from: 'intake', to: 'compose_memo', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'compose_memo', to: 'export_document', trigger: 'composed', guard_field: 'compose_memo.ready' },
+        { from: 'export_document', to: 'complete', trigger: 'exported', guard_field: 'export_document.ready' },
+      ],
+      delegation: { enabled: false },
+      completion: { final_stage: 'complete', guard_field: 'export_document.ready' },
+    },
+  };
+}
+
 function withCache<T>(fn: (cacheDir: string) => Promise<T>): Promise<T> {
   const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-domain-synthesis-test-'));
   return fn(cacheDir).finally(() => rmSync(cacheDir, { recursive: true, force: true }));
@@ -339,6 +388,26 @@ describe('domain logic synthesis', () => {
       for (const entry of result.domain_synthesis_audit ?? []) {
         expect(entry.behavioral_gate).not.toBe('not_applicable');
       }
+    });
+  });
+
+  it('preserves export_kind on artifact reload for deterministic export body generation', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(exportKindReloadArtifact(), {
+        cacheDir,
+        generator: async () => {
+          throw new Error('export_kind reload must use the deterministic export renderer');
+        },
+      });
+
+      expect(result.stage_sources?.export_document).toContain("from '../export/docx.js'");
+      expect(result.stage_sources?.export_document).toContain('renderStructuredDocxDocument');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'export_document',
+        archetype: 'pure-compute',
+        export_kind: 'export_docx',
+        cache_hit: false,
+      }));
     });
   });
 

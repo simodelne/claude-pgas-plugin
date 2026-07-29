@@ -944,13 +944,21 @@ function applyExportDecisionOnlyModeWiring(
   modes: MutableRecord,
   exportActions: TransitionAction[],
 ): void {
-  for (const action of exportActions) {
-    const mode = recordField(modes, action.source);
+  const actionsBySource = actionsBySourceMode(exportActions);
+  for (const [source, actions] of actionsBySource) {
+    for (const action of actions) {
+      if (actions.length > 1 && action.guardField?.startsWith(`${source}.`)) {
+        throw new Error(
+          `decision-only export stage ${source} has branched source-local guard ${action.guardField}; the export hook cannot satisfy source-local branch guards`,
+        );
+      }
+    }
+    const mode = recordField(modes, source);
     mode.decision_only = true;
     mode.vocabulary = [];
     mode.channels = [];
     delete mode.preconditions;
-    mode.transitions = [exportDecisionOnlyTransition(action)];
+    mode.transitions = actions.map(exportDecisionOnlyTransition);
   }
 }
 
@@ -4638,15 +4646,15 @@ function collectionLifecycleApplyEvent(
   if (!Array.isArray(parsedItems)) {
     return violation('missing_item', eventFrom);
   }
-  const items = parsedItems.filter((item): item is Record<string, unknown> =>
-    !!item && typeof item === 'object' && !Array.isArray(item),
+  const itemIndex = parsedItems.findIndex((item) =>
+    !!item && typeof item === 'object' && !Array.isArray(item) && (item as Record<string, unknown>)[idField] === itemId,
   );
-  const itemIndex = items.findIndex((item) => item[idField] === itemId);
   if (itemIndex < 0) {
     return violation('missing_item', eventFrom);
   }
 
-  const currentStatus = items[itemIndex]?.[statusField];
+  const currentItem = parsedItems[itemIndex] as Record<string, unknown>;
+  const currentStatus = currentItem[statusField];
   const from = typeof currentStatus === 'string' ? currentStatus : '';
   const transition = transitions.find((candidate) =>
     candidate.action === action && candidate.from === from && candidate.to === attemptedTo);
@@ -4657,8 +4665,10 @@ function collectionLifecycleApplyEvent(
     return violation('guard_false', from);
   }
 
-  const nextItems = items.map((item, index) =>
-    index === itemIndex ? { ...item, [statusField]: attemptedTo } : item,
+  const nextItems = parsedItems.map((item, index) =>
+    index === itemIndex && item && typeof item === 'object' && !Array.isArray(item)
+      ? { ...item as Record<string, unknown>, [statusField]: attemptedTo }
+      : item,
   );
   return {
     mutations: [
@@ -5005,6 +5015,10 @@ interface PendingConfirmationDecision {
   decision: string;
   instruction: string;
   target_index: number;
+  target_item_id?: string;
+  target_item_title?: string;
+  target_item_status?: string;
+  timestamp?: string;
 }
 
 function mirrorConfirmationLoopProposalPayload(
@@ -5526,6 +5540,10 @@ function confirmationLoopPendingDecision(value: unknown, snapshot: ReadonlyMap<s
       decision,
       instruction: typeof record.instruction === 'string' ? record.instruction : '',
       target_index: targetIndex,
+      ...(typeof record.target_item_id === 'string' ? { target_item_id: record.target_item_id } : {}),
+      ...(typeof record.target_item_title === 'string' ? { target_item_title: record.target_item_title } : {}),
+      ...(typeof record.target_item_status === 'string' ? { target_item_status: record.target_item_status } : {}),
+      ...(typeof record.timestamp === 'string' ? { timestamp: record.timestamp } : {}),
     },
   };
 }
@@ -5549,12 +5567,22 @@ function confirmationLoopPendingDecisionFromInputs(snapshot: ReadonlyMap<string,
         ? String(snapshot.get('inputs.user_decision.instruction'))
         : '',
       target_index: targetIndex,
+      ...(typeof snapshot.get('inputs.user_decision.target_item_id') === 'string' ? { target_item_id: String(snapshot.get('inputs.user_decision.target_item_id')) } : {}),
+      ...(typeof snapshot.get('inputs.user_decision.target_item_title') === 'string' ? { target_item_title: String(snapshot.get('inputs.user_decision.target_item_title')) } : {}),
+      ...(typeof snapshot.get('inputs.user_decision.target_item_status') === 'string' ? { target_item_status: String(snapshot.get('inputs.user_decision.target_item_status')) } : {}),
+      ...(typeof snapshot.get('inputs.user_decision.timestamp') === 'string' ? { timestamp: String(snapshot.get('inputs.user_decision.timestamp')) } : {}),
     },
   };
 }
 
 function confirmationLoopPendingFingerprint(pending: PendingConfirmationDecision): string {
-  return JSON.stringify(pending);
+  return pending.timestamp && pending.timestamp.length > 0
+    ? pending.timestamp
+    : JSON.stringify({
+        decision: pending.decision,
+        instruction: pending.instruction,
+        target_index: pending.target_index,
+      });
 }
 
 function confirmationLoopTargetIndex(value: unknown): number {

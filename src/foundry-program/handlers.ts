@@ -241,7 +241,9 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
           ? normalizeDocumentsSentinelValue(stored)
           : stored;
       const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
-      const normalized = parseAndNormalizeJson(value, path);
+      const normalized = path === 'intake.stages_json'
+        ? parseAndNormalizeStagesJson(value)
+        : parseAndNormalizeJson(value, path);
       assertJsonTopLevelType(normalized.value, expectedType, path);
       const canonical = normalized.canonical;
       return canonical === stored ? [] : [{ op: 'MSet' as const, path, value: canonical }];
@@ -347,7 +349,7 @@ function staleTransitionRefreshMutation(snapshot: ReadonlyMap<string, unknown>) 
     return [];
   }
 
-  const stages = parseAndNormalizeJson(stagesRaw, 'intake.stages_json');
+  const stages = parseAndNormalizeStagesJson(stagesRaw);
   const transitions = parseAndNormalizeJson(transitionsRaw, 'intake.transitions_json');
   const completion = parseAndNormalizeJson(completionRaw, 'intake.completion_json');
   assertJsonTopLevelType(stages.value, 'array', 'intake.stages_json');

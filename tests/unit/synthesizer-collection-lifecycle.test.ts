@@ -4,13 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import {
   createCollectionLifecycleApplyReaction,
   createCollectionLifecycleAllTerminalReaction,
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
+import { loadGeneratedReactionHandlers } from './generated-handlers-loader.js';
 
 const baseDomain = {
   'program.slug': 'work-unit-flow',
@@ -250,6 +251,41 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(result.violation).toBeUndefined();
   });
 
+  it('generated json_string lifecycle apply preserves non-object array entries', () => {
+    const jsonStringLifecycle = {
+      ...clone(genericLifecycle),
+      storage: {
+        ...genericLifecycle.storage,
+        representation: 'json_string' as const,
+      },
+    };
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(jsonStringLifecycle));
+    const reaction = requiredGeneratedReaction(
+      loadGeneratedReactionHandlers(artifact.handlers_ts),
+      'apply_work_units_lifecycle_event',
+    );
+    const result = reaction(new Map<string, unknown>([
+      [
+        'work_units.items_json',
+        JSON.stringify([
+          'legacy-freeform-entry',
+          { id: 'wu-1', status: 'pending', title: 'One' },
+        ]),
+      ],
+      [
+        'work_units.pending_event_json',
+        lifecycleIntentEvent('wu-1', 'start_review', 'in_review', 'pending'),
+      ],
+    ]), 'AfterRound', 'review_work');
+    const values = generatedMutationValues(result);
+
+    expect(JSON.parse(String(values.get('work_units.items_json')))).toEqual([
+      'legacy-freeform-entry',
+      { id: 'wu-1', status: 'in_review', title: 'One' },
+    ]);
+    expect(values.get('work_units.pending_event_json')).toBe('');
+  });
+
   it('records a violation and leaves status unchanged for an undeclared transition', () => {
     const result = runApplyReaction(
       [{ id: 'wu-1', status: 'pending', title: 'One' }],
@@ -443,6 +479,20 @@ function runAllTerminalReaction(
   const stored = typeof items === 'string' ? items : JSON.stringify(items);
   const result = reaction(new Map([['work_units.items_json', stored]]), 'AfterMutation', 'review_work');
   return result?.mutations?.find((mutation) => mutation.path === 'work_units.all_terminal')?.value;
+}
+
+function requiredGeneratedReaction(handlers: Map<string, ReactionHandler>, name: string): ReactionHandler {
+  const reaction = handlers.get(name);
+  if (!reaction) {
+    throw new Error(`missing generated reaction ${name}`);
+  }
+  return reaction;
+}
+
+function generatedMutationValues(result: ReactionResult | void | undefined): Map<string, unknown> {
+  return new Map((result?.mutations ?? [])
+    .filter((mutation) => mutation.op === 'MSet')
+    .map((mutation) => [mutation.path, mutation.value]));
 }
 
 function hashArtifact(artifact: SynthesizedSpec): Record<string, string> {

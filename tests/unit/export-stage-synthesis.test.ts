@@ -122,6 +122,34 @@ describe('PR-E2 export stage synthesis', () => {
     expect(authorSurfaces).not.toContain('"produces"');
   });
 
+  it('preserves all externally guarded decision-only export transitions from one source mode', () => {
+    const artifact = synthesizeProgramSpecFromDomain(branchedExportDomain());
+    const spec = load(artifact.spec_yaml) as {
+      modes: Record<string, { decision_only?: boolean; vocabulary?: string[]; channels?: string[]; transitions?: Array<{ target: string; guard?: { kind: string; path: string } }> }>;
+      action_map: Record<string, unknown>;
+      proceed_to: Record<string, string>;
+    };
+
+    expect(spec.modes.export_document).toMatchObject({
+      decision_only: true,
+      vocabulary: [],
+      channels: [],
+    });
+    expect(spec.modes.export_document.transitions).toEqual([
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'routing.export_ready' } },
+      { target: 'blocked', guard: { kind: 'FieldTruthy', path: 'routing.export_blocked' } },
+    ]);
+    expect(Object.keys(spec.action_map).filter((name) => name.startsWith('advance_export_document'))).toEqual([]);
+    expect(Object.keys(spec.proceed_to).filter((name) => name.startsWith('advance_export_document'))).toEqual([]);
+  });
+
+  it('rejects branched decision-only export transitions with source-local guards', () => {
+    expect(() => synthesizeProgramSpecFromDomain(branchedExportDomain({
+      completeGuard: 'export_document.ready',
+      blockedGuard: 'export_document.blocked',
+    }))).toThrow(/decision-only export.*export_document.*source-local guard/u);
+  });
+
   it('does not ask the model to emit a deterministic export wrapper action', () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
     const spec = load(artifact.spec_yaml) as {
@@ -396,6 +424,54 @@ function exportDomain(): Record<string, unknown> {
     ]),
     'intake.delegation_json': JSON.stringify({}),
     'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'export_document.ready' }),
+  };
+}
+
+function branchedExportDomain(overrides: {
+  completeGuard?: string;
+  blockedGuard?: string;
+} = {}): Record<string, unknown> {
+  const completeGuard = overrides.completeGuard ?? 'routing.export_ready';
+  const blockedGuard = overrides.blockedGuard ?? 'routing.export_blocked';
+  return {
+    'program.slug': 'branched-export-demo',
+    'program.name': 'Branched Export Demo',
+    'program.target_dir': '/tmp/branched-export-demo',
+    'intake.purpose': 'Compose a short memo and route the deterministic export to complete or blocked.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'compose_memo' },
+      {
+        slug: 'export_document',
+        kind: 'export_docx',
+        domain_spec: {
+          reads: ['compose_memo.output.result_json'],
+          produces: {
+            result_json: {
+              stage: 'string',
+              docx_base64: 'string',
+              docx_bytes: 'number',
+              sha256: 'string',
+              section_count: 'number',
+            },
+            items_json: ['docx_export:<sha256>'],
+          },
+          rules: ['Render accumulated stage state into a deterministic DOCX export.'],
+          invariants: ['Do not call an LLM or provider while rendering export bytes.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+      { slug: 'blocked', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'compose_memo', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'compose_memo', to: 'export_document', trigger: 'composed', guard_field: 'compose_memo.ready' },
+      { from: 'export_document', to: 'complete', trigger: 'exported', guard_field: completeGuard },
+      { from: 'export_document', to: 'blocked', trigger: 'blocked', guard_field: blockedGuard },
+    ]),
+    'intake.delegation_json': JSON.stringify({}),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: completeGuard }),
   };
 }
 
