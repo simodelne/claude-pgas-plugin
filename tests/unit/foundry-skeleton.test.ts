@@ -44,12 +44,13 @@ describe('foundry generic program skeleton', () => {
     }
   });
 
-  it('declares the FM1 handler index plus resolver layout', () => {
+  it('declares the FM1 handler index plus engine notebook handlers', () => {
     const handlers = readFileSync(HANDLERS_SKELETON, 'utf8');
 
     expect(handlers).toContain('handlers/index.ts');
-    expect(handlers).toContain('handlers/_resolver.ts');
-    expect(handlers).toContain('resolveDomainValue');
+    expect(handlers).toContain('async record_note(payload)');
+    expect(handlers).toContain('async pin_note(payload)');
+    expect(handlers).toContain('async delete_note(payload)');
   });
 
   it('declares the internal mode-entry channel for bootstrap continuation', () => {

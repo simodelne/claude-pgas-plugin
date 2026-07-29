@@ -220,7 +220,10 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(parsed.modes.review_work.vocabulary).toEqual([
       'propose_item',
       'complete_review_work',
-      'record_user_note',
+      'record_note',
+      'pin_note',
+      'unpin_note',
+      'delete_note',
       'session_new',
       'session_abort_current',
       'session_status',
@@ -672,9 +675,9 @@ describe('confirmation_loop descriptor synthesis', () => {
 
   it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: 'b28aa4952713e672ef4ce1fe91560a845a50c453fe1aa100dbe2d83009be994b',
+      spec_yaml: 'e75ac5ddd1dbb7479247f4865b5ce63100eb2e084ff5f83d9356d3962964beae',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
-      handlers_ts: '487b83115c463a60c3c53d3ccb21350e05a4f4d29a39d9f03ad77e804e56d04d',
+      handlers_ts: '3a199dedfb60608b43be6403ca002ed6d79a4fedc7cfa0ab27c02c0777eceab7',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
       tools_ts: 'ba348055c634de2e2f58dd88a696d53614266b13c29ed03a9568cf3a3545bfe7',
       smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
