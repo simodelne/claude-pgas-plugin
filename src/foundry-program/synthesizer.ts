@@ -222,6 +222,7 @@ interface TransitionAction {
 interface TerminalActionDescriptor {
   name: string;
   channel: string;
+  payloadExample?: Record<string, string>;
 }
 
 interface PlannedTransitionAction {
@@ -2333,6 +2334,13 @@ function applyConfirmationLoopReactions(
       ],
       write_scope: [confirmationLoopSummaryPath(loop)],
     };
+    const proposalFieldPaths = confirmationLoopProposalFields(loop, lifecycle)
+      .map((field) => confirmationLoopProposalFieldPath(loop, field));
+    reactions[confirmationLoopMirrorProposalReactionName(loop)] = {
+      event: 'AfterMutation',
+      watch: [confirmationLoopRawPayloadMutationsPath(loop)],
+      write_scope: proposalFieldPaths,
+    };
     reactions[confirmationLoopChoreographReactionName(loop)] = {
       event: 'AfterRound',
       watch: [],
@@ -2476,14 +2484,15 @@ function applyConfirmationLoopPrompts(
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     const completionActionNames = completionActions.map((action) => action.name);
+    const proposalPayload = confirmationLoopProposalPayloadExample(loop, lifecycle);
     const terminalActions = [
-      { name: proposeAction, channel: 'widget_output' },
+      { name: proposeAction, channel: 'widget_output', payloadExample: proposalPayload },
       ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
     ];
     const completionInstruction = completionActionNames.length > 0
       ? ` When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
       : ` When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
-    prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
+    prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. For ${proposeAction}, emit the proposal content as top-level payload fields, not payload.mutations; use payload: ${JSON.stringify(proposalPayload)} and do not emit an empty proposed_text. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
   }
 }
 
@@ -2501,8 +2510,9 @@ function applyConfirmationLoopGuidance(
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     const completionActionNames = completionActions.map((action) => action.name);
+    const proposalPayload = confirmationLoopProposalPayloadExample(loop, lifecycle);
     const terminalActions = [
-      { name: proposeAction, channel: 'widget_output' },
+      { name: proposeAction, channel: 'widget_output', payloadExample: proposalPayload },
       ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
     ];
     guidance[loop.stage] = [
@@ -2510,6 +2520,7 @@ function applyConfirmationLoopGuidance(
       terminalActionInstruction(terminalActions),
       `Work through the ${lifecycle.item_label}s one at a time from ${confirmationLoopSummaryPath(loop)}.active_item; the runtime selects the target item for ${proposeAction}.`,
       'Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content.',
+      `For ${proposeAction}, emit the proposal content as top-level payload fields, not payload.mutations; use payload: ${JSON.stringify(proposalPayload)} and do not emit an empty proposed_text.`,
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
       ...(completionActionNames.length > 0
@@ -2532,16 +2543,19 @@ function applyConfirmationLoopIntentActions(
     if (Object.prototype.hasOwnProperty.call(actionMap, actionName)) {
       throw new Error(`confirmation_loop propose action collides with generated action_map: ${actionName}`);
     }
-    const contentMutations = confirmationLoopProposalFields(loop, lifecycle)
+    const proposalFields = confirmationLoopProposalFields(loop, lifecycle);
+    const contentMutations = proposalFields
       .map((field) => ({
         op: 'MSet',
         path: confirmationLoopProposalFieldPath(loop, field),
         value: '',
         from_arg: field,
       }));
+    const proposalPayload = confirmationLoopProposalPayloadExample(loop, lifecycle);
     actionMap[actionName] = {
-      description: `Propose ${lifecycle.item_label} content for user confirmation. The runtime selects the item under review; do not attempt to pick or write items.`,
+      description: `Propose ${lifecycle.item_label} content for user confirmation. The runtime selects which ${lifecycle.item_label} is under review; do not choose a different item. You must author the ${lifecycle.item_label} content in proposed_text using top-level payload fields, for example payload: ${JSON.stringify(proposalPayload)}. Emit top-level payload fields, not payload.mutations, and do not emit an empty proposed_text.`,
       mutations: [
+        { op: 'MSet', path: confirmationLoopRawPayloadMutationsPath(loop), value: [], from_arg: 'mutations' },
         ...contentMutations,
         { op: 'MAppend', path: confirmationLoopProposalLogPath(loop), value: 'proposed' },
       ],
@@ -2646,6 +2660,7 @@ function applyConfirmationLoopSchema(
     schema[confirmationLoopDemotionCounterPath(loop)] = 'number';
     schema[confirmationLoopAppliedDecisionPath(loop)] = 'string';
     schema[confirmationLoopProposalPath(loop)] = 'object';
+    schema[confirmationLoopRawPayloadMutationsPath(loop)] = 'any';
     for (const field of confirmationLoopProposalFields(loop, lifecycle)) {
       schema[confirmationLoopProposalFieldPath(loop, field)] = 'string';
     }
@@ -2666,6 +2681,10 @@ function confirmationLoopEnforceReactionName(loop: ConfirmationLoopDescriptor): 
 
 function confirmationLoopSummarizeReactionName(loop: ConfirmationLoopDescriptor): string {
   return `summarize_${safeIdentifier(loop.stage)}_approval`;
+}
+
+function confirmationLoopMirrorProposalReactionName(loop: ConfirmationLoopDescriptor): string {
+  return `mirror_${safeIdentifier(loop.stage)}_proposal_payload`;
 }
 
 function confirmationLoopChoreographReactionName(loop: ConfirmationLoopDescriptor): string {
@@ -2762,6 +2781,10 @@ function confirmationLoopProposalPath(loop: ConfirmationLoopDescriptor): string 
   return `${safeIdentifier(loop.stage)}.proposal`;
 }
 
+function confirmationLoopRawPayloadMutationsPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopProposalPath(loop)}.raw_payload_mutations`;
+}
+
 function confirmationLoopProposalFieldPath(loop: ConfirmationLoopDescriptor, field: string): string {
   return `${confirmationLoopProposalPath(loop)}.${field}`;
 }
@@ -2800,12 +2823,28 @@ function confirmationLoopProposalFields(
   const titleField = loop.item_title_field ?? 'title';
   const statusField = lifecycle.item.status_field;
   const instructionFields = confirmationLoopInstructionFields(loop);
-  return Object.keys(lifecycle.item.schema)
+  const fields = Object.keys(lifecycle.item.schema)
     .filter((field) =>
       field !== idField &&
       field !== titleField &&
       field !== statusField &&
       !instructionFields.has(field));
+  return unique([
+    ...fields.filter((field) => field === 'proposed_text'),
+    ...fields.filter((field) => field !== 'proposed_text'),
+  ]);
+}
+
+function confirmationLoopProposalPayloadExample(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): Record<string, string> {
+  return Object.fromEntries(
+    confirmationLoopProposalFields(loop, lifecycle).map((field) => [
+      field,
+      field === 'proposed_text' ? '<the drafted section text>' : '...',
+    ]),
+  );
 }
 
 function confirmationLoopActiveItemFields(
@@ -4559,6 +4598,9 @@ function renderConfirmationLoopReactionEntries(
 ): string {
   return loops.map((loop) => {
     const decisions = confirmationLoopRuntimeDecisions(loop.decisions);
+    const proposalTargets = confirmationLoopProposalFields(loop, lifecycle)
+      .map((field) => `{ field: ${tsString(field)}, path: ${tsString(confirmationLoopProposalFieldPath(loop, field))} }`)
+      .join(', ');
     return `,
   [${tsString(confirmationLoopSaveReactionName(loop))}, (snapshot, trigger, mode) => {
     void trigger;
@@ -4596,6 +4638,15 @@ function renderConfirmationLoopReactionEntries(
       [${loop.aggregate.terminal_statuses.map(tsString).join(', ')}],
       ${tsString(confirmationLoopSummaryPath(loop))},
       [${confirmationLoopActiveItemFields(loop, lifecycle).map(tsString).join(', ')}],
+    );
+  }],
+  [${tsString(confirmationLoopMirrorProposalReactionName(loop))}, (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== ${tsString(loop.stage)}) return undefined;
+    return mirrorConfirmationLoopProposalPayload(
+      snapshot,
+      ${tsString(confirmationLoopRawPayloadMutationsPath(loop))},
+      [${proposalTargets}],
     );
   }],
   [${tsString(confirmationLoopChoreographReactionName(loop))}, (snapshot, trigger, mode) => {
@@ -4868,10 +4919,62 @@ function safeFanOutKey(documentId: string, index: number): string {
 function renderConfirmationLoopReactionHelper(): string {
   return `
 
+interface ConfirmationLoopProposalTarget {
+  field: string;
+  path: string;
+}
+
 interface PendingConfirmationDecision {
   decision: string;
   instruction: string;
   target_index: number;
+}
+
+function mirrorConfirmationLoopProposalPayload(
+  snapshot: ReadonlyMap<string, unknown>,
+  rawPayloadMutationsPath: string,
+  proposalTargets: readonly ConfirmationLoopProposalTarget[],
+): ReactionResult | undefined {
+  const rawPayloadMutations = snapshot.get(rawPayloadMutationsPath);
+  if (!Array.isArray(rawPayloadMutations) || rawPayloadMutations.length === 0) {
+    return undefined;
+  }
+  const targetPaths = new Set(proposalTargets.map((target) => target.path));
+  const recoveredByPath = new Map<string, string>();
+  for (const rawMutation of rawPayloadMutations) {
+    const mutation = confirmationLoopRawPayloadMutation(rawMutation);
+    if (!mutation) {
+      continue;
+    }
+    if (mutation.op !== 'MSet' || !targetPaths.has(mutation.path)) {
+      continue;
+    }
+    if (typeof mutation.value === 'string' && mutation.value.length > 0) {
+      recoveredByPath.set(mutation.path, mutation.value);
+    }
+  }
+  const mutations: ReactionResult['mutations'] = [];
+  for (const target of proposalTargets) {
+    const current = snapshot.get(target.path);
+    if (typeof current === 'string' && current.length > 0) {
+      continue;
+    }
+    const recovered = recoveredByPath.get(target.path);
+    if (typeof recovered === 'string' && recovered.length > 0) {
+      mutations.push({ op: 'MSet' as const, path: target.path, value: recovered });
+    }
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
+}
+
+function confirmationLoopRawPayloadMutation(value: unknown): { op: string; path: string; value: unknown } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.op === 'string' && typeof record.path === 'string'
+    ? { op: record.op, path: record.path, value: record.value }
+    : undefined;
 }
 
 function confirmationLoopSaveDecision(
@@ -9439,7 +9542,8 @@ function terminalActionInstruction(actions: TerminalActionDescriptor[]): string 
 }
 
 function terminalActionExample(action: TerminalActionDescriptor): string {
-  return `Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"${action.name}","channel":"${action.channel}","payload":{}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.`;
+  const payload = JSON.stringify(action.payloadExample ?? {});
+  return `Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"${action.name}","channel":"${action.channel}","payload":${payload}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.`;
 }
 
 function uniqueTerminalActionDescriptors(actions: TerminalActionDescriptor[]): TerminalActionDescriptor[] {
