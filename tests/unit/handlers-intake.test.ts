@@ -64,6 +64,71 @@ describe('intake Q-action handlers', () => {
     });
   });
 
+  it('normalize_intake_json_fields repairs malformed rich stages_json before stale-transition refresh', () => {
+    const reaction = reactionHandlers.get('normalize_intake_json_fields');
+    if (!reaction) throw new Error('missing normalize_intake_json_fields reaction');
+
+    const expectedStages = [
+      {
+        slug: 'intake',
+        is_bootstrap: true,
+        domain_spec: {
+          reads: ['inputs.initial_frontend_intake'],
+          produces: {
+            result_json: { stage: 'string', client_name: 'string' },
+            items_json: ['client:<client_name>'],
+          },
+          rules: ['Parse intake.'],
+          invariants: ['stage equals intake.'],
+        },
+      },
+      {
+        slug: 'fee_modelling',
+        domain_spec: {
+          reads: ['intake.output.result_json'],
+          produces: {
+            result_json: { stage: 'string', fixed_quote: 'number' },
+            items_json: ['fixed_quote:<fixed_quote>'],
+          },
+          rules: ['Compute quote.'],
+          invariants: ['stage equals fee_modelling.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ];
+    const malformedStagesJson = [
+      '{"slug":"intake","is_bootstrap":true,"domain_spec":{"reads":["inputs.initial_frontend_intake"],"produces":{"result_json":{"stage":"string","client_name":"string"},"items_json":["client:<client_name>"]},"rules":["Parse intake."],"invariants":["stage equals intake."]}',
+      '{"slug":"fee_modelling","domain_spec":{"reads":["intake.output.result_json"],"produces":{"result_json":{"stage":"string","fixed_quote":"number"},"items_json":["fixed_quote:<fixed_quote>"]},"rules":["Compute quote."],"invariants":["stage equals fee_modelling."]}',
+      '{"slug":"complete","is_terminal":true}',
+    ].join(',');
+
+    const result = reaction(
+      new Map<string, unknown>([
+        ['intake.stages_json', `[${malformedStagesJson}]`],
+        [
+          'intake.transitions_json',
+          JSON.stringify([
+            { from: 'intake', to: 'fee_modelling', trigger: 'ready', guard_field: 'intake.started' },
+            { from: 'fee_modelling', to: 'complete', trigger: 'done', guard_field: 'fee_modelling.ready' },
+          ]),
+        ],
+        ['intake.completion_json', JSON.stringify({ final_stage: 'complete', guard_field: 'fee_modelling.ready' })],
+      ]),
+      'user_text',
+      'intake_intelligence',
+    );
+
+    expect(result).toEqual({
+      mutations: [
+        {
+          op: 'MSet',
+          path: 'intake.stages_json',
+          value: JSON.stringify(expectedStages),
+        },
+      ],
+    });
+  });
+
   it('record_q3_stages accepts bracketed comma-lists via tolerant fallback', async () => {
     await expect(
       handlers.record_q3_stages({

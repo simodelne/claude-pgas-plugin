@@ -310,6 +310,41 @@ describe('assertReasoningContract', () => {
       .toThrow(/items_json templates verbatim/u);
   });
 
+  it('accepts string_array contract fields declared by domain-spec array hints', () => {
+    const domainSpec = {
+      reads: ['inputs.initial_user_text'],
+      produces: {
+        result_json: {
+          decision: 'string',
+          gaps: 'string[]',
+          ready: 'boolean',
+        },
+        items_json: ['decision:<decision>', 'ready:<ready>'],
+      },
+      rules: ['Extract the decision, gaps, and readiness flag.'],
+      invariants: ['gaps must remain an array-valued reasoning field.'],
+    };
+    const contract = validContract({
+      stage: 'brief_summary',
+      result_schema: {
+        fields: [
+          { name: 'decision', type: 'string', description: 'x' },
+          { name: 'gaps', type: 'string_array', description: 'x' },
+          { name: 'ready', type: 'boolean', description: 'x' },
+        ],
+        allow_extra_fields: true,
+      },
+      items_schema: { templates: ['decision:<decision>', 'ready:<ready>'], description: 'items' },
+      canned_example: {
+        result: { decision: 'ship', gaps: ['coverage'], ready: true },
+        items: ['decision:ship', 'ready:true'],
+      },
+    });
+
+    expect(() => assertReasoningContract(contract, { stage: 'brief_summary', domainSpec })).not.toThrow();
+    expect(runtimeTypeNameFor('string_array')).toBe('string');
+  });
+
   it('maps contract field types to nominal GKType runtime type names', () => {
     expect(runtimeTypeNameFor('string')).toBe('string');
     expect(runtimeTypeNameFor('enum')).toBe('string');
@@ -659,8 +694,8 @@ describe('deriveFallbackReasoningContract', () => {
             domain_spec: {
               reads: ['risk_assessment.output.result_json.risk_score'],
               produces: {
-                result_json: { stage: 'string', approved: 'boolean', basis: 'string', total_usd: 'number' },
-                items_json: ['approved:<approved>', 'total_usd:<total_usd>'],
+              result_json: { stage: 'string', approved: 'boolean', basis: 'string', risks: 'string[]', total_usd: 'number' },
+              items_json: ['approved:<approved>', 'risks:<risks>', 'total_usd:<total_usd>'],
               },
               rules: ['approved = total_usd <= budget.'],
               invariants: ['stage must equal recommendation.'],
@@ -672,11 +707,13 @@ describe('deriveFallbackReasoningContract', () => {
     expect(contract.result_schema.fields.map((field) => [field.name, field.type])).toEqual([
       ['approved', 'boolean'],
       ['basis', 'string'],
+      ['risks', 'string_array'],
       ['total_usd', 'number'],
     ]);
-    expect(contract.items_schema.templates).toEqual(['approved:<approved>', 'total_usd:<total_usd>']);
+    expect(contract.items_schema.templates).toEqual(['approved:<approved>', 'risks:<risks>', 'total_usd:<total_usd>']);
     expect(contract.canned_example.result.approved).toBe(true);
-    expect(contract.canned_example.items).toEqual(['approved:true', 'total_usd:1']);
+    expect(contract.canned_example.result.risks).toEqual(['sample risks']);
+    expect(contract.canned_example.items).toEqual(['approved:true', 'risks:sample risks', 'total_usd:1']);
   });
 
   it('derives an honest generic contract when the artifact has no synthesis context', () => {

@@ -54,6 +54,7 @@ export const PGAS_NEW_ACTIONS = [
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',
+  'revise_artifact_plan',
   'synthesize_domain_logic',
   'write_scaffold_artifacts',
   'npm_install',

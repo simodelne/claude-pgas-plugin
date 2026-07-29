@@ -1001,6 +1001,7 @@ function classificationFor(artifact: SynthesizedArtifact, stage: string): StageC
     ...(typeof record.integration_method === 'string' ? { integration_method: record.integration_method } : {}),
     ...(record.integration_gap === true ? { integration_gap: true } : {}),
     ...(typeof record.audit_note === 'string' ? { audit_note: record.audit_note } : {}),
+    ...(record.export_kind === 'export_docx' || record.export_kind === 'export_html' ? { export_kind: record.export_kind } : {}),
   };
 }
 

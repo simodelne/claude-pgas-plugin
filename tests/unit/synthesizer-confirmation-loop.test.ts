@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { assertConfirmationPairingTerminals } from '../../src/foundry-program/composite-checks.js';
 import {
   createConfirmationLoopChoreographCollectionReaction,
@@ -13,6 +13,7 @@ import {
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
+import { loadGeneratedReactionHandlers } from './generated-handlers-loader.js';
 
 const baseDomain = {
   'program.slug': 'work-unit-flow',
@@ -463,6 +464,31 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(fallback.valueAt('work_units.items.0.status')).toBe('accepted');
   });
 
+  it('generated handlers apply timestamp-distinct identical decisions independently', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoop());
+    const generated = loadGeneratedReactionHandlers(artifact.handlers_ts);
+    const save = requiredReaction(generated, 'save_review_work_decision');
+    const enforce = requiredReaction(generated, 'enforce_review_work_status');
+    let snapshot = new Map<string, unknown>([
+      ...flattenItems([
+        { id: 'wu-1', title: 'One', proposed_text: 'First draft', user_instruction: '', status: 'proposed' },
+      ]),
+      ['summary.confirmation_loop.one_proposed_demotions', 0],
+    ]);
+
+    snapshot = applyMutations(snapshot, save(decisionSnapshot(snapshot, '2026-07-15T00:00:00.000Z'), 'AfterIngestion', 'review_work'));
+    snapshot = applyMutations(snapshot, enforce(snapshot, 'AfterIngestion', 'review_work'));
+    expect(snapshot.get('work_units.items.0.status')).toBe('accepted');
+    expect(snapshot.get('summary.confirmation_loop.last_applied_decision')).toBe('2026-07-15T00:00:00.000Z');
+
+    snapshot.set('work_units.items.0.status', 'proposed');
+    snapshot = applyMutations(snapshot, save(decisionSnapshot(snapshot, '2026-07-15T00:00:01.000Z'), 'AfterIngestion', 'review_work'));
+    snapshot = applyMutations(snapshot, enforce(snapshot, 'AfterIngestion', 'review_work'));
+
+    expect(snapshot.get('work_units.items.0.status')).toBe('accepted');
+    expect(snapshot.get('summary.confirmation_loop.last_applied_decision')).toBe('2026-07-15T00:00:01.000Z');
+  });
+
   it('seeds items from the source stage and applies staged proposals once by nonce', () => {
     const choreograph = createConfirmationLoopChoreographCollectionReaction(confirmationLoop, indexedLifecycle);
 
@@ -909,6 +935,37 @@ function flattenItems(items: Array<Record<string, unknown>>): Array<[string, unk
   return items.flatMap((item, index) =>
     Object.entries(item).map(([field, value]) => [`work_units.items.${index}.${field}`, value] as [string, unknown]),
   );
+}
+
+function requiredReaction(handlers: Map<string, ReactionHandler>, name: string): ReactionHandler {
+  const reaction = handlers.get(name);
+  if (!reaction) {
+    throw new Error(`missing generated reaction ${name}`);
+  }
+  return reaction;
+}
+
+function decisionSnapshot(snapshot: ReadonlyMap<string, unknown>, timestamp: string): Map<string, unknown> {
+  return new Map<string, unknown>([
+    ...snapshot,
+    ['inputs.user_decision.decision', 'approve'],
+    ['inputs.user_decision.instruction', ''],
+    ['inputs.user_decision.timestamp', timestamp],
+    ['inputs.user_decision.target_item_index', 0],
+    ['inputs.user_decision.target_item_id', 'wu-1'],
+    ['inputs.user_decision.target_item_title', 'One'],
+    ['inputs.user_decision.target_item_status', 'proposed'],
+  ]);
+}
+
+function applyMutations(snapshot: ReadonlyMap<string, unknown>, result: ReactionResult | void | undefined): Map<string, unknown> {
+  const next = new Map(snapshot);
+  for (const mutation of result?.mutations ?? []) {
+    if (mutation.op === 'MSet') {
+      next.set(mutation.path, mutation.value);
+    }
+  }
+  return next;
 }
 
 function hashArtifact(artifact: SynthesizedSpec): Record<string, string> {

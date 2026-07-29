@@ -39,8 +39,8 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
     'authorize_existing_repo_target',
     'create_curator_request',
   ],
-  architecture_design: [...SESSION_CONTROL_ACTIONS, 'design_architecture', 'web_research', 'record_user_note'],
-  scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'create_curator_request'],
+  architecture_design: [...SESSION_CONTROL_ACTIONS, 'synthesize_program_spec', 'design_architecture', 'web_research', 'record_user_note'],
+  scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'revise_artifact_plan', 'create_curator_request'],
   domain_synthesis: [...SESSION_CONTROL_ACTIONS, 'synthesize_domain_logic', 'record_user_note'],
   branch_write: [...SESSION_CONTROL_ACTIONS, 'write_scaffold_artifacts', 'git_status'],
   static_verify: [
@@ -201,6 +201,26 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
       return deny('live_provider_verification_requires_generated_live_drive_passed');
     }
     return gate;
+  }
+
+  if (action === 'synthesize_program_spec' && !state.program.design_confirmed) {
+    return deny('synthesize_program_spec_requires_design_confirmed');
+  }
+
+  if (action === 'revise_artifact_plan') {
+    if (!state.repo.write_authorized) {
+      return deny('revise_artifact_plan_requires_write_authorization');
+    }
+    if (!state.program.synthesis_complete) {
+      return deny('revise_artifact_plan_requires_synthesis_complete');
+    }
+    if (state.artifact_plan.status !== 'draft') {
+      return deny('revise_artifact_plan_requires_draft_artifact_plan');
+    }
+    if (state.artifact_plan.approved) {
+      return deny('revise_artifact_plan_requires_unapproved_artifact_plan');
+    }
+    return allow();
   }
 
   if (action === 'run_smoke_verification' && state.graduation.static_verification !== 'passed') {

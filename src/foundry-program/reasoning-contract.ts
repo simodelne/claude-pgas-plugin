@@ -809,14 +809,15 @@ function assertDomainSpecAgreement(
     const producesSchema = domainSpec.produces.result_json as Record<string, unknown>;
     for (const field of fields) {
       const hint = producesSchema[field.name];
-      if (hint === 'number' && field.type !== 'number') {
-        throw new Error(`reasoning contract field ${field.name} must have type number per the domain spec`);
+      const expectedType = domainSpecFieldType(hint);
+      if (expectedType === 'string') {
+        if (field.type !== 'string' && field.type !== 'enum') {
+          throw new Error(`reasoning contract field ${field.name} must have type string or enum per the domain spec`);
+        }
+        continue;
       }
-      if (hint === 'boolean' && field.type !== 'boolean') {
-        throw new Error(`reasoning contract field ${field.name} must have type boolean per the domain spec`);
-      }
-      if (hint !== 'number' && hint !== 'boolean' && field.type !== 'string' && field.type !== 'enum') {
-        throw new Error(`reasoning contract field ${field.name} must have type string or enum per the domain spec`);
+      if (field.type !== expectedType) {
+        throw new Error(`reasoning contract field ${field.name} must have type ${expectedType} per the domain spec`);
       }
     }
   }
@@ -849,12 +850,32 @@ function isDomainSpecFieldName(name: string, domainSpec: ReasoningStageDomainSpe
 
 function domainSpecField(name: string, domainSpec: ReasoningStageDomainSpec): ReasoningField {
   const hint = (domainSpec.produces.result_json as Record<string, unknown>)[name];
-  const type: ReasoningFieldType = hint === 'number' ? 'number' : hint === 'boolean' ? 'boolean' : 'string';
+  const type = domainSpecFieldType(hint);
   return {
     name,
     type,
     description: `Value for ${name} required by the stage domain spec${typeof hint === 'string' ? ` (declared as: ${hint})` : ''}.`,
   };
+}
+
+function domainSpecFieldType(hint: unknown): ReasoningFieldType {
+  if (hint === 'number') return 'number';
+  if (hint === 'boolean') return 'boolean';
+  if (typeof hint !== 'string') return 'string';
+  const normalized = hint.trim().toLowerCase().replace(/[\s-]+/gu, '_');
+  if (
+    normalized === 'string[]' ||
+    normalized === 'array' ||
+    normalized === 'string_array' ||
+    normalized === 'array_string' ||
+    normalized === 'array<string>' ||
+    normalized === 'list<string>' ||
+    normalized === 'strings' ||
+    normalized === 'string_list'
+  ) {
+    return 'string_array';
+  }
+  return 'string';
 }
 
 function genericFallbackFields(context: ReasoningStageContext, reserved: ReadonlySet<string>): ReasoningField[] {
