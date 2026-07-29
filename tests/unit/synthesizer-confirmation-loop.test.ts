@@ -340,6 +340,34 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(() => assertConfirmationPairingTerminals(parsed)).not.toThrow();
   });
 
+  it('projects upstream analysis summaries and active item fields into confirmation-loop proposal drafting without full collection blowup', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithAnalysisLoop());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const approveInclude = parsed.projection.approve.include;
+
+    expect(approveInclude).toEqual(expect.arrayContaining([
+      'intake_facts.result_json',
+      'dd_dispatch.result_json',
+      'issue_analysis.result_json',
+      'draft_sections.result_json',
+      'work.opinion_sections.confirmation_summary.active_item',
+      'work.opinion_sections.confirmation_summary.active_item.title',
+      'work.opinion_sections.confirmation_summary.active_item.section_kind',
+      'work.opinion_sections.confirmation_summary.active_item.template_anchor',
+      'inputs.user_decision.target_item_index',
+      'work.opinion_sections.all_terminal',
+    ]));
+    expect(approveInclude.filter((path) =>
+      path === 'work.opinion_sections.items' ||
+      path.startsWith('work.opinion_sections.items.*.'))).toEqual([]);
+    expect(approveInclude.length).toBeLessThanOrEqual(45);
+
+    expect(parsed.prompts.approve).toContain('issue_analysis');
+    expect(parsed.prompts.approve).toMatch(/blank or generic/u);
+    expect(parsed.guidance.approve.join('\n')).toContain('issue_analysis');
+    expect(parsed.guidance.approve.join('\n')).toMatch(/blank or generic/u);
+  });
+
   it('records user decisions and enforces approve, request_revision, reject, demotion, and aggregate status', () => {
     const save = createConfirmationLoopSaveDecisionReaction(confirmationLoop, indexedLifecycle);
     const enforce = createConfirmationLoopEnforceStatusReaction(confirmationLoop, indexedLifecycle);
@@ -675,6 +703,108 @@ function domainWithLoopThenDownstream(): Record<string, unknown> {
       final_stage: 'complete',
       guard_field: 'assemble_work.done',
       collection_lifecycle: indexedLifecycle,
+    }),
+  };
+}
+
+function domainWithAnalysisLoop(): Record<string, unknown> {
+  const opinionLifecycle = {
+    version: 1,
+    name: 'opinion_sections',
+    item_label: 'opinion section',
+    storage: {
+      items_path: 'work.opinion_sections.items',
+      event_path: 'work.opinion_sections.pending_event_json',
+      violation_path: 'work.opinion_sections.lifecycle_violation_json',
+      representation: 'indexed_array',
+    },
+    item: {
+      id_field: 'id',
+      status_field: 'status',
+      schema: {
+        id: 'string',
+        title: 'string',
+        section_kind: 'string',
+        template_anchor: 'string',
+        proposed_text: 'string',
+        user_instruction: 'string',
+        status: 'string',
+      },
+    },
+    statuses: [
+      { name: 'pending', initial: true },
+      { name: 'proposed' },
+      { name: 'accepted', terminal: true },
+      { name: 'skipped', terminal: true },
+    ],
+    transitions: [],
+    aggregate: {
+      guard_field: 'work.opinion_sections.all_terminal',
+      terminal_statuses: ['accepted', 'skipped'],
+      require_non_empty: true,
+    },
+  };
+  return {
+    'program.slug': 'analysis-backed-opinion-flow',
+    'program.name': 'Analysis Backed Opinion Flow',
+    'program.target_dir': '/tmp/analysis-backed-opinion-flow',
+    'program.design_path': 'design',
+    'intake.purpose': 'Draft opinion sections from intake facts, diligence findings, and issue analysis.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'intake_facts' },
+      { slug: 'dd_dispatch' },
+      { slug: 'issue_analysis' },
+      { slug: 'draft_sections' },
+      { slug: 'approve' },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'intake_facts', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'intake_facts', to: 'dd_dispatch', trigger: 'facts_captured', guard_field: 'intake_facts.done' },
+      { from: 'dd_dispatch', to: 'issue_analysis', trigger: 'dd_done', guard_field: 'dd_dispatch.done' },
+      { from: 'issue_analysis', to: 'draft_sections', trigger: 'analysis_done', guard_field: 'issue_analysis.done' },
+      { from: 'draft_sections', to: 'approve', trigger: 'sections_planned', guard_field: 'draft_sections.done' },
+      { from: 'approve', to: 'complete', trigger: 'approved', guard_field: 'work.opinion_sections.all_terminal' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      intake_facts: { kind: 'llm-reasoning' },
+      dd_dispatch: { kind: 'llm-reasoning' },
+      issue_analysis: { kind: 'llm-reasoning' },
+      draft_sections: { kind: 'llm-reasoning' },
+      approve: { kind: 'llm-reasoning' },
+    }),
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'work.opinion_sections.all_terminal',
+      collection_lifecycle: opinionLifecycle,
+    }),
+    'intake.interaction_json': JSON.stringify({
+      confirmation_loops: [{
+        collection: 'work.opinion_sections.items',
+        proposed_status: 'proposed',
+        seed: { source_stage: 'draft_sections', id_prefix: 'section' },
+        decisions: {
+          approve: { to: 'accepted' },
+          revise: {
+            to: 'proposed',
+            requires_instruction: true,
+            instruction_path: 'work.opinion_sections.items.*.user_instruction',
+            re_propose: true,
+          },
+          skip: { to: 'skipped' },
+        },
+        one_proposed_at_a_time: true,
+        aggregate: {
+          guard_field: 'work.opinion_sections.all_terminal',
+          terminal_statuses: ['accepted', 'skipped'],
+        },
+        stage: 'approve',
+        summary_path: 'work.opinion_sections.confirmation_summary',
+        violation_path: 'work.opinion_sections.confirmation_violation_json',
+        pending_action_path: 'decisions.pending_approve_action',
+      }],
     }),
   };
 }

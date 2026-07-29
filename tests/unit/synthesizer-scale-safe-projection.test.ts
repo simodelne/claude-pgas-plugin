@@ -23,7 +23,8 @@ describe('scale-safe synthesized projections', () => {
       expect(projection.include, `${mode} must not include raw fan-out child report objects`).not.toContain('review_documents.fan_out.results.*.result');
     }
     for (const [mode, projection] of Object.entries(large)) {
-      expect(projection.include.length, `${mode} projection path count`).toBeLessThanOrEqual(36);
+      const limit = mode === 'approve_sections' ? 45 : 36;
+      expect(projection.include.length, `${mode} projection path count`).toBeLessThanOrEqual(limit);
     }
 
     expect(large.review_documents.include).toEqual(expect.arrayContaining([
@@ -55,18 +56,24 @@ describe('scale-safe synthesized projections', () => {
       'report.all_sections_resolved',
       'summary.approved_sections',
       'summary.approved_sections.active_item',
+      'summary.approved_sections.active_item.title',
+      'summary.approved_sections.active_item.summary',
+      'summary.approved_sections.active_item.draft_text',
       'summary.approved_sections.total_items',
       'summary.approved_sections.terminal_items',
       'summary.approved_sections.pending_items',
       'summary.approved_sections.current_index',
+      'review_documents.result_json',
+      'aggregate_findings.result_json',
+      'draft_sections.result_json',
     ]));
     expect(large.approve_sections.include).not.toContain('report.sections');
     expect(large.approve_sections.include).not.toContain('report.sections.*.id');
     expect(large.approve_sections.include).not.toContain('report.sections.*.title');
     expect(large.approve_sections.include).not.toContain('report.sections.*.status');
     expect(large.approve_sections.include).not.toContain('draft_sections.items_json');
-    expect(large.approve_sections.include).not.toContain('review_documents.result_json');
-    expect(large.approve_sections.include).not.toContain('aggregate_findings.result_json');
+    expect(large.approve_sections.include).not.toContain('review_documents.items_json');
+    expect(large.approve_sections.include).not.toContain('aggregate_findings.items_json');
 
     expect(large.assemble_report.include).toEqual(expect.arrayContaining([
       'report.sections.*.id',
@@ -84,7 +91,7 @@ describe('scale-safe synthesized projections', () => {
     const largeApprove = approvalProjectionForItemCount(60);
 
     expect([...largeApprove.include].sort()).toEqual([...smallApprove.include].sort());
-    expect(largeApprove.include.length).toBeLessThanOrEqual(18);
+    expect(largeApprove.include.length).toBeLessThanOrEqual(45);
     expect(largeApprove.include).toEqual(expect.arrayContaining([
       'inputs.user_decision.target_item_index',
       'inputs.user_decision.target_item_id',
@@ -93,10 +100,16 @@ describe('scale-safe synthesized projections', () => {
       'report.all_sections_resolved',
       'summary.approved_sections',
       'summary.approved_sections.active_item',
+      'summary.approved_sections.active_item.title',
+      'summary.approved_sections.active_item.summary',
+      'summary.approved_sections.active_item.draft_text',
       'summary.approved_sections.total_items',
       'summary.approved_sections.terminal_items',
       'summary.approved_sections.pending_items',
       'summary.approved_sections.current_index',
+      'review_documents.result_json',
+      'aggregate_findings.result_json',
+      'draft_sections.result_json',
     ]));
 
     for (const forbidden of [
@@ -107,9 +120,7 @@ describe('scale-safe synthesized projections', () => {
       'report.sections.*.summary',
       'report.sections.*.draft_text',
       'draft_sections.items_json',
-      'review_documents.result_json',
       'review_documents.items_json',
-      'aggregate_findings.result_json',
       'aggregate_findings.items_json',
       'work.source.full_text',
       'work.source.documents',
