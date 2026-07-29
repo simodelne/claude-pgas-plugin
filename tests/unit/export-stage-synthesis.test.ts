@@ -1,12 +1,17 @@
+import { webcrypto } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createContext, Script } from 'node:vm';
 import { load } from 'js-yaml';
+import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
+import { extractDocxText } from '../integration/fixtures/extract-docx.reference.js';
+import { renderStructuredDocxDocument } from '../integration/fixtures/export-docx-render.golden.js';
 
 describe('PR-E2 export stage synthesis', () => {
   it('emits deterministic DOCX export stages, result_path wiring, artifact policy, and standalone export artifacts', async () => {
@@ -119,7 +124,201 @@ describe('PR-E2 export stage synthesis', () => {
     expect(artifact.export_surfaces).toBeUndefined();
     expect(artifact.registration_ts).toBeUndefined();
   });
+
+  it('renders approved content collections without workflow-stage output sections', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(exportDomain());
+    const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-export-approved-only-'));
+    try {
+      const withBodies = await synthesizeDomainLogic({
+        ...artifact,
+        created_at: '2026-07-29T00:00:00.000Z',
+      }, {
+        cacheDir,
+        generator: async () => nonExportStageBody(),
+      });
+      const runStage = loadGeneratedExportStage(withBodies.stage_sources?.export_document ?? '');
+      const output = await runStage({
+        stage: 'export_document',
+        payload: {},
+        domain: approvedContentWithReasoningOutputsDomain(),
+        domain_spec: { reads: [], produces: {}, rules: [], invariants: [] },
+      }, deterministicRuntime());
+      const result = JSON.parse(output.result_json) as { docx_base64: string; section_count: number };
+      const extracted = extractDocxText(Buffer.from(result.docx_base64, 'base64'));
+
+      expect(extracted.ok).toBe(true);
+      const docText = extracted.ok ? extracted.text : '';
+      expect(result.section_count).toBe(2);
+      expect(docText).toContain('Assumption 1');
+      expect(docText).toContain('APPROVED-ASSUMPTION-BODY');
+      expect(docText).toContain('Opinion 1');
+      expect(docText).toContain('APPROVED-OPINION-BODY');
+      for (const heading of [
+        'Intake',
+        'Upload Docs',
+        'Transaction Understanding',
+        'Dd Dispatch',
+        'Legal Research',
+        'Issue Analysis',
+        'Draft Sections',
+      ]) {
+        expect(docText).not.toContain(heading);
+      }
+      expect(docText).not.toContain('Items Json');
+      expect(docText).not.toContain('INTERNAL-RESULT-JSON-BLOB');
+      expect(docText).not.toContain('INTERNAL-ITEMS-JSON-BLOB');
+      expect(docText).not.toContain('UPLOAD-DOCS-INTERNAL');
+      expect(docText).not.toContain('LEGAL-RESEARCH-INTERNAL');
+    } finally {
+      rmSync(cacheDir, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps rendering workflow-stage outputs when no approved content collection exists', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(exportDomain());
+    const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-export-no-content-fallback-'));
+    try {
+      const withBodies = await synthesizeDomainLogic({
+        ...artifact,
+        created_at: '2026-07-29T00:00:00.000Z',
+      }, {
+        cacheDir,
+        generator: async () => nonExportStageBody(),
+      });
+      const runStage = loadGeneratedExportStage(withBodies.stage_sources?.export_document ?? '');
+      const output = await runStage({
+        stage: 'export_document',
+        payload: {},
+        domain: stageOutputsOnlyDomain(),
+        domain_spec: { reads: [], produces: {}, rules: [], invariants: [] },
+      }, deterministicRuntime());
+      const result = JSON.parse(output.result_json) as { docx_base64: string; section_count: number };
+      const extracted = extractDocxText(Buffer.from(result.docx_base64, 'base64'));
+
+      expect(extracted.ok).toBe(true);
+      const docText = extracted.ok ? extracted.text : '';
+      expect(result.section_count).toBeGreaterThanOrEqual(3);
+      expect(docText).toContain('Upload Docs');
+      expect(docText).toContain('UPLOAD-DOCS-FALLBACK-CONTENT');
+      expect(docText).toContain('Transaction Understanding');
+      expect(docText).toContain('TRANSACTION-UNDERSTANDING-FALLBACK-CONTENT');
+      expect(docText).toContain('Legal Research');
+      expect(docText).toContain('LEGAL-RESEARCH-FALLBACK-CONTENT');
+    } finally {
+      rmSync(cacheDir, { force: true, recursive: true });
+    }
+  });
 });
+
+type GeneratedRunStage = (
+  input: {
+    stage: string;
+    payload: Record<string, unknown>;
+    domain: Record<string, unknown>;
+    domain_spec: { reads: string[]; produces: Record<string, unknown>; rules: string[]; invariants: string[] };
+  },
+  runtime: { now(): string; random(): number; llm(prompt: string): Promise<string> },
+) => Promise<{ result_json: string; items_json: string; digest: string }>;
+
+function loadGeneratedExportStage(source: string): GeneratedRunStage {
+  const transpiled = transpileModule(source, {
+    compilerOptions: {
+      module: ModuleKind.CommonJS,
+      target: ScriptTarget.ES2022,
+      strict: true,
+    },
+  });
+  const exportsObject: Record<string, unknown> = {};
+  const moduleObject = { exports: exportsObject };
+  const context = createContext({
+    exports: exportsObject,
+    module: moduleObject,
+    Buffer,
+    crypto: webcrypto,
+    require: (specifier: string): Record<string, unknown> => {
+      if (specifier === '../export/docx.js') {
+        return { renderStructuredDocxDocument };
+      }
+      throw new Error(`unexpected generated export import: ${specifier}`);
+    },
+    TextEncoder,
+  });
+  new Script(transpiled.outputText, { filename: 'generated-export-stage.cjs' }).runInContext(context, {
+    timeout: 1_000,
+  });
+  const exported = moduleObject.exports as Record<string, unknown>;
+  if (typeof exported.runStage !== 'function') {
+    throw new Error('generated export stage did not expose runStage');
+  }
+  return exported.runStage as GeneratedRunStage;
+}
+
+function deterministicRuntime(): { now(): string; random(): number; llm(prompt: string): Promise<string> } {
+  return {
+    now: () => '2026-07-29T00:00:00.000Z',
+    random: () => 0.5,
+    llm: async () => {
+      throw new Error('llm unavailable in deterministic export test');
+    },
+  };
+}
+
+function approvedContentWithReasoningOutputsDomain(): Record<string, unknown> {
+  return {
+    'intake.output': stageOutput('intake', 'INTAKE-INTERNAL'),
+    'upload_docs.output': stageOutput('upload_docs', 'UPLOAD-DOCS-INTERNAL'),
+    'transaction_understanding.result_json': JSON.stringify({
+      stage: 'transaction_understanding',
+      result_json: 'INTERNAL-RESULT-JSON-BLOB',
+    }),
+    'dd_dispatch.output': stageOutput('dd_dispatch', 'DD-DISPATCH-INTERNAL'),
+    'legal_research.output': stageOutput('legal_research', 'LEGAL-RESEARCH-INTERNAL'),
+    'issue_analysis.output': stageOutput('issue_analysis', 'ISSUE-ANALYSIS-INTERNAL'),
+    'draft_sections.output': stageOutput('draft_sections', 'DRAFT-SECTIONS-INTERNAL'),
+    'work.opinion_sections.items': [
+      {
+        id: 'assumption-1',
+        title: 'Assumption 1',
+        status: 'accepted',
+        body: 'APPROVED-ASSUMPTION-BODY',
+      },
+      {
+        id: 'opinion-1',
+        title: 'Opinion 1',
+        status: 'approved',
+        final_text: 'APPROVED-OPINION-BODY',
+      },
+    ],
+    'work.opinion_sections.items.0.id': 'assumption-1',
+    'work.opinion_sections.items.0.status': 'accepted',
+    'work.opinion_sections.items.0.title': 'Assumption 1',
+    'work.opinion_sections.items.0.body': 'APPROVED-ASSUMPTION-BODY',
+    'work.opinion_sections.items.1.final_text': 'APPROVED-OPINION-BODY',
+    'work.opinion_sections.items.1.id': 'opinion-1',
+    'work.opinion_sections.items.1.status': 'approved',
+    'work.opinion_sections.items.1.title': 'Opinion 1',
+    'work.opinion_sections.items_json': 'INTERNAL-ITEMS-JSON-BLOB',
+  };
+}
+
+function stageOutputsOnlyDomain(): Record<string, unknown> {
+  return {
+    'upload_docs.output': stageOutput('upload_docs', 'UPLOAD-DOCS-FALLBACK-CONTENT'),
+    'transaction_understanding.result_json': JSON.stringify({
+      stage: 'transaction_understanding',
+      summary: 'TRANSACTION-UNDERSTANDING-FALLBACK-CONTENT',
+    }),
+    'legal_research.output': stageOutput('legal_research', 'LEGAL-RESEARCH-FALLBACK-CONTENT'),
+  };
+}
+
+function stageOutput(stage: string, summary: string): { result_json: string; items_json: string; digest: string } {
+  return {
+    result_json: JSON.stringify({ stage, summary }),
+    items_json: JSON.stringify([`${stage}:internal`]),
+    digest: '',
+  };
+}
 
 function exportDomain(): Record<string, unknown> {
   return {

@@ -2284,7 +2284,11 @@ interface ExportSection {
 
 function sectionsFromDomain(domain: Record<string, unknown>, stage: string): ExportSection[] {
   const contentCollections = exportContentCollectionsFromDomain(domain);
-  const sections: ExportSection[] = approvedContentSectionsFromDomain(domain, contentCollections);
+  const approved = approvedContentSectionsFromDomain(domain, contentCollections);
+  if (approved.length > 0) {
+    return approved;
+  }
+  const sections: ExportSection[] = [];
   for (const key of Object.keys(domain).sort()) {
     if (key.startsWith(stage + '.') || isNonContentExportPath(key, contentCollections)) {
       continue;

@@ -21,7 +21,7 @@ const APPROVED_DEFECT_TEXT = 'DEFECT-ANALYSIS-CONTENT retained for the client ar
 const PENDING_OPINION_TEXT = 'PENDING-OPINION-DRAFT must not appear in the client artifact.';
 
 describe('synthesized report export source redaction', () => {
-  it('renders report sections and findings without raw uploaded corpus keys', async () => {
+  it('renders approved report sections without raw uploaded corpus keys or stage findings', async () => {
     const artifact = synthesizeProgramSpecFromDomain(reportExportDomain());
     const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-export-source-redaction-'));
     try {
@@ -53,7 +53,9 @@ describe('synthesized report export source redaction', () => {
       expect(result.section_count).toBeGreaterThan(0);
       expect(docText).toContain('Executive Summary');
       expect(docText).toContain(APPROVED_SECTION_BODY);
-      expect(docText).toContain(FINDING_TEXT);
+      expect(docText).not.toContain(FINDING_TEXT);
+      expect(docText).not.toContain('Aggregate Findings');
+      expect(docText).not.toContain('Draft Sections');
       expect(docText).not.toContain('Work Report Sections Items');
       expect(docText).not.toContain('Work Source Full Text');
       expect(docText).not.toContain('Work Source Current Document Text');
