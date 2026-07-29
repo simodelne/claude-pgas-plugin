@@ -75,6 +75,83 @@ const confirmationLoop = {
 };
 
 describe('confirmation-loop terminal advance falsifier', () => {
+  it('recovers proposal fields when propose_item sends them only through payload.mutations', { timeout: 120_000 }, async () => {
+    const artifact = artifactFromDomain(terminalAdvanceDomain());
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-confirmation-payload-mutations-'));
+    const draftedText = 'Recovered drafted clause from a payload.mutations-only propose_item.';
+    const author = scriptedAuthor([
+      effect('begin_work', {}),
+      effect('complete_plan_work', {
+        result_json: JSON.stringify({ planned: true }),
+        items_json: JSON.stringify([
+          { id: 'wu-1', title: 'Confirm payload tolerance' },
+        ]),
+      }),
+      effect('propose_item', {
+        mutations: [
+          { op: 'MSet', path: 'review_work.proposal.proposed_text', value: draftedText },
+          { op: 'MAppend', path: 'review_work.proposal.log', value: 'proposed' },
+        ],
+        intent: 'present_for_approval',
+      }),
+    ]);
+
+    try {
+      renderStandaloneScaffold({
+        slug: PROGRAM_SLUG,
+        name: PROGRAM_NAME,
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: artifact.smoke_test_ts,
+      });
+      linkRootNodeModules(targetDir);
+
+      const server = await createPgasServer({
+        programs: [{ name: PROGRAM_SLUG, entry: await importProgramEntry(targetDir) }],
+        drivers: {
+          authorHandle: author,
+          observerHandle: {
+            modelId: 'confirmation-payload-mutations-observer',
+            async complete() {
+              return 'noop';
+            },
+          },
+        },
+        devMode: true,
+        telemetry: { enabled: false },
+        port: 0,
+      });
+      const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+      const created = await client.sessions.create({ program: PROGRAM_SLUG });
+      const sessionId = created.sessionId;
+
+      try {
+        await client.sessions.trigger(sessionId, { channel: 'user_text', payload: 'start payload tolerance test' });
+        await client.sessions.trigger(sessionId, { channel: 'user_text', payload: 'plan confirmation item' });
+        await client.sessions.trigger(sessionId, { channel: 'user_text', payload: 'propose payload-mutations item' });
+
+        const proposed = await readSnapshot(client, sessionId);
+        expect(proposed.mode).toBe('review_work');
+        expect(proposed.domain['review_work.proposal.proposed_text']).toBe(draftedText);
+        expect(proposed.domain['work_units.items.0.proposed_text']).toBe(draftedText);
+        expect(proposed.domain['work_units.items.0.status']).toBe('proposed');
+        expect(author.calls()).toEqual([
+          'begin_work',
+          'complete_plan_work',
+          'propose_item',
+        ]);
+      } finally {
+        await server.close();
+      }
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
   it('advances from an all-terminal confirmation loop into the downstream gated stage before completing', { timeout: 120_000 }, async () => {
     const artifact = artifactFromDomain(terminalAdvanceDomain());
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-confirmation-terminal-advance-'));

@@ -201,8 +201,13 @@ describe('confirmation_loop descriptor synthesis', () => {
       channel: 'user_confirmation',
       intent: 'present_for_approval',
     });
-    expect(parsed.action_map.propose_item.description).toContain('The runtime selects the item under review');
+    expect(parsed.action_map.propose_item.description).toContain('The runtime selects which work unit is under review');
+    expect(parsed.action_map.propose_item.description).toContain('must author the work unit content in proposed_text');
+    expect(parsed.action_map.propose_item.description).toContain('payload: {"proposed_text":"<the drafted section text>"}');
+    expect(parsed.action_map.propose_item.description).toContain('top-level payload fields, not payload.mutations');
+    expect(parsed.action_map.propose_item.description).not.toMatch(/do not attempt to pick or write items/iu);
     expect(parsed.action_map.propose_item.mutations).toEqual([
+      { op: 'MSet', path: 'review_work.proposal.raw_payload_mutations', value: [], from_arg: 'mutations' },
       { op: 'MSet', path: 'review_work.proposal.proposed_text', value: '', from_arg: 'proposed_text' },
       { op: 'MAppend', path: 'review_work.proposal.log', value: 'proposed' },
     ]);
@@ -271,6 +276,11 @@ describe('confirmation_loop descriptor synthesis', () => {
       ],
       write_scope: ['summary.confirmation_loop'],
     });
+    expect(parsed.reactions.mirror_review_work_proposal_payload).toEqual({
+      event: 'AfterMutation',
+      watch: ['review_work.proposal.raw_payload_mutations'],
+      write_scope: ['review_work.proposal.proposed_text'],
+    });
     expect(parsed.reactions.choreograph_review_work_collection).toEqual({
       event: 'AfterRound',
       watch: [],
@@ -287,10 +297,14 @@ describe('confirmation_loop descriptor synthesis', () => {
       Object.keys(parsed.reactions).indexOf('summarize_review_work_approval'),
     );
     expect(Object.keys(parsed.reactions).indexOf('summarize_review_work_approval')).toBeLessThan(
+      Object.keys(parsed.reactions).indexOf('mirror_review_work_proposal_payload'),
+    );
+    expect(Object.keys(parsed.reactions).indexOf('mirror_review_work_proposal_payload')).toBeLessThan(
       Object.keys(parsed.reactions).indexOf('choreograph_review_work_collection'),
     );
     expect(parsed.schema).toMatchObject({
       'review_work.proposal': 'object',
+      'review_work.proposal.raw_payload_mutations': 'any',
       'review_work.proposal.proposed_text': 'string',
       'review_work.proposal.log': 'array',
       'summary.confirmation_loop.active_item': 'object',
@@ -306,14 +320,19 @@ describe('confirmation_loop descriptor synthesis', () => {
     });
     expect(parsed.prompts.review_work).toContain('Work through the work units one at a time');
     expect(parsed.prompts.review_work).toContain('Respond with EXACTLY ONE terminal action');
-    expect(parsed.prompts.review_work).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"propose_item","channel":"widget_output","payload":{}}]}');
+    expect(parsed.prompts.review_work).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"propose_item","channel":"widget_output","payload":{"proposed_text":"<the drafted section text>"}}]}');
     expect(parsed.prompts.review_work).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
+    expect(parsed.prompts.review_work).toContain('emit the proposal content as top-level payload fields, not payload.mutations');
+    expect(parsed.prompts.review_work).toContain('do not emit an empty proposed_text');
+    expect(parsed.prompts.review_work).not.toContain('"payload":{}}');
     expect(parsed.prompts.review_work).toContain('the runtime selects that item');
     expect(parsed.prompts.review_work).toContain('use its active_item and progress counts');
     expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
       expect.stringContaining('Respond with EXACTLY ONE terminal action'),
-      expect.stringContaining('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"propose_item","channel":"widget_output","payload":{}}]}'),
+      expect.stringContaining('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"propose_item","channel":"widget_output","payload":{"proposed_text":"<the drafted section text>"}}]}'),
       expect.stringContaining('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.'),
+      expect.stringContaining('emit the proposal content as top-level payload fields, not payload.mutations'),
+      expect.stringContaining('do not emit an empty proposed_text'),
       expect.stringContaining('never write item statuses yourself'),
       expect.stringContaining('summary.confirmation_loop.active_item'),
       expect.stringContaining('not the full work_units.items collection'),
@@ -366,6 +385,24 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(parsed.prompts.approve).toMatch(/blank or generic/u);
     expect(parsed.guidance.approve.join('\n')).toContain('issue_analysis');
     expect(parsed.guidance.approve.join('\n')).toMatch(/blank or generic/u);
+    expect(parsed.action_map.propose_item.description).toContain(
+      'payload: {"proposed_text":"<the drafted section text>","section_kind":"...","template_anchor":"..."}',
+    );
+    expect(parsed.action_map.propose_item.mutations).toEqual(expect.arrayContaining([
+      { op: 'MSet', path: 'approve.proposal.raw_payload_mutations', value: [], from_arg: 'mutations' },
+      { op: 'MSet', path: 'approve.proposal.proposed_text', value: '', from_arg: 'proposed_text' },
+      { op: 'MSet', path: 'approve.proposal.section_kind', value: '', from_arg: 'section_kind' },
+      { op: 'MSet', path: 'approve.proposal.template_anchor', value: '', from_arg: 'template_anchor' },
+    ]));
+    expect(parsed.reactions.mirror_approve_proposal_payload).toEqual({
+      event: 'AfterMutation',
+      watch: ['approve.proposal.raw_payload_mutations'],
+      write_scope: [
+        'approve.proposal.proposed_text',
+        'approve.proposal.section_kind',
+        'approve.proposal.template_anchor',
+      ],
+    });
   });
 
   it('records user decisions and enforces approve, request_revision, reject, demotion, and aggregate status', () => {
