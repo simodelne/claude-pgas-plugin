@@ -238,6 +238,7 @@ const USER_CONFIRMATION_CHANNEL = 'user_confirmation';
 const DOCUMENT_UPLOAD_CHANNEL = 'document_upload';
 const DOCUMENT_INTAKE_ROOT = 'inputs.document_intake';
 const DOCUMENT_REQUEST_ACTION = 'request_documents';
+const EXPORT_HOOK_CHANNEL = 'export_stage_hook';
 const DOCUMENT_INGEST_ACTION = 'ingest_documents';
 const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
 const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
@@ -431,6 +432,8 @@ export function synthesizeProgramSpecFromDomain(
     planTransitionActions(effectiveTransitions, effectiveCompletion, firstMode),
     stageClassificationBySlug,
   );
+  const exportActions = exportTransitionActions(transitionActions);
+  const hasExportDecisionOnly = exportActions.length > 0;
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
   const contractedReasoningOutputStages = new Set(
     transitionActions
@@ -440,9 +443,12 @@ export function synthesizeProgramSpecFromDomain(
   const stageOutputMirrorStages = new Set([...flatMirrorStages, ...contractedReasoningOutputStages]);
   const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
   const suppressedTransitionActionNames = new Set(
-    transitionActions
-      .filter((action) => loopStageNames.has(action.source))
-      .map((action) => action.name),
+    [
+      ...transitionActions
+        .filter((action) => loopStageNames.has(action.source))
+        .map((action) => action.name),
+      ...exportActions.map((action) => action.name),
+    ],
   );
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
   const childArtifacts = synthesizeDelegationChildArtifacts(slug, name, delegationChildren);
@@ -470,8 +476,12 @@ export function synthesizeProgramSpecFromDomain(
   spec.features = unique([
     ...(Array.isArray(spec.features) ? spec.features as string[] : []),
     'reactions',
+    ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
   ]);
+  if (hasExportDecisionOnly) {
+    spec.pure = false;
+  }
 
   const sourceModes = recordField(spec, 'modes');
   const synthesizedModes: MutableRecord = {};
@@ -503,6 +513,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops, transitionActions);
   applyDocumentsModeWiring(synthesizedModes, documents);
   applyDelegationModeWiring(synthesizedModes, delegationChildren);
+  applyExportDecisionOnlyModeWiring(synthesizedModes, exportActions);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = Object.fromEntries(
@@ -563,6 +574,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyScaleSafeProjectionPolicy(projection);
+  removeExportDecisionOnlyStageEntries(projection, exportActions);
   spec.projection = projection;
 
   const prompts: MutableRecord = {
@@ -580,6 +592,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
+  removeExportDecisionOnlyStageEntries(prompts, exportActions);
   spec.prompts = prompts;
 
   spec.ingestion = {
@@ -605,11 +618,13 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
   applyDocumentsReactions(recordField(spec, 'reactions'), documents);
   applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren, documents);
+  applyExportDecisionOnlyReactions(recordField(spec, 'reactions'), exportActions);
 
   spec.channels = {
     ...recordField(spec, 'channels'),
     [entryChannel]: { direction: 'In', sync: 'Async' },
     stage_output: { direction: 'Out', sync: 'Sync' },
+    ...(hasExportDecisionOnly ? { [EXPORT_HOOK_CHANNEL]: { direction: 'Out', sync: 'Sync' } } : {}),
   };
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentChannel(recordField(spec, 'channels'), completion.collection_lifecycle);
@@ -618,6 +633,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsChannel(recordField(spec, 'channels'), documents);
   applyDelegationChannel(recordField(spec, 'channels'), delegationChildren);
   applyControlPlaneEntryChannel(spec, entryChannel);
+  applyExportDecisionOnlyIntegrations(spec, exportActions);
 
   const actionMap = recordField(spec, 'action_map');
   const placeholderActionName = ['example', 'action'].join('_');
@@ -687,6 +703,9 @@ export function synthesizeProgramSpecFromDomain(
       }
     }
   }
+  for (const action of exportActions) {
+    schema[exportRenderPendingPath(action.source)] = 'boolean';
+  }
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
@@ -699,6 +718,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
+  removeExportDecisionOnlyStageEntries(recordField(spec, 'guidance'), exportActions);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -733,7 +753,9 @@ export function synthesizeProgramSpecFromDomain(
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     ...(hasRegistrationPolicies ? {
-      registration_ts: renderRegistrationSource(toPascalCase(slug), registrationPolicies),
+      registration_ts: renderRegistrationSource(toPascalCase(slug), registrationPolicies, {
+        exportHookChannel: hasExportDecisionOnly ? EXPORT_HOOK_CHANNEL : undefined,
+      }),
     } : {}),
     ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
     ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
@@ -891,6 +913,61 @@ function applyStageOutputChannels(
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, 'stage_output']);
   }
+}
+
+function applyExportDecisionOnlyModeWiring(
+  modes: MutableRecord,
+  exportActions: TransitionAction[],
+): void {
+  for (const action of exportActions) {
+    const mode = recordField(modes, action.source);
+    mode.decision_only = true;
+    mode.vocabulary = [];
+    mode.channels = [];
+    delete mode.preconditions;
+    mode.transitions = [exportDecisionOnlyTransition(action)];
+  }
+}
+
+function exportDecisionOnlyTransition(action: TransitionAction): { target: string; guard?: Record<string, unknown> } {
+  const transition: { target: string; guard?: Record<string, unknown> } = { target: action.target };
+  if (action.guardField && !action.guardField.startsWith(`${action.source}.`)) {
+    transition.guard = guardFromField(action.guardField);
+  }
+  return transition;
+}
+
+function removeExportDecisionOnlyStageEntries(record: MutableRecord, exportActions: TransitionAction[]): void {
+  for (const action of exportActions) {
+    delete record[action.source];
+  }
+}
+
+function applyExportDecisionOnlyReactions(reactions: MutableRecord, exportActions: TransitionAction[]): void {
+  for (const action of exportActions) {
+    const reactionName = exportRenderPendingReactionName(action.source);
+    reactions[reactionName] = {
+      event: 'OnTransition',
+      write_scope: [exportRenderPendingPath(action.source)],
+    };
+  }
+}
+
+function applyExportDecisionOnlyIntegrations(spec: MutableRecord, exportActions: TransitionAction[]): void {
+  if (exportActions.length === 0) {
+    return;
+  }
+  spec.integrations = {
+    ...recordOrEmpty(spec.integrations),
+    export_stage_hooks: {
+      channel: EXPORT_HOOK_CHANNEL,
+      hooks: unique(exportActions.map((action) => action.source)).map((stage) => ({
+        action: exportRenderHookActionName(stage),
+        event: 'OnTransition',
+        result_path: `${stage}.output`,
+      })),
+    },
+  };
 }
 
 function applyControlPlaneEntryChannel(spec: MutableRecord, entryChannel: string): void {
@@ -3010,7 +3087,7 @@ function chooseExportStageForDemand(
 ): Stage | undefined {
   const candidates = stages.filter((stage) => !stage.is_bootstrap && !stage.is_terminal && !usedStages.has(stage.slug));
   const wanted = kind === 'export_docx' ? /(?:docx|word|export|render|assemble|format)/u : /(?:html|export|render|assemble|format)/u;
-  return candidates.find((stage) => wanted.test(exportStageHaystack(stage))) ?? candidates.at(-1);
+  return candidates.find((stage) => wanted.test(exportStageHaystack(stage)));
 }
 
 function exportStageHaystack(stage: Stage): string {
@@ -3074,6 +3151,26 @@ function actionsBySourceMode(actions: TransitionAction[]): Map<string, Transitio
     actionsBySource.set(action.source, [...(actionsBySource.get(action.source) ?? []), action]);
   }
   return actionsBySource;
+}
+
+function exportTransitionActions(actions: TransitionAction[]): TransitionAction[] {
+  return actions.filter(isExportTransitionAction);
+}
+
+function isExportTransitionAction(action: TransitionAction): boolean {
+  return action.export_kind === 'export_docx' || action.export_kind === 'export_html';
+}
+
+function exportRenderHookActionName(stage: string): string {
+  return `render_${safeIdentifier(stage)}_export`;
+}
+
+function exportRenderPendingReactionName(stage: string): string {
+  return `mark_${safeIdentifier(stage)}_export_render_pending`;
+}
+
+function exportRenderPendingPath(stage: string): string {
+  return `${stage}.render_pending`;
 }
 
 function outputProjectionFields(
@@ -3229,7 +3326,7 @@ function codegenStageActions(
 ): TransitionAction[] {
   const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
   return transitionActions.filter(
-    (action) => action.name !== 'begin_work' && !loopStageNames.has(action.source),
+    (action) => action.name !== 'begin_work' && !loopStageNames.has(action.source) && !isExportTransitionAction(action),
   );
 }
 
@@ -3261,6 +3358,7 @@ function renderHandlersSource(
     : '';
   const confirmationLoops = options.collectionLifecycle ? options.confirmationLoops : [];
   const stageActions = codegenStageActions(transitionActions, confirmationLoops);
+  const exportActions = exportTransitionActions(transitionActions);
   const lifecycleTransitions = options.collectionLifecycle
     ? collectionLifecycleLlmTransitions(options.collectionLifecycle)
     : [];
@@ -3274,7 +3372,10 @@ function renderHandlersSource(
     options.documents !== undefined &&
     options.delegationChildren.some((child) => childHasDocumentFanOut(child, options.documents));
   const usesDocxExtractor = documentsDemandsSelfContainedDocx(options.documents);
-  const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
+  const bodyActions = unique([
+    ...stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source),
+    ...exportActions.map((action) => action.source),
+  ]);
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
     .join('\n');
@@ -3391,6 +3492,9 @@ ${fieldResolvers}
   const documentActionHandlers = options.documents
     ? renderDocumentActionHandlers(options.documents)
     : '';
+  const exportRenderPendingReactionEntries = options.includeReactionHandlers
+    ? renderExportRenderPendingReactionEntries(exportActions)
+    : '';
   const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
     ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
@@ -3410,6 +3514,7 @@ ${fieldResolvers}
   const hasReactionEntries = Boolean(
     stageOutputMirrorReactionEntries ||
     reasoningFieldMirrorReactionEntries ||
+    exportRenderPendingReactionEntries ||
     usesConfirmationLoopHandlers ||
     usesDelegationHandlers ||
     usesDocumentReactionHandlers ||
@@ -3430,6 +3535,9 @@ ${fieldResolvers}
     : '';
   const documentReactionEntries = usesDocumentReactionHandlers && options.documents
     ? renderDocumentReactionEntries(options.documents)
+    : '';
+  const exportHookAdapter = exportActions.length > 0
+    ? renderExportHookAdapter(exportActions)
     : '';
   const lifecycleIntentHelper = lifecycleTransitions.length > 0
     ? `
@@ -3455,7 +3563,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -3639,12 +3747,91 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
   },
 
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}${documentActionHandlers ? `\n\n${documentActionHandlers}` : ''}
-};${lifecycleIntentHelper}${reactionExport}${documentHelper}${conformanceHelper}
+};${lifecycleIntentHelper}${exportHookAdapter}${reactionExport}${documentHelper}${conformanceHelper}
 `;
 }
 
 function renderHandlersIndexBarrelSource(): string {
   return "export { handlers, reactionHandlers } from '../handlers.js';\n";
+}
+
+function renderExportRenderPendingReactionEntries(exportActions: TransitionAction[]): string {
+  return unique(exportActions.map((action) => action.source)).map((stage) => `,
+  [${tsString(exportRenderPendingReactionName(stage))}, (_snapshot, trigger, mode) => {
+    if (mode === ${tsString(stage)}) {
+      return { mutations: [{ op: 'MSet' as const, path: ${tsString(exportRenderPendingPath(stage))}, value: true }] };
+    }
+    if (trigger.startsWith(${tsString(`${stage}->`)})) {
+      return { mutations: [{ op: 'MSet' as const, path: ${tsString(exportRenderPendingPath(stage))}, value: false }] };
+    }
+    return undefined;
+  }]`).join('');
+}
+
+function renderExportHookAdapter(exportActions: TransitionAction[]): string {
+  const stages = unique(exportActions.map((action) => action.source));
+  const hookCases = stages
+    .map((stage) => `    case ${tsString(exportRenderHookActionName(stage))}:\n      return ${tsString(stage)};`)
+    .join('\n');
+  const renderCases = stages
+    .map((stage) => `    case ${tsString(stage)}: {
+      const payload = { domain } as HandlerPayload;
+      const output = await run${toPascalCase(stage)}(
+        resolveStageInput(payload, ${tsString(stage)}),
+        createStageRuntime(payload),
+      );
+      return normalizeStageOutput(output, ${tsString(stage)}, 'pure-compute', undefined);
+    }`)
+    .join('\n');
+
+  return `
+
+export function createExportHookAdapter() {
+  return {
+    id: ${tsString(EXPORT_HOOK_CHANNEL)},
+    async dispatch(payload: unknown): Promise<unknown | void> {
+      const record = hookPayloadRecord(payload);
+      const action = typeof record.action === 'string' ? record.action : '';
+      const stage = exportStageForHookAction(action);
+      if (!stage) {
+        return undefined;
+      }
+      const domain = hookDomainRecord(record.domain);
+      if (domain[\`\${stage}.render_pending\`] !== true) {
+        return undefined;
+      }
+      return renderExportStage(stage, domain);
+    },
+  };
+}
+
+function exportStageForHookAction(action: string): string | undefined {
+  switch (action) {
+${hookCases}
+    default:
+      return undefined;
+  }
+}
+
+async function renderExportStage(stage: string, domain: Record<string, unknown>): Promise<unknown | void> {
+  switch (stage) {
+${renderCases}
+    default:
+      return undefined;
+  }
+}
+
+function hookPayloadRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function hookDomainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}`;
 }
 
 function renderDocumentActionHandlers(documents: DocumentsDescriptor): string {
@@ -5289,7 +5476,7 @@ export interface ReasoningStageContract {
 export const stageReasoningContracts = ${JSON.stringify(Object.fromEntries(reasoningContractsBySlug), null, 2)} as Record<string, ReasoningStageContract>;`;
   const actionContracts = JSON.stringify(
     transitionActions
-      .filter((action) => action.name !== 'begin_work')
+      .filter((action) => action.name !== 'begin_work' && !isExportTransitionAction(action))
       .map((action) => ({
         action: action.name,
         stage: action.source,
@@ -5471,10 +5658,11 @@ function renderSmokeTestSource(
     return renderConfirmationLoopSmokeTestSource(slug, name, entryChannel, confirmationLoops, completion.collection_lifecycle);
   }
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
+  const authorPathActions = pathActions.filter((action) => !isExportTransitionAction(action));
   const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
-  const hasContractResponses = pathActions.some((action) =>
+  const hasContractResponses = authorPathActions.some((action) =>
     action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source));
-  const responses = pathActions.map((action) => {
+  const responses = authorPathActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
       const reasoningContract = reasoningContractsBySlug.get(action.source);
       if (reasoningContract) {
@@ -5504,7 +5692,7 @@ ${cannedFieldArgs}
     }
     return `        effect(${tsString(action.name)}, { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),`;
   }).join('\n');
-  const externalAdapterAssertions = pathActions
+  const externalAdapterAssertions = authorPathActions
     .filter((action) => action.archetype === 'external-adapter')
     .map((action) => `      expect(serialized).toContain(${tsString(action.adapter_kind ?? 'in_memory_mock')});`)
     .join('\n');
@@ -5525,7 +5713,7 @@ ${responses}
 
     try {
       await harness.trigger(${initialTrigger});
-${pathActions.slice(1).map(() => "      await harness.trigger('continue generated smoke');").join('\n')}
+${authorPathActions.slice(1).map(() => "      await harness.trigger('continue generated smoke');").join('\n')}
       const snapshot = await harness.snapshot();
       expect(snapshot.mode).toBe(${tsString(completion.final_stage)});
       const serialized = JSON.stringify(snapshot.domain).toLowerCase();
@@ -7118,6 +7306,9 @@ function renderRegistrationSource(
     delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
     artifactPolicy?: ProgramArtifactPolicy;
   } = {},
+  options: {
+    exportHookChannel?: string;
+  } = {},
 ): string {
   const policyEntries = [
     policies.delegationPolicy
@@ -7130,19 +7321,56 @@ function renderRegistrationSource(
       ? `    artifactPolicy: ${renderTsValue(policies.artifactPolicy)},`
       : '',
   ].filter(Boolean).join('\n');
+  const handlerImports = options.exportHookChannel
+    ? 'handlers, reactionHandlers, createExportHookAdapter'
+    : 'handlers, reactionHandlers';
+  const exportHookAdapterRegistration = options.exportHookChannel
+    ? `      adapters.outputs.set(${tsString(options.exportHookChannel)}, createExportHookAdapter());\n`
+    : '';
+  const specLoadSnippet = options.exportHookChannel
+    ? `  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
+    : `  const { spec } = loadSpecWithPatterns(specPath);\n`;
+  const decisionOnlyRegistryPromptHelper = options.exportHookChannel
+    ? `
+
+function withDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
+}
+`
+    : '';
   return `import {
   createProgramAdapters,
   createToolRegistry,
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
-import { handlers, reactionHandlers } from './handlers.js';
+import { ${handlerImports} } from './handlers.js';
 import { register${pascalName}Tools } from './tools.js';
 
 export function create${pascalName}ProgramEntry(): ProgramEntry {
   const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
-  const { spec } = loadSpecWithPatterns(specPath);
-  const toolRegistry = createToolRegistry();
+${specLoadSnippet}  const toolRegistry = createToolRegistry();
   register${pascalName}Tools(toolRegistry);
 
   return {
@@ -7157,10 +7385,11 @@ ${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
           }
         }
       }
-      return adapters;
+${exportHookAdapterRegistration}      return adapters;
     },
   };
 }
+${decisionOnlyRegistryPromptHelper}
 `;
 }
 
@@ -10338,6 +10567,12 @@ function recordField(parent: MutableRecord, key: string): MutableRecord {
     throw new Error(`expected object field: ${key}`);
   }
   return value as MutableRecord;
+}
+
+function recordOrEmpty(value: unknown): MutableRecord {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as MutableRecord
+    : {};
 }
 
 function cloneRecord(value: unknown): MutableRecord {

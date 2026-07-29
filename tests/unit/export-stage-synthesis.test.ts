@@ -17,6 +17,13 @@ describe('PR-E2 export stage synthesis', () => {
   it('emits deterministic DOCX export stages, result_path wiring, artifact policy, and standalone export artifacts', async () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
     const spec = load(artifact.spec_yaml) as {
+      features: string[];
+      pure: boolean;
+      modes: Record<string, Record<string, unknown>>;
+      channels: Record<string, Record<string, unknown>>;
+      reactions: Record<string, Record<string, unknown>>;
+      integrations: Record<string, { channel: string; hooks: Array<Record<string, unknown>> }>;
+      proceed_to: Record<string, string>;
       action_map: Record<string, Record<string, unknown>>;
       prompts: Record<string, string>;
       guidance: Record<string, string[]>;
@@ -29,17 +36,43 @@ describe('PR-E2 export stage synthesis', () => {
       archetype: 'pure-compute',
       export_kind: 'export_docx',
     });
-    expect(spec.action_map.complete_export_document?.result_path).toBe('export_document.output');
-    expect(spec.action_map.complete_export_document?.channel).toBe('stage_output');
-    expect(spec.prompts.export_document).toContain('Respond with EXACTLY ONE terminal action');
-    expect(spec.prompts.export_document).toContain('complete_export_document');
-    expect(spec.guidance.export_document.join('\n')).toContain('Respond with EXACTLY ONE terminal action');
-    expect(spec.guidance.export_document.join('\n')).toContain('complete_export_document');
+    expect(spec.features).toEqual(expect.arrayContaining(['decision_only', 'integrations']));
+    expect(spec.pure).toBe(false);
+    expect(spec.modes.export_document).toMatchObject({
+      decision_only: true,
+      vocabulary: [],
+      channels: [],
+      transitions: [{ target: 'complete' }],
+    });
+    expect(spec.action_map.complete_export_document).toBeUndefined();
+    expect(spec.proceed_to.complete_export_document).toBeUndefined();
+    expect(spec.prompts.export_document).toBeUndefined();
+    expect(spec.guidance.export_document).toBeUndefined();
+    expect(spec.channels.export_stage_hook).toEqual({ direction: 'Out', sync: 'Sync' });
+    expect(spec.reactions.mark_export_document_export_render_pending).toEqual({
+      event: 'OnTransition',
+      write_scope: ['export_document.render_pending'],
+    });
+    expect(spec.integrations.export_stage_hooks).toEqual({
+      channel: 'export_stage_hook',
+      hooks: [
+        {
+          action: 'render_export_document_export',
+          event: 'OnTransition',
+          result_path: 'export_document.output',
+        },
+      ],
+    });
 
     expect(artifact.registration_ts).toContain('artifactPolicy');
+    expect(artifact.registration_ts).toContain('createExportHookAdapter');
     expect(artifact.registration_ts).toContain("artifactType: 'docx_export'");
     expect(artifact.registration_ts).toContain("payloadRef: 'export_document.output'");
     expect(artifact.registration_ts).toContain("whenAllPaths: ['export_document.output.result_json']");
+    expect(artifact.handlers_ts).toContain('createExportHookAdapter');
+    expect(artifact.handlers_ts).toContain('runExportDocument');
+    expect(artifact.handlers_ts).toContain('render_export_document_export');
+    expect(artifact.handlers_ts).not.toContain('async complete_export_document');
 
     const plan = createStandaloneArtifactPlan(
       { slug: 'export-demo', name: 'Export Demo' },
@@ -71,31 +104,35 @@ describe('PR-E2 export stage synthesis', () => {
     }
   });
 
-  it('redacts deterministic export output shapes from the terminal action description', () => {
+  it('removes export output shapes from all author-facing action surfaces', () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
     const spec = load(artifact.spec_yaml) as {
       action_map: Record<string, { description?: string }>;
     };
-    const description = spec.action_map.complete_export_document?.description ?? '';
+    const authorSurfaces = [
+      artifact.spec_yaml,
+      artifact.tools_ts,
+      artifact.handlers_ts,
+      artifact.smoke_test_ts,
+    ].join('\n');
 
-    expect(description).toContain('Author-provided domain spec for export_document');
-    expect(description).toContain('"reads":["compose_memo.output.result_json"]');
-    expect(description).toContain('Render accumulated stage state into a deterministic DOCX export.');
-    expect(description).toContain('Do not call an LLM or provider while rendering export bytes.');
-    expect(description).not.toContain('"produces"');
-    expect(description).not.toContain('docx_base64');
+    expect(spec.action_map.complete_export_document).toBeUndefined();
+    expect(authorSurfaces).not.toContain('complete_export_document');
+    expect(authorSurfaces).not.toContain('docx_base64');
+    expect(authorSurfaces).not.toContain('"produces"');
   });
 
-  it('tells deterministic export wrappers to emit empty payloads instead of output fields', () => {
+  it('does not ask the model to emit a deterministic export wrapper action', () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
     const spec = load(artifact.spec_yaml) as {
       action_map: Record<string, { description?: string }>;
+      modes: Record<string, { vocabulary?: string[] }>;
     };
-    const description = spec.action_map.complete_export_document?.description ?? '';
 
-    expect(description).toContain('emit this action with an EMPTY payload');
-    expect(description).toContain('Do NOT author result_json');
-    expect(description).toContain('output fields');
+    expect(spec.action_map.complete_export_document).toBeUndefined();
+    expect(spec.modes.export_document?.vocabulary).toEqual([]);
+    expect(artifact.handlers_ts).toContain("domain[`${stage}.render_pending`] !== true");
+    expect(artifact.handlers_ts).toContain('return renderExportStage(stage, domain)');
   });
 
   it('keeps reasoning stage produce shapes in terminal action descriptions', () => {
