@@ -3,63 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWiringManifest, parseWiringManifest, WIRING_MANIFEST_PATH } from '../../src/pgas-new/wiring-manifest.js';
+import { VALID_WIRING_MANIFEST } from './fixtures/wiring-manifest.js';
 
-const VALID_MANIFEST = `
-schema_version: 1
-repo:
-  kind: existing_repo
-  package_manager: npm
-pgas:
-  server_package: "@simodelne/pgas-server"
-  allowed_imports:
-    - "@simodelne/pgas-server/plugin.js"
-    - "@simodelne/pgas-server/create-server.js"
-    - "@simodelne/pgas-server/client.js"
-    - "@simodelne/pgas-server/channels/index.js"
-    - "@simodelne/pgas-server/routes/index.js"
-paths:
-  programs_dir: "programs"
-  audit_dir: "audit"
-  pgas_new_dir: ".pgas/pgas-new"
-registration:
-  strategy: curator_request
-verification:
-  commands:
-    install: "npm install --no-audit --no-fund"
-    typecheck: "npm run typecheck"
-    test: "npm test"
-curator:
-  github_owner: simodelne
-  github_repo: simoneos
-`;
-
-const VALID_MANIFEST_WITH_INTEGRATION = `
-schema_version: 1
-repo:
-  kind: existing_repo
-  package_manager: npm
-pgas:
-  server_package: "@simodelne/pgas-server"
-  allowed_imports:
-    - "@simodelne/pgas-server/plugin.js"
-    - "@simodelne/pgas-server/create-server.js"
-    - "@simodelne/pgas-server/client.js"
-    - "@simodelne/pgas-server/channels/index.js"
-    - "@simodelne/pgas-server/routes/index.js"
-paths:
-  programs_dir: "programs"
-  audit_dir: "audit"
-  pgas_new_dir: ".pgas/pgas-new"
-registration:
-  strategy: curator_request
-verification:
-  commands:
-    install: "npm install --no-audit --no-fund"
-    typecheck: "npm run typecheck"
-    test: "npm test"
-curator:
-  github_owner: simodelne
-  github_repo: simoneos
+const VALID_MANIFEST = VALID_WIRING_MANIFEST;
+const VALID_MANIFEST_WITH_INTEGRATION = `${VALID_WIRING_MANIFEST}
 integrations:
   - name: crm
     kind: http_api
@@ -144,6 +91,18 @@ describe('wiring manifest parser', () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('pgas.allowed_imports contains banned import: @simodelne/pgas-server/src/testing.js');
+  });
+
+  it('rejects package-internal dist-bundle pgas imports as banned', () => {
+    const result = parseWiringManifest(
+      VALID_MANIFEST.replace(
+        '"@simodelne/pgas-server/routes/index.js"',
+        '"@simodelne/pgas-server/dist-bundle/plugin.js"',
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('pgas.allowed_imports contains banned import: @simodelne/pgas-server/dist-bundle/plugin.js');
   });
 
   it('rejects malformed integration declarations with clear field errors', () => {

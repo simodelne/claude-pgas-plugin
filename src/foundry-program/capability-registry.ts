@@ -10,13 +10,14 @@ import { isRecord } from '../util/guards.js';
 // foundry must instead DECLARE what it can synthesize and REFUSE (safe-stop) when
 // a required capability is beyond its current envelope — never fake a green scaffold.
 //
-// The engine primitives for these capabilities are already public on the pinned
-// @simodelne/pgas-server (3.18.0): per-item decision targeting, confirmation
-// pairing, delegation with degrade, and POST /sessions/:id/files upload. The gap
-// is FOUNDRY SYNTHESIS, not engine surface. As the uplift's PR-sized increments
-// land (PR-2 collection-v2, PR-3 confirmation loops, PR-5 delegation, PR-7 ingest,
-// PR-9 frontend, …), each capability's `status` here flips from `refuses` to
-// `synthesizes`. Until then, demanding one is a hard, honest stop.
+// The engine primitives for these capabilities are already public on the
+// @simodelne/pgas-server version tracked by PGAS_SERVER_VERSION: per-item
+// decision targeting, confirmation pairing, delegation with degrade, and
+// POST /sessions/:id/files upload. The gap is FOUNDRY SYNTHESIS, not engine
+// surface. As the uplift's PR-sized increments land (PR-2 collection-v2, PR-3
+// confirmation loops, PR-5 delegation, PR-7 ingest, PR-9 frontend, …), each
+// capability's `status` here flips from `refuses` to `synthesizes`. Until then,
+// demanding one is a hard, honest stop.
 
 export type CapabilityStatus = 'synthesizes' | 'scaffolds_with_gap' | 'refuses';
 
@@ -33,7 +34,13 @@ export interface CapabilityEntry {
   readonly gap_note?: string;
 }
 
-// Versioned self-assessment. Ordered roughly by the uplift plan. Keep entries in
+function capabilityEvidence(sections: readonly string[]): string {
+  return sections.join('\n');
+}
+
+// Versioned self-assessment. Ordered roughly by the uplift plan. Long live-proof
+// evidence uses "Summary / Proofs / Limitations / Last verified" sections.
+// Keep entries in
 // lockstep with docs/… and the FOUNDRY_UPLIFT increments; a status only becomes
 // `synthesizes` when a generated program's choreography is proven by the live-drive
 // hard gate (not mock-green).
@@ -59,19 +66,62 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   {
     capability: 'per_item_confirmation',
     status: 'synthesizes',
-    evidence: 'confirmation_loop descriptors synthesize a seeded indexed_array collection (from an upstream llm-reasoning stage), decision_targeting + confirmation_pairing, and AfterIngestion reaction-owned per-item status enforcement (approve/request_revision/reject → accepted/proposed/skipped, one-proposed-at-a-time demotion, aggregate flip). PROVEN end-to-end by the choreography live-drive hard gate against a real provider (qwen36-27b): the generated program booted on createPgasServer, planned + proposed items, applied scripted decisions through the real route, and reached complete — provider_hits=7, decisions_applied=3, proposed_overlap_max=1, loop_engaged=true, both items accepted, all_terminal=true. The verdict is fail-closed (PR-5b), so a stall cannot read green; this is live-proven, not mock.',
+    evidence: capabilityEvidence([
+      'Summary: confirmation_loop descriptors synthesize a seeded indexed_array collection ' +
+        'from an upstream llm-reasoning stage, decision_targeting + confirmation_pairing, ' +
+        'and AfterIngestion reaction-owned per-item status enforcement.',
+      'Proofs: choreography live-drive hard gate against qwen36-27b booted the generated ' +
+        'program on createPgasServer, planned and proposed items, applied scripted ' +
+        'decisions through the real route, and reached complete.',
+      'Proofs: provider_hits=7, decisions_applied=3, proposed_overlap_max=1, loop_engaged=true, both items accepted, all_terminal=true.',
+      'Limitations: verdict is fail-closed (PR-5b), so a stall cannot read green; this is live-proven, not mock.',
+      'Last verified: 2026-07 live-drive evidence.',
+    ]),
     since_version: '3.23.0',
   },
   {
     capability: 'delegation_child_session',
     status: 'synthesizes',
-    evidence: 'child-session delegation is synthesized (parent channel/action/projection/schema + AfterRound settle reaction, recursive worker-child synthesis, delegationPolicy/inputEnrichment + child delegationResultPolicy, two-program server.ts) and PROVEN end-to-end by the delegation live-drive against a real provider (qwen36-27b): the synthesized parent booted on createPgasServer, dispatched a real Service child that ran 2 provider rounds and returned a genuine result echoing the seeded topic, the AfterRound reaction settled, and the parent reached complete. delegation_engaged verdict all-green (result_complete, distinct child session, child_rounds>=1, settled, parent complete, provider_hits>=parent+child, no stub markers) — fail-closed, so a stall/mock cannot read green. When an existing-repo wiring manifest declares a delegation_document_ingest or delegation_review program (Slice A), a target_spec-only child is manifest-reusable as delegation to that already-registered simoneos agent (document-ingest / contract-review-service): the matcher validate-and-stamps registered_name so allowedTargetPrograms carries BOTH the spec name and the registry key — riding the same target_spec reuse machinery as delegation_research_agent, with no self-contained→delegation restructure and no synthesize_child demand. Removing the manifest entry flips reuse off (route-level engine falsifier: allowedTargetPrograms omits the registry key → engine declines not-in-allowedTargetPrograms). Slice B: N DISTINCT STATIC children (contract-draft parity — reuse all three simoneos agents in one program) now synthesizes on the SAME machinery (every applyDelegation* emitter already fans out over children; the validator now loops per-child with cross-child uniqueness on id/stage/result_path/target_spec; the smoke renderer dispatches + settles all N). PROVEN route-level by the multi-child engine falsifier: one foundry-synthesized parent dispatches to TWO separately-registered programs sequentially, each landing complete in a DISTINCT child session, parent reaches complete. Gap 2 document fan-out now synthesizes a narrow runtime loop: one static child channel is dispatched sequentially over documents.result_path.documents, each child receives only documents.result_path.current_document via inputEnrichment, and an AfterRound cursor reaction records results under document-keyed fan_out.results. Generic single-child fan_out (arbitrary source/target), dynamic-target-arg, continue-mode, and strict (non-optional) delegation STILL refuse (assertDelegationV1Scope, per-child).',
+    evidence: capabilityEvidence([
+      'Summary: child-session delegation synthesizes parent channel/action/projection/schema, ' +
+        'AfterRound settle reaction, recursive worker-child synthesis, delegationPolicy/inputEnrichment, ' +
+        'child delegationResultPolicy, and two-program server.ts.',
+      'Proofs: delegation live-drive against qwen36-27b booted the synthesized parent on ' +
+        'createPgasServer, dispatched a real Service child that ran 2 provider rounds, ' +
+        'returned a genuine seeded-topic result, settled AfterRound, and reached parent complete.',
+      'Proofs: delegation_engaged verdict all-green: result_complete, distinct child session, child_rounds>=1, settled, parent complete, provider_hits>=parent+child, no stub markers.',
+      'Proofs: existing-repo wiring manifest Slice A reuses delegation_document_ingest or ' +
+        'delegation_review programs by validate-and-stamping registered_name so allowedTargetPrograms ' +
+        'carries both the spec name and registry key; removing the manifest entry flips reuse off.',
+      'Proofs: Slice B supports N distinct static children on the same delegation machinery; ' +
+        'multi-child engine falsifier dispatched to two separately registered programs sequentially, ' +
+        'each completed in a distinct child session, and the parent reached complete.',
+      'Proofs: document fan-out synthesizes a narrow runtime loop over documents.result_path.documents, ' +
+        'passing current_document via inputEnrichment and recording document-keyed fan_out.results ' +
+        'in an AfterRound cursor reaction.',
+      'Limitations: generic single-child fan_out, dynamic-target-arg, continue-mode, and strict non-optional delegation still refuse via assertDelegationV1Scope.',
+      'Last verified: 2026-07 delegation, multi-child, and document fan-out falsifier evidence.',
+    ]),
     since_version: '3.24.0',
   },
   {
     capability: 'delegation_research_agent',
     status: 'synthesizes',
-    evidence: "self-contained research-agent child (receive → research[llm-reasoning, reasoning contract from result_fields] → complete) is synthesized on the delegation machinery and PROVEN end-to-end by the delegation live-drive against a real provider (qwen36-27b): the parent dispatched a real Service research child that ran 2 provider rounds and returned a genuine summary echoing the seeded topic, settled, and the parent reached complete. delegation_engaged verdict all-green (provider_hits=14, fail-closed — a stall/mock cannot read green). The BACKED variant (research_backend: host_connector) synthesizes the child + emits ONLY a typed host-connector contract + fixture mock + a per-program capability_gaps entry — the research backend is never foundry code (scope directive). When an existing-repo wiring manifest declares a delegation_research_agent program, the backed variant is manifest-reusable as a target_spec-only delegation to that registered program instead of emitting the stub/gap.",
+    evidence: capabilityEvidence([
+      'Summary: self-contained research-agent child synthesis builds receive -> ' +
+        'research[llm-reasoning, reasoning contract from result_fields] -> complete on the delegation machinery.',
+      'Proofs: delegation live-drive against qwen36-27b dispatched a real Service research child, ' +
+        'ran 2 provider rounds, returned a genuine summary echoing the seeded topic, settled, ' +
+        'and reached parent complete.',
+      'Proofs: delegation_engaged verdict all-green with provider_hits=14 and fail-closed semantics, ' +
+        'so a stall/mock cannot read green.',
+      'Proofs: backed research_backend=host_connector emits only a typed host-connector contract, ' +
+        'fixture mock, and per-program capability_gaps entry; the research backend is never foundry code.',
+      'Proofs: existing-repo wiring manifest delegation_research_agent entries are manifest-reusable ' +
+        'as target_spec-only delegation instead of emitting the stub/gap.',
+      'Limitations: host-backed research still requires host implementation behind the emitted connector contract.',
+      'Last verified: 2026-07 delegation live-drive and manifest-reuse evidence.',
+    ]),
     since_version: '3.24.0',
   },
   {
@@ -116,7 +166,18 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   {
     capability: 'export_docx_plain',
     status: 'synthesizes',
-    evidence: 'PROVEN end-to-end by the export live-drive against a real provider (qwen36-27b): a generated program drove to complete (4 rounds), the provider composed a memo that flowed through domain state into the foundry-emitted deterministic export stage, which rendered a real OOXML docx harvested as a first-class SessionArtifactRecord via ProgramEntry.artifactPolicy (payloadRef export_document.output). The retrieved+unzipped word/document.xml contained the per-run nonce VERBATIM with the hard-coded fee-proposal default ABSENT and valid STORE OOXML — fail-closed export_engaged verdict all-green (artifact_record_harvested + payload_decoded + nonce_present + default_absent + zip_store_ooxml, all unfakeable). Track-change (w:ins/w:del) remains host-blocked (export_docx_trackchange / simoneos#1738).',
+    evidence: capabilityEvidence([
+      'Summary: deterministic DOCX export is synthesized through a foundry-emitted export stage ' +
+        'and harvested as a first-class SessionArtifactRecord via ProgramEntry.artifactPolicy.',
+      'Proofs: export live-drive against qwen36-27b drove a generated program to complete in 4 rounds; ' +
+        'provider-composed memo state flowed into export_document.output and rendered a real OOXML docx.',
+      'Proofs: retrieved and unzipped word/document.xml contained the per-run nonce verbatim, ' +
+        'hard-coded fee-proposal default absent, and valid STORE OOXML.',
+      'Proofs: fail-closed export_engaged verdict all-green: artifact_record_harvested, ' +
+        'payload_decoded, nonce_present, default_absent, zip_store_ooxml.',
+      'Limitations: native track-change w:ins/w:del remains host-blocked under export_docx_trackchange / simoneos#1738.',
+      'Last verified: 2026-07 export live-drive evidence.',
+    ]),
     since_version: '3.26.0',
   },
   {

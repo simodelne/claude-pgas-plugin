@@ -52,12 +52,22 @@ describe('template renderer', () => {
   it('rejects removed consumer template names at runtime', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-removed-template-'));
     try {
-      expect(() => renderStandaloneScaffold({
-        outDir,
-        slug: 'draft-policy',
-        name: 'Draft Policy',
-        template: 'policy-drafting' as never,
-      })).toThrow(/invalid --template: policy-drafting/);
+      let thrown: unknown;
+      try {
+        renderStandaloneScaffold({
+          outDir,
+          slug: 'draft-policy',
+          name: 'Draft Policy',
+          template: 'policy-drafting' as never,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('invalid --template: policy-drafting');
+      expect((thrown as Error).message).toContain('template selector is reserved for legacy foundry bootstrap only');
+      expect((thrown as Error).message).not.toContain('pgas-new-foundry');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
@@ -1003,6 +1013,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
       const renderer = readFileSync(join(outDir, 'src/repl/renderer.ts'), 'utf8');
       const pkg = readFileSync(join(outDir, 'package.json'), 'utf8');
+      const packageJson = JSON.parse(pkg) as { dependencies?: Record<string, string> };
 
       // index.ts: pure client — no embedded server
       expect(index).not.toContain('createPgasServer');
@@ -1023,8 +1034,9 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect(renderer).toContain('ReplState');
       expect(renderer).toContain("from 'chalk'");
 
-      // package.json: chalk dep present (@clack/prompts kept for future widget flows)
-      expect(pkg).toContain('chalk');
+      // package.json: dependencies mirror generated imports.
+      expect(packageJson.dependencies).toMatchObject({ chalk: expect.any(String) });
+      expect(packageJson.dependencies).not.toHaveProperty('@clack/prompts');
       expect(pkg).toContain('"dev": "node --import tsx src/server.ts"');
       expect(pkg).toContain('"repl": "node --import tsx src/repl/index.ts"');
 

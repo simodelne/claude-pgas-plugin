@@ -8,35 +8,9 @@ import {
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
+import { VALID_WIRING_MANIFEST } from './fixtures/wiring-manifest.js';
 
-const VALID_MANIFEST = `
-schema_version: 1
-repo:
-  kind: existing_repo
-  package_manager: npm
-pgas:
-  server_package: "@simodelne/pgas-server"
-  allowed_imports:
-    - "@simodelne/pgas-server/plugin.js"
-    - "@simodelne/pgas-server/create-server.js"
-    - "@simodelne/pgas-server/client.js"
-    - "@simodelne/pgas-server/channels/index.js"
-    - "@simodelne/pgas-server/routes/index.js"
-paths:
-  programs_dir: "programs"
-  audit_dir: "audit"
-  pgas_new_dir: ".pgas/pgas-new"
-registration:
-  strategy: curator_request
-verification:
-  commands:
-    install: "npm install --no-audit --no-fund"
-    typecheck: "npm run typecheck"
-    test: "npm test"
-curator:
-  github_owner: simodelne
-  github_repo: simoneos
-`;
+const VALID_MANIFEST = VALID_WIRING_MANIFEST;
 
 const MANIFEST_ENTRY: WiringAvailableProgram = {
   slug: 'research',

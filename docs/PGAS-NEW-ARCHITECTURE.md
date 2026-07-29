@@ -1,10 +1,11 @@
 # PGAS-New Architecture
 
-Status: v3.23.0 released on `main`; engine pin `@simodelne/pgas-server@3.21.0`.
+Status: v3.23.0 released on `main`; checked engine version
+`PGAS_SERVER_VERSION` is `@simodelne/pgas-server@3.24.0`.
 
 ## Changelog
 
-### Since v3.1.0 (current: v3.22.0, engine 3.21.0)
+### Since v3.1.0 (current: v3.23.0, checked engine 3.24.0)
 
 - This doc tracks the foundry architecture, not every release; per-version history lives in the git tags / GitHub releases. Major additions since v3.1.0: real LLM-reasoning domain synthesis; `repo_targeting` + existing-repo attachment; per-item confirmation loops; child-session + research-agent delegation; document upload intake + deterministic DOCX/PDF text extraction; DOCX/HTML export (artifacts are first-class `SessionArtifactRecord`s); and manifest-driven connector reuse of existing repo programs.
 
@@ -27,11 +28,13 @@ Status: v3.23.0 released on `main`; engine pin `@simodelne/pgas-server@3.21.0`.
 
 In v3.0 the foundry itself is a PGAS program. The bare `pgas-new` command starts the foundry REPL, whose modes, actions, control plane, notebook state, and projections are declared in `src/foundry-program/`. Per-domain programs are synthesized by completing the foundry design interview and approving the governed artifact plan, not by choosing a preset template flag.
 
-The only remaining `--template` value is `pgas-new-foundry`, retained for the legacy foundry bootstrap render path. Consumer template values are removed in v3.0; callers that pass them receive an error pointing to the bare REPL.
+The legacy `--template pgas-new-foundry` value is retained only as a hidden compatibility shim for the foundry bootstrap render path. Consumer template values are removed in v3.0; callers that pass them receive an error pointing to the bare REPL.
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@3.21.0` and use only these public imports:
+Generated consumers target the `@simodelne/pgas-server` version recorded by
+`PGAS_SERVER_VERSION` (3.24.0 today; dependency specs use `^${PGAS_SERVER_VERSION}`)
+and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`

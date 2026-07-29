@@ -14,16 +14,16 @@ import {
 } from '../../src/pgas-new/version.js';
 
 describe('PGAS server version contract', () => {
-  it('pins the published pgas-server version checked for this foundry', () => {
+  it('records the published pgas-server version checked for this foundry', () => {
     expect(PGAS_SERVER_PACKAGE).toBe('@simodelne/pgas-server');
     expect(PGAS_SERVER_VERSION).toBe('3.24.0');
   });
 
-  it('keeps version.ts in lockstep with the package.json dependency pin (no skew)', () => {
-    // Guards against the 2026-07 skew where the dependency pin moved to ^3.5.0
-    // (PR #130) but version.ts stayed at 3.3.0, so generated scaffolds pinned a
+  it('keeps version.ts in lockstep with the package.json compatible dependency range (no skew)', () => {
+    // Guards against the 2026-07 skew where the dependency range moved to ^3.5.0
+    // (PR #130) but version.ts stayed at 3.3.0, so generated scaffolds used a
     // stale server. version.ts is the authoritative "checked published version";
-    // it MUST match the caret pin the foundry actually depends on.
+    // it MUST match the caret range the foundry actually depends on.
     const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
       dependencies?: Record<string, string>;
@@ -66,6 +66,9 @@ describe('PGAS server version contract', () => {
     expect(BANNED_IMPORT_PATTERNS.length).toBeGreaterThan(0);
     expect(isBannedImport('@simodelne/pgas-server/api')).toBe(true);
     expect(isBannedImport('@simodelne/pgas-server/src/plugin.js')).toBe(true);
+    expect(isBannedImport('@simodelne/pgas-server/dist-bundle')).toBe(true);
+    expect(isBannedImport('@simodelne/pgas-server/dist-bundle/plugin.js')).toBe(true);
+    expect(isBannedImport('@simodelne/pgas-server/dist-bundle/client/http.js')).toBe(true);
     expect(isBannedImport('@simodelne/pgas-runtime')).toBe(true);
     expect(isBannedImport('@simodelne/pgas-runtime-core/foo')).toBe(true);
     expect(isBannedImport('@simodelne/pgas-runtime-foo')).toBe(true);

@@ -4,35 +4,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runCli } from '../../src/cli.js';
 import { PGAS_NEW_SESSION_CONTROLS } from '../../src/pgas-new/control-plane.js';
+import { VALID_WIRING_MANIFEST } from './fixtures/wiring-manifest.js';
 
-const VALID_MANIFEST = `
-schema_version: 1
-repo:
-  kind: existing_repo
-  package_manager: npm
-pgas:
-  server_package: "@simodelne/pgas-server"
-  allowed_imports:
-    - "@simodelne/pgas-server/plugin.js"
-    - "@simodelne/pgas-server/create-server.js"
-    - "@simodelne/pgas-server/client.js"
-    - "@simodelne/pgas-server/channels/index.js"
-    - "@simodelne/pgas-server/routes/index.js"
-paths:
-  programs_dir: "programs"
-  audit_dir: "audit"
-  pgas_new_dir: ".pgas/pgas-new"
-registration:
-  strategy: curator_request
-verification:
-  commands:
-    install: "npm install --no-audit --no-fund"
-    typecheck: "npm run typecheck"
-    test: "npm test"
-curator:
-  github_owner: simodelne
-  github_repo: simoneos
-`;
+const VALID_MANIFEST = VALID_WIRING_MANIFEST;
 
 describe('pgas-new CLI', () => {
   it('prints root help for --help and help', async () => {
@@ -119,7 +93,8 @@ describe('pgas-new CLI', () => {
         expect(result.exitCode).toBe(1);
         expect(result.stdout).toBe('');
         expect(result.stderr).toContain(`invalid --template: ${template}`);
-        expect(result.stderr).toContain('only pgas-new-foundry is supported');
+        expect(result.stderr).toContain('template selector is reserved for legacy foundry bootstrap only');
+        expect(result.stderr).not.toContain('pgas-new-foundry');
         expect(result.stderr).toContain('bare `pgas-new` REPL');
         expect(readDirSafe(outDir)).toEqual([]);
       } finally {
@@ -128,15 +103,15 @@ describe('pgas-new CLI', () => {
     }
   });
 
-  it('lists only the foundry template in help', async () => {
+  it('does not advertise the hidden legacy template selector in help', async () => {
     const result = await runCli(['help']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('pgas-new-foundry');
+    expect(result.stdout).not.toContain('--template');
+    expect(result.stdout).not.toContain('pgas-new-foundry');
     expect(result.stdout).not.toContain('policy-drafting');
     expect(result.stdout).not.toContain('web-scraper');
     expect(result.stdout).not.toContain('social-media-agent');
-    expect(result.stdout).not.toContain('pgas-new-foundry (deprecated)');
   });
 
   it('rejects unsafe slugs before rendering files', async () => {

@@ -1,5 +1,8 @@
 export const PGAS_SERVER_PACKAGE = "@simodelne/pgas-server";
 
+// Authoritative checked engine version for generated scaffolds and docs.
+// package.json/template specs intentionally use `^${PGAS_SERVER_VERSION}`,
+// so those compatible npm ranges should not be described as exact pins.
 export const PGAS_SERVER_VERSION = "3.24.0";
 
 export const PGAS_SERVER_RUNTIME_IMPORTS = [
@@ -26,6 +29,7 @@ export type PgasServerImport = (typeof PGAS_SERVER_IMPORTS)[number];
 export const BANNED_IMPORT_PATTERNS = [
   /^@simodelne\/pgas-server\/api(?:$|\/)/,
   /^@simodelne\/pgas-server\/src(?:$|\/)/,
+  /^@simodelne\/pgas-server\/dist-bundle(?:$|\/)/,
   /^@simodelne\/pgas-runtime(?:$|[-/])/,
   /^@simodelne\/pgas-contracts(?:$|\/)/,
   /^@simodelne\/pgas-middleware(?:$|\/)/,

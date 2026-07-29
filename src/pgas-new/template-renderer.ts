@@ -546,7 +546,7 @@ function assertSupportedTemplate(template: ProgramTemplate | undefined): void {
   }
 
   throw new Error(
-    `invalid --template: ${value}. In v3.0, only pgas-new-foundry is supported. ` +
+    `invalid --template: ${value}. In v3.0, the template selector is reserved for legacy foundry bootstrap only. ` +
       'For per-domain programs, run the bare `pgas-new` REPL and walk the foundry design interview.',
   );
 }

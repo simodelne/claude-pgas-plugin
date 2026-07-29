@@ -739,7 +739,7 @@ function templateOption(options: ParsedOptions): ProgramTemplate | undefined {
 }
 
 function removedTemplateError(template: string): string {
-  return `invalid --template: ${template}. In v3.0, only pgas-new-foundry is supported. ` +
+  return `invalid --template: ${template}. In v3.0, the template selector is reserved for legacy foundry bootstrap only. ` +
     'For per-domain programs, run the bare `pgas-new` REPL and walk the foundry design interview.';
 }
 
@@ -769,10 +769,10 @@ function helpText(): string {
     '  logout',
     '  version',
     '  plan-standalone --slug <slug> --name <name>',
-    '  render-standalone --slug <slug> --name <name> --out <dir> [--template pgas-new-foundry] [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
+    '  render-standalone --slug <slug> --name <name> --out <dir> [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
     '  validate-manifest --repo <repo>',
     '  plan-attach --repo <repo> --slug <slug> --name <name>',
-    '  render-attach --repo <repo> --slug <slug> --name <name> [--template pgas-new-foundry] [--mandate <text>]',
+    '  render-attach --repo <repo> --slug <slug> --name <name> [--mandate <text>]',
     '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
     '  session new|abort|status|history|resume|help',
     '',
