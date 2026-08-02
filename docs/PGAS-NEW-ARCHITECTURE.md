@@ -1,11 +1,11 @@
 # PGAS-New Architecture
 
-Status: v3.23.0 released on `main`; checked engine version
+Status: v3.24.0 release candidate; checked engine version
 `PGAS_SERVER_VERSION` is `@simodelne/pgas-server@3.24.0`.
 
 ## Changelog
 
-### Since v3.1.0 (current: v3.23.0, checked engine 3.24.0)
+### Since v3.1.0 (current foundry: v3.24.0, checked engine 3.24.0)
 
 - This doc tracks the foundry architecture, not every release; per-version history lives in the git tags / GitHub releases. Major additions since v3.1.0: real LLM-reasoning domain synthesis; `repo_targeting` + existing-repo attachment; per-item confirmation loops; child-session + research-agent delegation; document upload intake + deterministic DOCX/PDF text extraction; DOCX/HTML export (artifacts are first-class `SessionArtifactRecord`s); and manifest-driven connector reuse of existing repo programs.
 
