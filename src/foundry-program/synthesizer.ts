@@ -719,6 +719,50 @@ export function synthesizeProgramSpecFromDomain(
   };
 }
 
+export interface ReusableDelegationPayloadMapCompatibility {
+  delegation: DelegationDescriptor;
+  errors: string[];
+}
+
+export function adaptReusableDelegationPayloadMapsForDomain(
+  domain: Record<string, unknown>,
+  delegation: DelegationDescriptor,
+  availablePrograms: WiringAvailableProgram[],
+): ReusableDelegationPayloadMapCompatibility {
+  if (!Array.isArray(delegation.children) || delegation.children.length === 0 || availablePrograms.length === 0) {
+    return { delegation, errors: [] };
+  }
+
+  const entryChannel = normalizePgasChannelId(stringDomainField(domain, 'intake.entry_channel'));
+  const initialEntryPath = initialInputPath(entryChannel);
+  const stages = normalizeStages(parseStagesDomainField(domain));
+  const transitions = parseOptionalJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json') ?? [];
+  const completion = parseOptionalJsonDomainField<Completion>(domain, 'intake.completion_json');
+  const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
+  const documents = normalizeDocumentsDescriptor(rawDocuments);
+  const resolved = normalizeDelegationChildInternalIdentifiers(
+    resolveDelegationChildrenAgainstManifest(delegation, availablePrograms),
+  );
+  const normalized = normalizeDelegationInputEnrichmentTargets(
+    normalizeDocumentSliceDelegation(resolved, documents),
+    documents,
+  );
+  const schemaPaths = collectParentSchemaPathsForDelegationValidation(
+    stages,
+    entryChannel,
+    initialEntryPath,
+    transitions,
+    completion,
+    documents,
+  );
+  addDelegationResultSchemaPaths(normalized, schemaPaths);
+
+  return {
+    delegation: normalized,
+    errors: reusableDelegationPayloadMapSourceErrors(normalized, schemaPaths),
+  };
+}
+
 /**
  * Deterministically re-runs spec synthesis from the stored synthesis context
  * with reasoning contracts woven in. Byte-identical to the original synthesis
@@ -7250,7 +7294,7 @@ function resolveDelegationChildrenAgainstManifest(
         target_spec: reuseEntry.target_spec,
         registered_name: reuseEntry.slug,
         target_slug: reuseEntry.slug,
-        payload_map: reuseEntry.payload_map ?? child.payload_map,
+        payload_map: adaptReusableProgramPayloadMap(child.payload_map, reuseEntry.payload_map),
         result_path: reuseEntry.result_path ?? child.result_path,
       };
     }
@@ -7267,7 +7311,7 @@ function resolveDelegationChildrenAgainstManifest(
         target_spec: researchEntry.target_spec,
         registered_name: researchEntry.slug,
         target_slug: researchEntry.slug,
-        payload_map: researchEntry.payload_map ?? child.payload_map,
+        payload_map: adaptReusableProgramPayloadMap(child.payload_map, researchEntry.payload_map),
         result_path: researchEntry.result_path ?? child.result_path,
       };
     }
@@ -7276,6 +7320,26 @@ function resolveDelegationChildrenAgainstManifest(
   });
 
   return changed ? { ...delegation, children } : delegation;
+}
+
+function adaptReusableProgramPayloadMap(
+  parentPayloadMap: Record<string, string>,
+  manifestPayloadMap: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!manifestPayloadMap) {
+    return parentPayloadMap;
+  }
+
+  const singleParentSource = unique(Object.values(parentPayloadMap)).length === 1
+    ? Object.values(parentPayloadMap)[0]
+    : undefined;
+
+  return Object.fromEntries(
+    Object.entries(manifestPayloadMap).map(([target, manifestSource]) => [
+      target,
+      parentPayloadMap[target] ?? singleParentSource ?? manifestSource,
+    ]),
+  );
 }
 
 function normalizeDelegationChildInternalIdentifiers(delegation: DelegationDescriptor): DelegationDescriptor {
@@ -10611,6 +10675,37 @@ function delegationSchemaPathDeclared(path: string, schemaPaths: ReadonlySet<str
   });
 }
 
+function addDelegationResultSchemaPaths(delegation: DelegationDescriptor, schemaPaths: Set<string>): void {
+  for (const child of delegation.children ?? []) {
+    if (typeof child.result_path !== 'string') {
+      continue;
+    }
+    schemaPaths.add(child.result_path);
+    schemaPaths.add(`${child.result_path}.result`);
+  }
+}
+
+function reusableDelegationPayloadMapSourceErrors(
+  delegation: DelegationDescriptor,
+  schemaPaths: ReadonlySet<string>,
+): string[] {
+  const errors: string[] = [];
+  for (const [index, child] of (delegation.children ?? []).entries()) {
+    if (!isManifestReusedDelegationChild(child)) {
+      continue;
+    }
+    for (const [target, source] of Object.entries(child.payload_map)) {
+      if (delegationSchemaPathDeclared(source, schemaPaths)) {
+        continue;
+      }
+      errors.push(
+        `delegation.children[${String(index)}].payload_map manifest source ${source} is not declared in this program's schema; provide a source mapping for child input ${target} from a declared parent path such as inputs.initial_user_text`,
+      );
+    }
+  }
+  return errors;
+}
+
 function collectGeneratedActionNamesForDelegationValidation(
   transitions: IntakeTransition[],
   completion: Completion,
@@ -10639,7 +10734,7 @@ function collectParentSchemaPathsForDelegationValidation(
   entryChannel: string,
   initialEntryPath: string,
   transitions: IntakeTransition[],
-  completion: Completion,
+  completion: Completion | undefined,
   documents: DocumentsDescriptor | undefined,
 ): Set<string> {
   const schemaPaths = new Set<string>([
@@ -10650,7 +10745,9 @@ function collectParentSchemaPathsForDelegationValidation(
     collectDocumentsSchemaPaths(documents, schemaPaths);
   }
   for (const transition of transitions) {
-    const guardField = guardFieldForTransition(transition, completion);
+    const guardField = completion
+      ? guardFieldForTransition(transition, completion)
+      : normalizeGuardField(transition.guard_field);
     if (guardField) {
       schemaPaths.add(guardField);
     }
@@ -10785,6 +10882,17 @@ function parseJsonDomainField<T>(domain: Record<string, unknown>, path: string):
   const value = domainValue(domain, path);
   if (typeof value !== 'string') {
     throw new Error(`missing JSON-string domain field: ${path}`);
+  }
+  return JSON.parse(value) as T;
+}
+
+function parseOptionalJsonDomainField<T>(domain: Record<string, unknown>, path: string): T | undefined {
+  const value = domainValue(domain, path);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`optional JSON-string domain field must be a string when present: ${path}`);
   }
   return JSON.parse(value) as T;
 }

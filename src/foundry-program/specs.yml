@@ -60,6 +60,7 @@ modes:
         - { kind: FieldFalsy, path: intake.q6_recorded }
       record_q6_completion:
         - { kind: FieldTruthy, path: intake.q5_recorded }
+        - { kind: FieldFalsy, path: intake.delegation_validation_error }
         - { kind: FieldFalsy, path: intake.q6_recorded }
       record_skill_catalog:
         - { kind: FieldEquals, path: program.design_path, value: design }
@@ -72,6 +73,7 @@ modes:
         - { kind: FieldTruthy, path: intake.q3_recorded }
         - { kind: FieldTruthy, path: intake.q4_recorded }
         - { kind: FieldTruthy, path: intake.q5_recorded }
+        - { kind: FieldFalsy, path: intake.delegation_validation_error }
         - { kind: FieldTruthy, path: intake.q6_recorded }
         - { kind: FieldFalsy, path: intake.program_intake_finalized }
       confirm_design:
@@ -289,6 +291,7 @@ projection:
       - intake.q4_recorded
       - intake.delegation_json
       - intake.q5_recorded
+      - intake.delegation_validation_error
       - intake.documents_json
       - intake.documents_recorded
       - intake.completion_json
@@ -626,6 +629,10 @@ action_map:
         fan_out.result_path + fan_out.completion_guard. Generic fan_out,
         dynamic_target_arg, delegation_mode=continue, and strict delegation
         are still refused.
+        For existing-repo reusable children, manifest payload_map keys are the
+        child input contract; provide values from this parent program's declared
+        schema paths (for example inputs.initial_user_text), not manifest-native
+        parent paths from another repo.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
@@ -1026,6 +1033,15 @@ reactions:
       - intake.documents_json
       - intake.completion_json
       - intake.skills_json
+  validate_reusable_delegation_payload_map:
+    event: AfterMutation
+    watch:
+      - intake.delegation_json
+    write_scope:
+      - intake.q5_recorded
+      - intake.delegation_validation_error
+      - intake.last_question_asked
+      - intake.last_question_text
   summarize_design_confirmation:
     event: AfterMutation
     watch:
@@ -1099,6 +1115,7 @@ schema:
   intake.q4_recorded: boolean
   intake.delegation_json: string
   intake.q5_recorded: boolean
+  intake.delegation_validation_error: string
   intake.documents_json: string
   intake.documents_recorded: boolean
   intake.completion_json: string
