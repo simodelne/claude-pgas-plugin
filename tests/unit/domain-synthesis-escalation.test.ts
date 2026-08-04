@@ -80,13 +80,23 @@ describe('domain synthesis codex escalation', () => {
   const originalEscalationDriver = process.env.PGAS_SYNTH_ESCALATION_DRIVER;
   const originalEscalationMaxAttempts = process.env.PGAS_SYNTH_ESCALATION_MAX_ATTEMPTS;
   const originalEnableCodexDriver = process.env.PGAS_ENABLE_CODEX_DRIVER;
+  const originalOpenAiBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
+  const originalOpenAiModel = process.env.PGAS_OPENAI_MODEL;
+  const originalPgasModel = process.env.PGAS_MODEL;
+  const originalOpenAiApiKey = process.env.PGAS_OPENAI_API_KEY;
+  const originalFetch = globalThis.fetch;
 
   afterEach(() => {
     engineMocks.complete.mockReset();
     engineMocks.createProviderHandles.mockClear();
+    globalThis.fetch = originalFetch;
     restoreEnv('PGAS_SYNTH_ESCALATION_DRIVER', originalEscalationDriver);
     restoreEnv('PGAS_SYNTH_ESCALATION_MAX_ATTEMPTS', originalEscalationMaxAttempts);
     restoreEnv('PGAS_ENABLE_CODEX_DRIVER', originalEnableCodexDriver);
+    restoreEnv('PGAS_OPENAI_BASE_URL', originalOpenAiBaseUrl);
+    restoreEnv('PGAS_OPENAI_MODEL', originalOpenAiModel);
+    restoreEnv('PGAS_MODEL', originalPgasModel);
+    restoreEnv('PGAS_OPENAI_API_KEY', originalOpenAiApiKey);
   });
 
   it('escalates exhausted stage-body repair to codex-cli before deterministic fallback', async () => {
@@ -132,6 +142,37 @@ describe('domain synthesis codex escalation', () => {
     });
   });
 
+  it('uses the OpenAI-compatible body generator env even when the codex author driver is enabled', async () => {
+    await withCache(async (cacheDir) => {
+      const bodyRequests: Array<{ url: string; authorization: string | null; payload: Record<string, unknown> }> = [];
+      process.env.PGAS_ENABLE_CODEX_DRIVER = '1';
+      process.env.PGAS_OPENAI_BASE_URL = 'http://qwen.local/v1';
+      process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+      process.env.PGAS_OPENAI_API_KEY = 'local';
+      delete process.env.PGAS_MODEL;
+      delete process.env.PGAS_SYNTH_ESCALATION_DRIVER;
+      globalThis.fetch = openAiBodyGeneratorFetchStub(bodyRequests);
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 1,
+      });
+
+      expect(engineMocks.createProviderHandles).not.toHaveBeenCalled();
+      expect(result.stage_sources?.calculate).toBe(validBody.trim());
+      expect(bodyRequests).toEqual([
+        expect.objectContaining({
+          url: 'http://qwen.local/v1/chat/completions',
+          authorization: 'Bearer local',
+          payload: expect.objectContaining({
+            model: 'qwen36-27b',
+            temperature: 0,
+          }),
+        }),
+      ]);
+    });
+  });
+
   it('leaves the deterministic fallback path default-off when escalation env is unset', async () => {
     await withCache(async (cacheDir) => {
       delete process.env.PGAS_SYNTH_ESCALATION_DRIVER;
@@ -157,3 +198,29 @@ describe('domain synthesis codex escalation', () => {
     });
   });
 });
+
+function openAiBodyGeneratorFetchStub(
+  requests: Array<{ url: string; authorization: string | null; payload: Record<string, unknown> }>,
+): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const payload = await request.json() as Record<string, unknown>;
+    requests.push({
+      url: request.url,
+      authorization: request.headers.get('authorization'),
+      payload,
+    });
+    return new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: validBody,
+          },
+        },
+      ],
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+}
