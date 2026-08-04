@@ -207,7 +207,10 @@ export function synthesizeProgramSpecFromDomain(
   const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
   const documents = normalizeDocumentsDescriptor(rawDocuments);
   const delegation = normalizeDelegationInputEnrichmentTargets(
-    normalizeDocumentSliceDelegation(rawDelegation, documents),
+    normalizeDocumentIngestDelegation(
+      normalizeDocumentSliceDelegation(rawDelegation, documents),
+      documents,
+    ),
     documents,
   );
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
@@ -729,7 +732,7 @@ export function adaptReusableDelegationPayloadMapsForDomain(
   delegation: DelegationDescriptor,
   availablePrograms: WiringAvailableProgram[],
 ): ReusableDelegationPayloadMapCompatibility {
-  if (!Array.isArray(delegation.children) || delegation.children.length === 0 || availablePrograms.length === 0) {
+  if (!Array.isArray(delegation.children) || delegation.children.length === 0) {
     return { delegation, errors: [] };
   }
 
@@ -744,7 +747,10 @@ export function adaptReusableDelegationPayloadMapsForDomain(
     resolveDelegationChildrenAgainstManifest(delegation, availablePrograms),
   );
   const normalized = normalizeDelegationInputEnrichmentTargets(
-    normalizeDocumentSliceDelegation(resolved, documents),
+    normalizeDocumentIngestDelegation(
+      normalizeDocumentSliceDelegation(resolved, documents),
+      documents,
+    ),
     documents,
   );
   const schemaPaths = collectParentSchemaPathsForDelegationValidation(
@@ -759,7 +765,10 @@ export function adaptReusableDelegationPayloadMapsForDomain(
 
   return {
     delegation: normalized,
-    errors: reusableDelegationPayloadMapSourceErrors(normalized, schemaPaths),
+    errors: [
+      ...reusableDelegationPayloadMapSourceErrors(normalized, schemaPaths),
+      ...documentDelegationCompatibilityErrors(documents, normalized),
+    ],
   };
 }
 
@@ -1357,6 +1366,13 @@ function applyDelegationActionPreconditions(
         { kind: 'FieldFalsy', path: `${delegationStateBase(child)}.requested` },
       );
     }
+    if (documents && isDocumentIngestUploadDelegationChild(child, documents)) {
+      appendModePrecondition(
+        mode,
+        delegationRequestActionName(child),
+        { kind: 'FieldTruthy', path: documentsSourceReadyPath(documents) },
+      );
+    }
     if (fanOut) {
       appendModePrecondition(
         mode,
@@ -1417,6 +1433,9 @@ function applyDelegationReactions(
       continue;
     }
     const base = delegationStateBase(child);
+    const harvestScope = documents && isDocumentIngestUploadDelegationChild(child, documents)
+      ? documentIngestHarvestWriteScope(documents)
+      : [];
     reactions[delegationSettleReactionName(child)] = {
       event: 'AfterRound',
       watch: [],
@@ -1424,9 +1443,23 @@ function applyDelegationReactions(
         `${base}.settled`,
         `${base}.degraded`,
         `${base}.degrade_reason`,
+        ...harvestScope,
       ],
     };
   }
+}
+
+function documentIngestHarvestWriteScope(documents: DocumentsDescriptor): string[] {
+  return [
+    `${documents.result_path}.summary`,
+    `${documents.result_path}.sections`,
+    `${documents.result_path}.sections.*`,
+    `${documents.result_path}.sections.*.id`,
+    `${documents.result_path}.sections.*.heading`,
+    `${documents.result_path}.sections.*.status`,
+    `${documents.result_path}.sections.*.text`,
+    documentsIngestResultHarvestedPath(documents),
+  ];
 }
 
 function applyDelegationModeWiring(
@@ -1598,6 +1631,9 @@ function applyDelegationPrompts(
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
     const fanOut = documentFanOutDescriptor(child, documents);
+    const uploadDocuments = documents && isDocumentIngestUploadDelegationChild(child, documents)
+      ? documents
+      : undefined;
     const requestAction = delegationRequestActionName(child);
     const terminalInstruction = terminalActionInstruction([{ name: requestAction, channel: delegationChannelName(child) }]);
     const requestShape = isManifestReusedDelegationChild(child)
@@ -1609,9 +1645,11 @@ function applyDelegationPrompts(
     }
     prompts[child.stage] = fanOut
       ? `${existing}${terminalInstruction}\nFor each uploaded document, call ${requestAction} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
-      : isManifestReusedDelegationChild(child)
-      ? `${existing}${terminalInstruction}\nCall ${requestAction} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
-      : `${existing}${terminalInstruction}\nCall ${requestAction} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+      : uploadDocuments
+        ? `${existing}${terminalInstruction}\nAfter ${DOCUMENT_INGEST_ACTION} sets ${documentsSourceReadyPath(uploadDocuments)}, call ${requestAction} once with an empty object payload. delegationPolicy.inputEnrichment supplies ${documentsCollectionPath(uploadDocuments)} and ${documentsExtractionContractPath(uploadDocuments)} to the child. When ${delegationStateBase(child)}.settled is true, use the normal transition action; the reaction harvests summary and sections into ${uploadDocuments.result_path}.`
+        : isManifestReusedDelegationChild(child)
+          ? `${existing}${terminalInstruction}\nCall ${requestAction} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
+          : `${existing}${terminalInstruction}\nCall ${requestAction} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
   }
 }
 
@@ -1635,6 +1673,9 @@ function applyDelegationGuidance(
   for (const child of children) {
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
     const fanOut = documentFanOutDescriptor(child, documents);
+    const uploadDocuments = documents && isDocumentIngestUploadDelegationChild(child, documents)
+      ? documents
+      : undefined;
     const requestAction = delegationRequestActionName(child);
     if (isAdHocDelegationChild(child)) {
       const requestShape = isManifestReusedDelegationChild(child)
@@ -1655,10 +1696,13 @@ function applyDelegationGuidance(
         `For ${requestAction}, emit payload: { request: { ... } }; put document_id, document_name, topic, context, and other child request fields inside request, not directly under payload.`,
         `Repeat ${requestAction} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
         `When ${fanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
-      ] : [
-        isManifestReusedDelegationChild(child)
-        ? `Call ${requestAction} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
-        : `Call ${requestAction} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
+        ] : uploadDocuments ? [
+          `Call ${requestAction} only after ${DOCUMENT_INGEST_ACTION} has set ${documentsSourceReadyPath(uploadDocuments)}; deterministic payload enrichment supplies ${uploadDocuments.result_path}.documents and ${uploadDocuments.result_path}.extraction_contract.`,
+          `Wait until ${delegationStateBase(child)}.settled is true; the settlement reaction harvests the document-ingest result into ${uploadDocuments.result_path}.summary and ${uploadDocuments.result_path}.sections before transition.`,
+        ] : [
+          isManifestReusedDelegationChild(child)
+            ? `Call ${requestAction} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
+            : `Call ${requestAction} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
         ...(isManifestReusedDelegationChild(child) ? [] : [
           `For ${requestAction}, emit payload: { request: { ... } }; put topic, query, context, and other child request fields inside request, not directly under payload.`,
         ]),
@@ -1766,6 +1810,9 @@ function applyDocumentsSchema(
   schema[`${resultPath}.status`] = 'string';
   schema[`${resultPath}.reason`] = 'string';
   schema[documentsSourceReadyPath(documents)] = 'boolean';
+  for (const [path, type] of documentDelegatedIngestSchemaEntries(documents)) {
+    schema[path] = type;
+  }
 }
 
 function applyDocumentsActions(
@@ -2027,6 +2074,44 @@ function documentSummaryProjectionPaths(documents: DocumentsDescriptor): string[
   ];
 }
 
+function documentDelegatedIngestSchemaEntries(documents: DocumentsDescriptor): Array<[string, string]> {
+  const resultPath = documents.result_path;
+  const extractionContractPath = documentsExtractionContractPath(documents);
+  return [
+    [extractionContractPath, 'object'],
+    [`${extractionContractPath}.output_profile`, 'string'],
+    [`${extractionContractPath}.target_schema`, 'object'],
+    [`${extractionContractPath}.required_outputs`, 'array'],
+    [`${extractionContractPath}.required_outputs.*`, 'string'],
+    [`${resultPath}.summary`, 'string'],
+    [`${resultPath}.sections`, 'object'],
+    [`${resultPath}.sections.*`, 'object'],
+    [`${resultPath}.sections.*.id`, 'string'],
+    [`${resultPath}.sections.*.heading`, 'string'],
+    [`${resultPath}.sections.*.status`, 'string'],
+    [`${resultPath}.sections.*.text`, 'string'],
+    [documentsIngestResultHarvestedPath(documents), 'boolean'],
+  ];
+}
+
+function documentIngestExtractionContract(documents: DocumentsDescriptor): Record<string, unknown> {
+  return {
+    output_profile: 'due-diligence-section-map',
+    target_schema: documents.artifact_shape ?? {
+      summary: 'string',
+      sections: {
+        '*': {
+          id: 'string',
+          heading: 'string',
+          status: 'string',
+          text: 'string',
+        },
+      },
+    },
+    required_outputs: ['structured_data', 'fidelity_report', 'quality_report'],
+  };
+}
+
 function applyDocumentsPromptsGuidance(
   target: MutableRecord,
   documents: DocumentsDescriptor | undefined,
@@ -2061,6 +2146,14 @@ function documentsFullTextPath(documents: DocumentsDescriptor): string {
 
 function documentsCollectionPath(documents: DocumentsDescriptor): string {
   return `${documents.result_path}.documents`;
+}
+
+function documentsExtractionContractPath(documents: DocumentsDescriptor): string {
+  return `${documents.result_path}.extraction_contract`;
+}
+
+function documentsIngestResultHarvestedPath(documents: DocumentsDescriptor): string {
+  return `${documents.result_path}.ingest_result_harvested`;
 }
 
 function documentsCurrentDocumentPath(documents: DocumentsDescriptor): string {
@@ -2164,6 +2257,59 @@ function normalizeDocumentSliceDelegation(
     return { ...child, payload_map: payloadMap };
   });
   return mutated ? { ...delegation, children } : delegation;
+}
+
+function normalizeDocumentIngestDelegation(
+  delegation: DelegationDescriptor,
+  documents: DocumentsDescriptor | undefined,
+): DelegationDescriptor {
+  if (!documents || !Array.isArray(delegation.children) || delegation.children.length === 0) {
+    return delegation;
+  }
+
+  let mutated = false;
+  const children = delegation.children.map((child) => {
+    if (!isDocumentIngestUploadDelegationChild(child, documents)) {
+      return child;
+    }
+    const payloadMap = {
+      ...child.payload_map,
+      'request.documents': documentsCollectionPath(documents),
+      'request.extraction_contract': documentsExtractionContractPath(documents),
+    };
+    if (
+      child.payload_map['request.documents'] === payloadMap['request.documents'] &&
+      child.payload_map['request.extraction_contract'] === payloadMap['request.extraction_contract']
+    ) {
+      return child;
+    }
+    mutated = true;
+    return { ...child, payload_map: payloadMap };
+  });
+  return mutated ? { ...delegation, children } : delegation;
+}
+
+function isDocumentIngestUploadDelegationChild(
+  child: DelegationChildDescriptor,
+  documents: DocumentsDescriptor,
+): boolean {
+  return documents.required === true &&
+    child.stage === documents.stage &&
+    isDocumentIngestDelegationChild(child);
+}
+
+function isDocumentIngestDelegationChild(child: DelegationChildDescriptor | Record<string, unknown>): boolean {
+  return [
+    child.registered_name,
+    child.target_slug,
+    child.target_spec,
+  ].some((value) => {
+    if (typeof value !== 'string') {
+      return false;
+    }
+    const normalized = normalizeProgramNameForSelfTarget(value);
+    return normalized === 'document_ingest' || normalized === 'simoneos_document_ingest';
+  });
 }
 
 function isDocumentSlicePayloadTarget(target: string): boolean {
@@ -3992,6 +4138,7 @@ function renderDocumentHelper(documents: DocumentsDescriptor, includeReactionHel
   const allowedTypes = JSON.stringify(documents.upload_types);
   const minChars = documentMinChars(documents);
   const docxExtractionEnabled = documentsDemandsSelfContainedDocx(documents);
+  const extractionContract = JSON.stringify(documentIngestExtractionContract(documents));
   const reactionHelpers = includeReactionHelpers
     ? `
 
@@ -4107,14 +4254,15 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
           status: 'blocked_extraction_failed',
           full_text: '',
           documents: [],
-          current_document: {},
-          char_count: 0,
-          file_count: 0,
-          document_count: 0,
-          files_json: JSON.stringify(summaries),
-          extraction_kind: docxExtractionKind(bytes),
-          reason: extracted.reason,
-        };
+            current_document: {},
+            char_count: 0,
+            file_count: 0,
+            document_count: 0,
+            files_json: JSON.stringify(summaries),
+            extraction_kind: docxExtractionKind(bytes),
+            extraction_contract: documentExtractionContract(),
+            reason: extracted.reason,
+          };
       }
       eligible.push({ document, text: extracted.text, extraction_kind: docxExtractionKind(bytes) });
       continue;
@@ -4128,14 +4276,15 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       status: sawUnsupported ? 'blocked_unsupported_type' : 'blocked_no_content',
       full_text: '',
       documents: [],
-      current_document: {},
-      char_count: 0,
-      file_count: 0,
-      document_count: 0,
-      files_json: JSON.stringify(summaries),
-      extraction_kind: 'none',
-      reason: sawUnsupported ? ${docxExtractionEnabled ? "'uploaded documents were not supported content_text or DOCX content_base64 documents'" : "'uploaded documents were not text/markdown content_text documents'"} : 'no engine-injected document content_text was available',
-    };
+        current_document: {},
+        char_count: 0,
+        file_count: 0,
+        document_count: 0,
+        files_json: JSON.stringify(summaries),
+        extraction_kind: 'none',
+        extraction_contract: documentExtractionContract(),
+        reason: sawUnsupported ? ${docxExtractionEnabled ? "'uploaded documents were not supported content_text or DOCX content_base64 documents'" : "'uploaded documents were not text/markdown content_text documents'"} : 'no engine-injected document content_text was available',
+      };
   }
 
   const fullText = eligible.length === 1
@@ -4149,26 +4298,28 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       status: 'blocked_low_fidelity',
       full_text: fullText,
       documents,
+        current_document: documents[0] ?? {},
+        char_count: charCount,
+        file_count: eligible.length,
+        document_count: documents.length,
+        files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
+        extraction_kind: extractionKind,
+        extraction_contract: documentExtractionContract(),
+        reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
+      };
+  }
+  return {
+    status: 'extracted',
+    full_text: fullText,
+    documents,
       current_document: documents[0] ?? {},
       char_count: charCount,
       file_count: eligible.length,
       document_count: documents.length,
       files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
       extraction_kind: extractionKind,
-      reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
+      extraction_contract: documentExtractionContract(),
     };
-  }
-  return {
-    status: 'extracted',
-    full_text: fullText,
-    documents,
-    current_document: documents[0] ?? {},
-    char_count: charCount,
-    file_count: eligible.length,
-    document_count: documents.length,
-    files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
-    extraction_kind: extractionKind,
-  };
 }
 
 function skippedDocumentSource(): Record<string, unknown> {
@@ -4176,13 +4327,18 @@ function skippedDocumentSource(): Record<string, unknown> {
     status: 'skipped_no_documents',
     full_text: '',
     documents: [],
-    current_document: {},
-    char_count: 0,
-    file_count: 0,
-    document_count: 0,
-    files_json: '[]',
-    extraction_kind: 'skipped_no_documents',
-  };
+      current_document: {},
+      char_count: 0,
+      file_count: 0,
+      document_count: 0,
+      files_json: '[]',
+      extraction_kind: 'skipped_no_documents',
+      extraction_contract: documentExtractionContract(),
+    };
+}
+
+function documentExtractionContract(): Record<string, unknown> {
+  return ${extractionContract};
 }
 
 function documentSkipRequestedPayload(payload: HandlerPayload): boolean {
@@ -4759,6 +4915,21 @@ function renderDelegationReactionEntries(children: DelegationChildDescriptor[], 
         completePath: ${tsString(fanOut.completion_guard)},
         resultsPath: ${tsString(fanOut.result_path)},
       },
+      );
+    }]`;
+    }
+    if (documents && isDocumentIngestUploadDelegationChild(child, documents)) {
+      return `,
+  [${tsString(delegationSettleReactionName(child))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return settleDocumentIngestDelegationResult(
+      snapshot,
+      ${tsString(child.result_path)},
+      ${tsString(`${base}.settled`)},
+      ${tsString(`${base}.degraded`)},
+      ${tsString(`${base}.degrade_reason`)},
+      ${tsString(documents.result_path)},
     );
   }]`;
     }
@@ -4836,6 +5007,162 @@ function settleDelegationResult(
       { op: 'MSet' as const, path: degradeReasonPath, value: typeof reason === 'string' && reason.length > 0 ? reason : status },
     ],
   };
+}
+
+function settleDocumentIngestDelegationResult(
+  snapshot: ReadonlyMap<string, unknown>,
+  resultPath: string,
+  settledPath: string,
+  degradedPath: string,
+  degradeReasonPath: string,
+  documentPath: string,
+): ReactionResult | undefined {
+  if (snapshot.get(settledPath) === true) {
+    return undefined;
+  }
+  const result = snapshotRecord(snapshot, resultPath) ?? {};
+  const status = typeof result.status === 'string'
+    ? result.status
+    : snapshot.get(resultPath + '.status');
+  if (typeof status !== 'string' || status.length === 0) {
+    return undefined;
+  }
+  if (status === 'complete') {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: settledPath, value: true },
+        { op: 'MSet' as const, path: degradedPath, value: false },
+        { op: 'MSet' as const, path: degradeReasonPath, value: '' },
+        ...documentArtifactMutations(documentPath, documentArtifactsFromIngestResult(result)),
+      ],
+    };
+  }
+  if (status !== 'failed' && status !== 'declined') {
+    return undefined;
+  }
+  const reason = typeof result.reason === 'string'
+    ? result.reason
+    : snapshot.get(resultPath + '.reason');
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: settledPath, value: true },
+      { op: 'MSet' as const, path: degradedPath, value: true },
+      { op: 'MSet' as const, path: degradeReasonPath, value: typeof reason === 'string' && reason.length > 0 ? reason : status },
+    ],
+  };
+}
+
+interface DocumentIngestArtifactSection {
+  id: string;
+  heading: string;
+  status: string;
+  text: string;
+}
+
+interface DocumentIngestArtifacts {
+  summary: string;
+  sections: DocumentIngestArtifactSection[];
+}
+
+function documentArtifactsFromIngestResult(result: Record<string, unknown>): DocumentIngestArtifacts {
+  const resultRecord = parsedRecord(result.result);
+  const pipelineResult = parsedRecord(result.pipeline_result);
+  const candidates = [
+    parsedRecord(result.structured_data),
+    parsedRecord(resultRecord.structured_data),
+    parsedRecord(pipelineResult.structured_data),
+    resultRecord,
+    pipelineResult,
+    result,
+  ];
+  const source = candidates.find((candidate) =>
+    Object.keys(candidate).some((key) => ['summary', 'overview', 'title', 'sections', 'clauses'].includes(key))) ?? result;
+  const summary = firstNonEmptyString(
+    source.summary,
+    source.overview,
+    result.summary,
+    result.overview,
+    source.title,
+  );
+  const sections = sectionValues(source.sections);
+  const rawSections = sections.length > 0 ? sections : sectionValues(source.clauses);
+  return {
+    summary,
+    sections: rawSections.map((section, index) => normalizeDocumentArtifactSection(section, index)),
+  };
+}
+
+function documentArtifactMutations(documentPath: string, artifacts: DocumentIngestArtifacts): ReactionResult['mutations'] {
+  const sections = artifacts.sections.map((section, index) => ({
+    key: safeDocumentArtifactKey(section.id, index),
+    section,
+  }));
+  const sectionsObject = Object.fromEntries(sections.map((entry) => [entry.key, entry.section]));
+  const mutations: ReactionResult['mutations'] = [
+    { op: 'MSet' as const, path: documentPath + '.summary', value: artifacts.summary },
+    { op: 'MSet' as const, path: documentPath + '.sections', value: sectionsObject },
+    { op: 'MSet' as const, path: documentPath + '.ingest_result_harvested', value: true },
+  ];
+  for (const { key, section } of sections) {
+    const path = documentPath + '.sections.' + key;
+    mutations.push(
+      { op: 'MSet' as const, path, value: section },
+      { op: 'MSet' as const, path: path + '.id', value: section.id },
+      { op: 'MSet' as const, path: path + '.heading', value: section.heading },
+      { op: 'MSet' as const, path: path + '.status', value: section.status },
+      { op: 'MSet' as const, path: path + '.text', value: section.text },
+    );
+  }
+  return mutations;
+}
+
+function normalizeDocumentArtifactSection(value: unknown, index: number): DocumentIngestArtifactSection {
+  const record = parsedRecord(value);
+  const id = firstNonEmptyString(record.id, record.section_id, record.clause_id) || 'section-' + String(index + 1);
+  return {
+    id,
+    heading: firstNonEmptyString(record.heading, record.title, record.name) || id,
+    status: firstNonEmptyString(record.status) || 'extracted',
+    text: firstNonEmptyString(record.text, record.body, record.content, record.summary),
+  };
+}
+
+function sectionValues(value: unknown): unknown[] {
+  const candidate = typeof value === 'string' ? parsedJsonValue(value) : value;
+  if (Array.isArray(candidate)) {
+    return candidate;
+  }
+  if (candidate && typeof candidate === 'object') {
+    return Object.values(candidate as Record<string, unknown>);
+  }
+  return [];
+}
+
+function parsedRecord(value: unknown): Record<string, unknown> {
+  const candidate = typeof value === 'string' ? parsedJsonValue(value) : value;
+  return snapshotLikeRecord(candidate);
+}
+
+function parsedJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function safeDocumentArtifactKey(id: string, index: number): string {
+  const normalized = id.replace(/[^A-Za-z0-9_-]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return normalized.length > 0 ? normalized : 'section_' + String(index + 1);
 }
 
 function advanceDocumentDelegationFanOut(
@@ -10284,6 +10611,7 @@ function normalizeDocumentsDescriptor(value: unknown): DocumentsDescriptor | und
     required,
     ...optionalRecordField(descriptor, 'fidelity_floor', 'documents.fidelity_floor'),
     ...optionalStringField(descriptor, 'connector_slug', 'documents.connector_slug'),
+    ...optionalRecordField(descriptor, 'artifact_shape', 'documents.artifact_shape'),
   };
 }
 
@@ -10315,15 +10643,54 @@ export function assertDocumentsDescriptor(
   const delegationChildren = Array.isArray(context.delegation?.children)
     ? context.delegation.children
     : [];
-  for (const [index, rawChild] of delegationChildren.entries()) {
-    if (!rawChild || typeof rawChild !== 'object' || Array.isArray(rawChild)) {
+  const errors = documentDelegationCompatibilityErrors(descriptor, { children: delegationChildren as DelegationChildDescriptor[] });
+  if (errors.length > 0) {
+    throw new Error(errors.join('; '));
+  }
+}
+
+function documentDelegationCompatibilityErrors(
+  documents: DocumentsDescriptor | undefined,
+  delegation: DelegationDescriptor,
+): string[] {
+  if (!documents || !Array.isArray(delegation.children)) {
+    return [];
+  }
+  const errors: string[] = [];
+  for (const [index, rawChild] of delegation.children.entries()) {
+    if (!isRecord(rawChild)) {
       continue;
     }
-    const childStage = (rawChild as Record<string, unknown>).stage;
-    if (childStage === descriptor.stage) {
-      throw new Error(`documents descriptor and delegation.children[${index}] must not share host stage ${descriptor.stage}`);
+    if (rawChild.stage !== documents.stage) {
+      continue;
     }
+    if (sameStageDocumentIngestDelegationCompatible(rawChild, documents)) {
+      continue;
+    }
+    errors.push(sameStageDocumentDelegationRepairMessage(documents, index));
   }
+  return errors;
+}
+
+function sameStageDocumentIngestDelegationCompatible(
+  child: DelegationChildDescriptor | Record<string, unknown>,
+  documents: DocumentsDescriptor,
+): boolean {
+  if (documents.required !== true || child.stage !== documents.stage || !isDocumentIngestDelegationChild(child)) {
+    return false;
+  }
+  const payloadMap = child.payload_map;
+  return isRecord(payloadMap) &&
+    payloadMap['request.documents'] === documentsCollectionPath(documents) &&
+    payloadMap['request.extraction_contract'] === documentsExtractionContractPath(documents);
+}
+
+function sameStageDocumentDelegationRepairMessage(documents: DocumentsDescriptor, index: number): string {
+  return [
+    `documents descriptor and delegation.children[${String(index)}] share host stage ${documents.stage}`,
+    'same-stage upload delegation is only supported for a required documents descriptor feeding the manifest-reused document-ingest child',
+    `repair by moving the child to a later stage or mapping document-ingest with payload_map request.documents=${documentsCollectionPath(documents)} and request.extraction_contract=${documentsExtractionContractPath(documents)}`,
+  ].join('; ');
 }
 
 function normalizeDocumentsDescriptorForAssertion(documents: unknown): DocumentsDescriptor {
@@ -10825,13 +11192,14 @@ function collectDocumentsSchemaPaths(documents: DocumentsDescriptor, schemaPaths
     `${resultPath}.file_count`,
     `${resultPath}.document_count`,
     `${resultPath}.files_json`,
-    `${resultPath}.extraction_kind`,
-    `${resultPath}.status`,
-    `${resultPath}.reason`,
-    documentsSourceReadyPath(documents),
-  ]) {
-    schemaPaths.add(path);
-  }
+      `${resultPath}.extraction_kind`,
+      `${resultPath}.status`,
+      `${resultPath}.reason`,
+      documentsSourceReadyPath(documents),
+      ...documentDelegatedIngestSchemaEntries(documents).map(([path]) => path),
+    ]) {
+      schemaPaths.add(path);
+    }
 }
 
 function collectDomainSpecProducedPaths(

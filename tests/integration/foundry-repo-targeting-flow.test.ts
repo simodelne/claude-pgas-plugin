@@ -28,6 +28,132 @@ afterEach(() => {
 });
 
 describe('foundry repo_targeting continuation flow', () => {
+  it('allows upload descriptor and same-stage document-ingest delegation through the product path', async () => {
+    const targetDir = trackedTempRoot('pgas-new-upload-delegate-ingest-');
+    mkdirSync(join(targetDir, '.pgas'), { recursive: true });
+    writeFileSync(join(targetDir, '.pgas/wiring.yml'), nativeSourceDelegablesManifestYaml());
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: documentFinalizationProductPathResponses(
+        targetDir,
+        documentIngestDelegationPayload({
+          'request.extraction_contract': 'inputs.initial_user_text',
+          'domain_context.original_request': 'inputs.initial_user_text',
+        }),
+        documentFinalizationDocumentsDescriptor(),
+        documentFinalizationStages(),
+        documentFinalizationTransitions(),
+        { final_stage: 'complete', guard_field: 'finalize_export.ready' },
+      ),
+    });
+
+    try {
+      await driveDocumentFinalizationProductPath(harness, { includeDocuments: true });
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'scaffold_plan' &&
+          candidate.domain['artifact_plan.status'] === 'draft' &&
+          terminalActionNames(candidate.rounds).includes('synthesize_program_spec'),
+        'same-stage upload descriptor and document-ingest delegation synthesis',
+      );
+      const artifact = getSynthesizedArtifact(snapshot.sessionId);
+      if (!artifact?.synthesis_context) {
+        throw new Error('missing synthesized artifact for upload-to-document-ingest falsifier');
+      }
+      const parsed = load(artifact.spec_yaml) as {
+        channels: Record<string, Record<string, unknown>>;
+        action_map: Record<string, { channel?: string }>;
+        modes: Record<string, {
+          vocabulary?: string[];
+          preconditions?: Record<string, unknown[]>;
+        }>;
+        projection: Record<string, { include?: string[]; exclude?: string[] }>;
+        reactions: Record<string, { write_scope?: string[] }>;
+        schema: Record<string, string>;
+      };
+      const child = artifact.synthesis_context.delegation.children?.[0] as Record<string, unknown> | undefined;
+      const payloadMap = child?.payload_map as Record<string, string> | undefined;
+      const enrichment = inputEnrichmentRules(artifact.registration_ts ?? '');
+
+      expect(snapshot.domain['program.synthesis_complete']).toBe(true);
+      expect(artifact.synthesis_context.documents).toMatchObject({
+        stage: 'ingest',
+        extraction: 'host_connector',
+        result_path: 'work.document',
+      });
+      expect(child).toMatchObject({
+        id: 'document_ingest',
+        stage: 'ingest',
+        target_spec: 'SimoneOS Document Ingest',
+        registered_name: 'document-ingest',
+        target_slug: 'document-ingest',
+        result_path: 'ingest.delegation.document_ingest.result',
+      });
+      expect(payloadMap).toEqual(expect.objectContaining({
+        'request.documents': 'work.document.documents',
+        'request.extraction_contract': 'work.document.extraction_contract',
+        'domain_context.original_request': 'inputs.initial_user_text',
+      }));
+      expect(Object.values(payloadMap ?? {})).not.toContain('intake.summary');
+      expect(enrichment).toEqual(expect.arrayContaining([
+        { source: 'work.document.documents', target: 'request.documents' },
+        { source: 'work.document.extraction_contract', target: 'request.extraction_contract' },
+      ]));
+      expect(parsed.modes.ingest.vocabulary).toEqual(expect.arrayContaining([
+        'request_documents',
+        'ingest_documents',
+        'document_ingest',
+      ]));
+      expect(parsed.modes.ingest.preconditions?.document_ingest).toEqual(expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'work.document_ready' },
+      ]));
+      expect(parsed.channels.document_ingest_call).toMatchObject({
+        target_spec: 'SimoneOS Document Ingest',
+        result_path: 'ingest.delegation.document_ingest.result',
+        optional: true,
+      });
+      expect(parsed.action_map.document_ingest.channel).toBe('document_ingest_call');
+      expect(parsed.schema).toMatchObject({
+        'work.document.extraction_contract': 'object',
+        'work.document.extraction_contract.output_profile': 'string',
+        'work.document.extraction_contract.target_schema': 'object',
+        'work.document.extraction_contract.required_outputs': 'array',
+        'work.document.summary': 'string',
+        'work.document.sections': 'object',
+        'work.document.sections.*': 'object',
+        'work.document.sections.*.id': 'string',
+        'work.document.sections.*.heading': 'string',
+        'work.document.sections.*.status': 'string',
+        'work.document.sections.*.text': 'string',
+        'work.document.ingest_result_harvested': 'boolean',
+      });
+      expect(parsed.reactions.settle_document_ingest_delegation.write_scope).toEqual(expect.arrayContaining([
+        'ingest.delegation.document_ingest.settled',
+        'work.document.summary',
+        'work.document.sections',
+        'work.document.sections.*',
+        'work.document.ingest_result_harvested',
+      ]));
+      expect(parsed.projection.finalization_hub.include).toEqual(expect.arrayContaining([
+        'work.document.summary',
+        'work.document.sections.*.id',
+        'work.document.sections.*.heading',
+        'work.document.sections.*.status',
+      ]));
+      expect(parsed.projection.finalization_hub.exclude).toContain('work.document.sections.*.text');
+      expect(artifact.handlers_ts).toContain('settleDocumentIngestDelegationResult');
+      expect(artifact.handlers_ts).toContain('documentArtifactsFromIngestResult');
+      expect(artifact.handlers_ts).toContain("path: documentPath + '.summary'");
+      expect(artifact.handlers_ts).toContain("path: documentPath + '.sections'");
+      expect(artifact.handlers_ts).toContain("path: documentPath + '.ingest_result_harvested'");
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('adapts manifest reusable delegation payload targets to parent-declared Q5 sources before synthesis', async () => {
     const targetDir = trackedTempRoot('pgas-new-reusable-payload-adapter-');
     mkdirSync(join(targetDir, '.pgas'), { recursive: true });
@@ -601,6 +727,10 @@ function documentIngestDelegationPayload(payloadMap: Record<string, string>): Re
 function documentFinalizationProductPathResponses(
   targetDir: string,
   delegationPayload: Record<string, unknown>,
+  documentsPayload?: Record<string, unknown>,
+  stagesPayload: Array<Record<string, unknown>> = defaultDocumentFinalizationStages(),
+  transitionsPayload: Array<Record<string, unknown>> = defaultDocumentFinalizationTransitions(),
+  completionPayload: Record<string, unknown> = { final_stage: 'complete', guard_field: 'ingest.ready' },
 ): TestHarnessAuthorResponse[] {
   return [
     effect('record_program_target', {
@@ -616,32 +746,21 @@ function documentFinalizationProductPathResponses(
       entry_channel: 'user_text',
     }),
     effect('record_q3_stages', {
-      stages_json: JSON.stringify([
-        {
-          slug: 'start',
-          is_bootstrap: true,
-          domain_spec: {
-            reads: ['inputs.initial_user_text'],
-            produces: { result_json: { summary: 'string' } },
-            rules: ['Capture the finalization request for delegation.'],
-            invariants: ['The original request is preserved for delegated ingest.'],
-          },
-        },
-        { slug: 'ingest' },
-        { slug: 'complete', is_terminal: true },
-      ]),
+      stages_json: JSON.stringify(stagesPayload),
     }),
     effect('record_q4_transitions', {
-      transitions_json: JSON.stringify([
-        { from: 'start', to: 'ingest', trigger: 'started', guard_field: 'start.started' },
-        { from: 'ingest', to: 'complete', trigger: 'ingested', guard_field: 'ingest.ready' },
-      ]),
+      transitions_json: JSON.stringify(transitionsPayload),
     }),
     effect('record_q5_delegation', {
       delegation_json: JSON.stringify(delegationPayload),
     }),
+    ...(documentsPayload ? [
+      effect('record_documents_descriptor', {
+        documents_json: JSON.stringify(documentsPayload),
+      }),
+    ] : []),
     effect('record_q6_completion', {
-      completion_json: JSON.stringify({ final_stage: 'complete', guard_field: 'ingest.ready' }),
+      completion_json: JSON.stringify(completionPayload),
     }),
     effect('record_program_intake_finalize', {}),
     effect('confirm_design', { approved: true }),
@@ -653,7 +772,10 @@ function documentFinalizationProductPathResponses(
   ];
 }
 
-async function driveDocumentFinalizationProductPath(harness: Awaited<ReturnType<typeof createTestHarness>>): Promise<void> {
+async function driveDocumentFinalizationProductPath(
+  harness: Awaited<ReturnType<typeof createTestHarness>>,
+  options: { includeDocuments?: boolean } = {},
+): Promise<void> {
   await harness.trigger('Attach document finalization to this existing repo.');
   await harness.trigger('Use the design path.');
   await harness.trigger('Q1 answer.');
@@ -661,9 +783,136 @@ async function driveDocumentFinalizationProductPath(harness: Awaited<ReturnType<
   await harness.trigger('Q3 answer.');
   await harness.trigger('Q4 answer.');
   await harness.trigger('Q5 answer.');
+  if (options.includeDocuments === true) {
+    await harness.trigger('Documents descriptor answer.');
+  }
   await harness.trigger('Q6 answer.');
   await harness.trigger('Finalize intake.');
   await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+}
+
+function defaultDocumentFinalizationStages(): Array<Record<string, unknown>> {
+  return [
+    {
+      slug: 'start',
+      is_bootstrap: true,
+      domain_spec: {
+        reads: ['inputs.initial_user_text'],
+        produces: { result_json: { summary: 'string' } },
+        rules: ['Capture the finalization request for delegation.'],
+        invariants: ['The original request is preserved for delegated ingest.'],
+      },
+    },
+    { slug: 'ingest' },
+    { slug: 'complete', is_terminal: true },
+  ];
+}
+
+function defaultDocumentFinalizationTransitions(): Array<Record<string, unknown>> {
+  return [
+    { from: 'start', to: 'ingest', trigger: 'started', guard_field: 'start.started' },
+    { from: 'ingest', to: 'complete', trigger: 'ingested', guard_field: 'ingest.ready' },
+  ];
+}
+
+function documentFinalizationStages(): Array<Record<string, unknown>> {
+  return [
+    { slug: 'start', is_bootstrap: true },
+    {
+      slug: 'ingest',
+      domain_spec: {
+        reads: ['inputs.initial_user_text', 'inputs.documents'],
+        produces: {
+          result_json: {
+            summary: 'string',
+            section_count: 'number',
+          },
+          items_json: ['section_count:<section_count>'],
+        },
+        rules: ['Delegate extraction to simoneos document-ingest and store summary plus section artifacts.'],
+        invariants: ['Full section text must be stored in world artifacts, not projected into the hub prompt.'],
+      },
+    },
+    {
+      slug: 'finalization_hub',
+      kind: 'hub',
+      archetype: 'conversational_hub',
+      engine_tools: ['query', 'notebook'],
+      domain_spec: {
+        reads: [
+          'inputs.initial_user_text',
+          'work.document.summary',
+          'work.document.sections.*.id',
+          'work.document.sections.*.heading',
+          'work.document.sections.*.status',
+          'work.document.sections.*.text',
+          'notebook_pins',
+        ],
+        produces: {},
+        rules: [
+          'Stay in the hub after ad-hoc tools unless the user explicitly requests amendment approval or finalization.',
+          'Use query for full section text; use projected summary and section index for orientation.',
+        ],
+        invariants: [
+          'Only summary and section index are projected.',
+          'Full section text remains query-only.',
+        ],
+      },
+    },
+    {
+      slug: 'finalize_export',
+      kind: 'export_docx',
+      export_kind: 'export_docx',
+      domain_spec: {
+        reads: ['work.document.sections.*.text', 'work.document.summary'],
+        produces: {
+          result_json: { docx_ready: 'boolean', amended_docx_path: 'string' },
+          items_json: ['docx:<amended_docx_path>'],
+        },
+        rules: ['Render amended sections in document order to an amended DOCX.'],
+        invariants: ['No LLM round is required in finalize_export.'],
+      },
+    },
+    { slug: 'complete', is_terminal: true },
+  ];
+}
+
+function documentFinalizationTransitions(): Array<Record<string, unknown>> {
+  return [
+    { from: 'start', to: 'ingest', trigger: 'started', guard_field: 'start.started' },
+    { from: 'ingest', to: 'finalization_hub', trigger: 'ingested', guard_field: 'ingest.ready' },
+    { from: 'finalization_hub', to: 'finalization_hub', trigger: 'stay' },
+    { from: 'finalization_hub', to: 'finalize_export', trigger: 'finalize', guard_field: 'finalization_hub.finalize_requested' },
+    { from: 'finalize_export', to: 'complete', trigger: 'exported', guard_field: 'finalize_export.ready' },
+  ];
+}
+
+function documentFinalizationDocumentsDescriptor(): Record<string, unknown> {
+  return {
+    stage: 'ingest',
+    upload_types: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/markdown', 'text/plain'],
+    extraction: 'host_connector',
+    result_path: 'work.document',
+    required: true,
+    artifact_shape: {
+      summary: 'string',
+      sections: {
+        '*': { id: 'string', heading: 'string', status: 'string', text: 'string' },
+      },
+    },
+  };
+}
+
+interface InputEnrichmentRule {
+  source: string;
+  target: string;
+}
+
+function inputEnrichmentRules(registrationSource: string): InputEnrichmentRule[] {
+  return Array.from(
+    registrationSource.matchAll(/\{\s*source:\s*'([^']+)',\s*target:\s*'([^']+)'\s*\}/gu),
+    (match) => ({ source: match[1] as string, target: match[2] as string }),
+  );
 }
 
 function manifestYaml(): string {

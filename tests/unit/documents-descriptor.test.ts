@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { CapabilityRefusalError, capabilityStatus, detectRequestedCapabilities } from '../../src/foundry-program/capability-registry.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import {
+  adaptReusableDelegationPayloadMapsForDomain,
   assertDocumentsDescriptor,
   synthesizeProgramSpecFromDomain,
 } from '../../src/foundry-program/synthesizer.js';
+import type { DelegationDescriptor } from '../../src/foundry-program/synthesizer-store.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -43,6 +45,27 @@ function validDelegationOn(stage: string): Record<string, unknown> {
         },
         payload_map: { 'request.topic': 'inputs.initial_user_text' },
         result_path: `${stage}.delegation.research.result`,
+        max_delegated_rounds: 12,
+        optional: true,
+      },
+    ],
+  };
+}
+
+function validDocumentIngestDelegationOn(stage: string): Record<string, unknown> {
+  return {
+    children: [
+      {
+        id: 'document_ingest',
+        stage,
+        target_spec: 'SimoneOS Document Ingest',
+        registered_name: 'document-ingest',
+        target_slug: 'document-ingest',
+        payload_map: {
+          'request.documents': 'work.source.documents',
+          'request.extraction_contract': 'work.source.extraction_contract',
+        },
+        result_path: `${stage}.delegation.document_ingest.result`,
         max_delegated_rounds: 12,
         optional: true,
       },
@@ -143,13 +166,36 @@ describe('documents descriptor validation', () => {
     );
   });
 
-  it('rejects v1 documents plus delegation children on the same host stage', () => {
+  it('allows required upload descriptor plus same-stage manifest document-ingest delegation', () => {
+    expect(() =>
+      assertDocumentsDescriptor(validDocuments(), {
+        stages,
+        delegation: validDocumentIngestDelegationOn('ingest_source'),
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects same-stage delegation children that are not upload-to-document-ingest compatible', () => {
     expect(() =>
       assertDocumentsDescriptor(validDocuments(), {
         stages,
         delegation: validDelegationOn('ingest_source'),
       }),
-    ).toThrow(/documents descriptor and delegation\.children\[0\] must not share host stage ingest_source/u);
+    ).toThrow(/same-stage upload delegation is only supported.*document-ingest.*request\.documents=work\.source\.documents.*request\.extraction_contract=work\.source\.extraction_contract/u);
+  });
+
+  it('surfaces incompatible same-stage delegation as a reusable intake repair error', () => {
+    const compatibility = adaptReusableDelegationPayloadMapsForDomain(
+      linearDomain({
+        'intake.documents_json': JSON.stringify(validDocuments()),
+        'intake.delegation_json': JSON.stringify(validDelegationOn('ingest_source')),
+      }),
+      validDelegationOn('ingest_source') as DelegationDescriptor,
+      [],
+    );
+
+    expect(compatibility.errors).toHaveLength(1);
+    expect(compatibility.errors[0]).toMatch(/same-stage upload delegation is only supported.*later stage.*request\.documents=work\.source\.documents/u);
   });
 });
 

@@ -51,6 +51,7 @@ export interface DocumentsDescriptor {
   required: boolean;
   fidelity_floor?: Record<string, unknown>;
   connector_slug?: string;
+  artifact_shape?: Record<string, unknown>;
 }
 
 export interface ExportSurfaces {
