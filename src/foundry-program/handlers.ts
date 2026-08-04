@@ -446,15 +446,11 @@ function parseAndNormalizeDelegationForCurrentManifest(
 ): NormalizedDelegationField {
   const normalized = parseAndNormalizeJson(value, 'intake.delegation_json');
   const manifest = optionalWiringManifestForIntakeDelegation(snapshot);
-  if (!manifest?.available_programs?.length) {
-    return { ...normalized, errors: [] };
-  }
-
   const domain = domainFromSnapshot(snapshot);
   const compatibility = adaptReusableDelegationPayloadMapsForDomain(
     domain,
     normalized.value as DelegationDescriptor,
-    manifest.available_programs,
+    manifest?.available_programs ?? [],
   );
   return {
     value: compatibility.delegation,
