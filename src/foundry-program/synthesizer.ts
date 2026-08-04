@@ -174,6 +174,14 @@ interface SkillCatalogEntry {
   body: string;
 }
 
+interface HubSectionArtifactProjection {
+  stage: string;
+  summaryPath: string;
+  sectionsPath: string;
+  indexPaths: string[];
+  textPath: string;
+}
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -304,6 +312,7 @@ export function synthesizeProgramSpecFromDomain(
   assertCompletionTransition(transitions, completion);
   const terminalModeSet = new Set(terminalModes);
   const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
+  const hubSectionArtifacts = collectHubSectionArtifactProjections(stages, stageClassificationBySlug);
   const documentsStageTargetsFinal = documents
     ? transitions.some((transition) => transition.from === documents.stage && transition.to === completion.final_stage)
     : false;
@@ -460,6 +469,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
   applyRegisteredToolProjection(projection, registeredTools);
+  applyHubSectionArtifactProjection(projection, hubSectionArtifacts);
   applyScaleSafeProjectionPolicy(projection);
   removeExportDecisionOnlyStageEntries(projection, exportActions);
   spec.projection = projection;
@@ -612,6 +622,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
   applyRegisteredToolSchema(schema, registeredTools);
+  applyHubSectionArtifactSchema(schema, hubSectionArtifacts);
   applySkillTriageSpec(spec, skills);
   const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
@@ -1441,6 +1452,88 @@ function applyRegisteredToolProjection(
       if (!Array.isArray(modeProjection.exclude)) {
         modeProjection.exclude = [];
       }
+    }
+  }
+}
+
+function collectHubSectionArtifactProjections(
+  stages: Stage[],
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+): HubSectionArtifactProjection[] {
+  const projections: HubSectionArtifactProjection[] = [];
+  for (const stage of stages) {
+    if (
+      !stage.domain_spec ||
+      stageClassificationBySlug.get(stage.slug)?.archetype !== 'conversational-hub'
+    ) {
+      continue;
+    }
+    const reads = new Set(stage.domain_spec.reads);
+    const sectionFieldsByPath = new Map<string, Set<string>>();
+    for (const readPath of reads) {
+      const match = /^(.+\.sections)\.\*\.(id|heading|status|text)$/u.exec(readPath);
+      if (!match) {
+        continue;
+      }
+      const sectionsPath = match[1] as string;
+      const field = match[2] as string;
+      sectionFieldsByPath.set(sectionsPath, new Set([...(sectionFieldsByPath.get(sectionsPath) ?? []), field]));
+    }
+    for (const [sectionsPath, fields] of sectionFieldsByPath) {
+      const documentPath = sectionsPath.replace(/\.sections$/u, '');
+      const summaryPath = `${documentPath}.summary`;
+      if (
+        !reads.has(summaryPath) ||
+        !['id', 'heading', 'status', 'text'].every((field) => fields.has(field))
+      ) {
+        continue;
+      }
+      projections.push({
+        stage: stage.slug,
+        summaryPath,
+        sectionsPath,
+        indexPaths: [
+          `${sectionsPath}.*.id`,
+          `${sectionsPath}.*.heading`,
+          `${sectionsPath}.*.status`,
+        ],
+        textPath: `${sectionsPath}.*.text`,
+      });
+    }
+  }
+  return projections;
+}
+
+function applyHubSectionArtifactProjection(
+  projection: MutableRecord,
+  sectionArtifacts: HubSectionArtifactProjection[],
+): void {
+  for (const artifact of sectionArtifacts) {
+    const modeProjection = recordField(projection, artifact.stage);
+    const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+    modeProjection.include = unique([
+      ...include.filter((path) =>
+        path !== artifact.sectionsPath &&
+        path !== `${artifact.sectionsPath}.*` &&
+        path !== artifact.textPath),
+      artifact.summaryPath,
+      ...artifact.indexPaths,
+    ]);
+    const exclude = Array.isArray(modeProjection.exclude) ? modeProjection.exclude as string[] : [];
+    modeProjection.exclude = unique([...exclude, artifact.textPath]);
+  }
+}
+
+function applyHubSectionArtifactSchema(
+  schema: MutableRecord,
+  sectionArtifacts: HubSectionArtifactProjection[],
+): void {
+  for (const artifact of sectionArtifacts) {
+    schema[artifact.summaryPath] = 'string';
+    schema[artifact.sectionsPath] = 'object';
+    schema[`${artifact.sectionsPath}.*`] = 'object';
+    for (const path of [...artifact.indexPaths, artifact.textPath]) {
+      schema[path] = 'string';
     }
   }
 }
