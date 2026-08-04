@@ -358,12 +358,36 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['debug_approve_artifact_plan_preconditions', (snapshot, trigger, mode) => {
     debugApprovalPreconditions(snapshot, trigger, mode);
   }],
-  ['normalize_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.static_verification')],
-  ['normalize_smoke_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.smoke_verification')],
-  ['normalize_live_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.live_verification')],
+  ['normalize_static_verification_status', (snapshot) =>
+    normalizeVerificationStatus(
+      snapshot,
+      'graduation.static_verification',
+      'graduation.static_verification_status_text',
+      'run_static_verification',
+    )],
+  ['normalize_smoke_verification_status', (snapshot) =>
+    normalizeVerificationStatus(
+      snapshot,
+      'graduation.smoke_verification',
+      'graduation.smoke_verification_status_text',
+      'run_smoke_verification',
+    )],
+  ['normalize_live_verification_status', (snapshot) =>
+    normalizeVerificationStatus(
+      snapshot,
+      'graduation.live_verification',
+      'graduation.live_verification_status_text',
+      'run_live_provider_verification',
+    )],
   ['normalize_generated_live_drive_status', (snapshot) => normalizeGeneratedLiveDriveStatus(snapshot)],
   ['normalize_rebase_status', (snapshot) => normalizeRebaseStatus(snapshot, 'graduation.rebase_status')],
-  ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
+  ['normalize_rebase_static_verification_status', (snapshot) =>
+    normalizeVerificationStatus(
+      snapshot,
+      'graduation.rebase_verification',
+      'graduation.rebase_verification_status_text',
+      'run_rebase_static_verification',
+    )],
   ['normalize_intake_json_fields', (snapshot) => {
     const mutations: Array<{ op: 'MSet'; path: string; value: string }> = [];
     for (const path of intakeJsonPaths) {
@@ -487,13 +511,28 @@ function domainFromSnapshot(snapshot: ReadonlyMap<string, unknown>): Record<stri
   return Object.fromEntries(snapshot.entries());
 }
 
-function normalizeVerificationStatus(snapshot: ReadonlyMap<string, unknown>, statusPath: string) {
+function normalizeVerificationStatus(
+  snapshot: ReadonlyMap<string, unknown>,
+  statusPath: string,
+  evidenceTextPath: string,
+  actionName: string,
+) {
   const rawStatus = snapshot.get(statusPath);
   if (typeof rawStatus !== 'string') return undefined;
 
-  const canonical = canonicalizeVerificationStatus(rawStatus);
-  if (!canonical || rawStatus === canonical) return undefined;
-  return { mutations: [{ op: 'MSet' as const, path: statusPath, value: canonical }] };
+  const parsed = parseVerificationStatus(rawStatus);
+  if (!parsed) {
+    throw new Error(verificationStatusRepairPrompt(actionName, rawStatus));
+  }
+
+  const mutations: Array<{ op: 'MSet'; path: string; value: string }> = [];
+  if (rawStatus !== parsed.status) {
+    mutations.push({ op: 'MSet', path: statusPath, value: parsed.status });
+  }
+  if (parsed.preserveEvidenceText && snapshot.get(evidenceTextPath) !== rawStatus) {
+    mutations.push({ op: 'MSet', path: evidenceTextPath, value: rawStatus });
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
 }
 
 /**
@@ -512,12 +551,20 @@ function normalizeGeneratedLiveDriveStatus(snapshot: ReadonlyMap<string, unknown
     : undefined;
   const mutations: Array<{ op: 'MSet'; path: string; value: unknown }> = [];
 
-  const reportStatus = typeof reportRecord?.status === 'string'
-    ? canonicalizeVerificationStatus(reportRecord.status)
+  const parsedReportStatus = typeof reportRecord?.status === 'string'
+    ? requireCanonicalVerificationStatus(reportRecord.status, 'run_generated_live_drive_verification')
     : undefined;
+  const reportStatus = parsedReportStatus?.status;
   if (reportStatus) {
     if (snapshot.get(statusPath) !== reportStatus) {
       mutations.push({ op: 'MSet', path: statusPath, value: reportStatus });
+    }
+    if (
+      parsedReportStatus.preserveEvidenceText &&
+      typeof reportRecord?.status === 'string' &&
+      snapshot.get('graduation.generated_live_drive_status_text') !== reportRecord.status
+    ) {
+      mutations.push({ op: 'MSet', path: 'graduation.generated_live_drive_status_text', value: reportRecord.status });
     }
     const reportEvidenceId = reportRecord?.evidence_id;
     if (typeof reportEvidenceId === 'string' && reportEvidenceId.length > 0 &&
@@ -527,7 +574,12 @@ function normalizeGeneratedLiveDriveStatus(snapshot: ReadonlyMap<string, unknown
     return mutations.length > 0 ? { mutations } : undefined;
   }
 
-  return normalizeVerificationStatus(snapshot, statusPath);
+  return normalizeVerificationStatus(
+    snapshot,
+    statusPath,
+    'graduation.generated_live_drive_status_text',
+    'run_generated_live_drive_verification',
+  );
 }
 
 /**
@@ -536,19 +588,35 @@ function normalizeGeneratedLiveDriveStatus(snapshot: ReadonlyMap<string, unknown
  * standalone no-op — a genuine rebase conflict throws and never records. The
  * engine model, however, predicts the `status` arg before the handler runs and,
  * for a standalone target with no upstream, may report a non-canonical value like
- * "no-op-standalone" or "skipped". Any recorded rebase status that is not an
- * explicit failure therefore means the rebase requirement is satisfied → 'passed'.
- * Without this, an unrecognized status stalls the exact-"passed" rebase_verify
- * gate (observed live: session incident-digest-1783006038754 looped __fallback__
- * on graduation.rebase_status="no-op-standalone").
+ * "no-op-standalone" or "skipped". Known recorded non-failure rebase outcomes
+ * mean the rebase requirement is satisfied → 'passed'; arbitrary text is rejected
+ * before it can silently open the exact-"passed" rebase_verify gate.
+ * Without this, a known no-op status stalls the exact-"passed" rebase_verify gate
+ * (observed live: session incident-digest-1783006038754 looped __fallback__ on
+ * graduation.rebase_status="no-op-standalone").
  */
 function normalizeRebaseStatus(snapshot: ReadonlyMap<string, unknown>, statusPath: string) {
   const rawStatus = snapshot.get(statusPath);
   if (typeof rawStatus !== 'string' || rawStatus.trim().length === 0) return undefined;
-  const resolved = canonicalizeVerificationStatus(rawStatus) === 'failed' ? 'failed' : 'passed';
-  return rawStatus === resolved
-    ? undefined
-    : { mutations: [{ op: 'MSet' as const, path: statusPath, value: resolved }] };
+  const parsed = parseVerificationStatus(rawStatus);
+  const rebaseSuccess = parsed ? undefined : parseRebaseSuccessStatus(rawStatus);
+  if (!parsed && !rebaseSuccess) {
+    throw new Error(verificationStatusRepairPrompt('git_rebase_latest', rawStatus));
+  }
+  const resolved = parsed?.status === 'failed' ? 'failed' : 'passed';
+  const mutations: Array<{ op: 'MSet'; path: string; value: string }> = [];
+  if (rawStatus !== resolved) {
+    mutations.push({ op: 'MSet', path: statusPath, value: resolved });
+  }
+  if ((parsed?.preserveEvidenceText || rebaseSuccess) && snapshot.get('graduation.rebase_status_text') !== rawStatus) {
+    mutations.push({ op: 'MSet', path: 'graduation.rebase_status_text', value: rawStatus });
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
+}
+
+interface ParsedVerificationStatus {
+  status: 'passed' | 'failed' | 'skipped';
+  preserveEvidenceText: boolean;
 }
 
 const VERIFICATION_STATUS_SYNONYMS: Record<string, 'passed' | 'failed' | 'skipped'> = {
@@ -558,16 +626,92 @@ const VERIFICATION_STATUS_SYNONYMS: Record<string, 'passed' | 'failed' | 'skippe
   skipped: 'skipped', skip: 'skipped', na: 'skipped', none: 'skipped',
 };
 
+const STATUS_TOKEN_PATTERN = [
+  'successful',
+  'succeeded',
+  'completed',
+  'passing',
+  'complete',
+  'failure',
+  'errored',
+  'skipped',
+  'passed',
+  'success',
+  'failed',
+  'failing',
+  'green',
+  'error',
+  'none',
+  'pass',
+  'fail',
+  'skip',
+  'done',
+  'red',
+  'ok',
+  'n/a',
+  'na',
+].join('|').replace(/\//gu, '\\/');
+
+const LEADING_STATUS_RE = new RegExp(
+  `^\\s*["'\`]*(${STATUS_TOKEN_PATTERN})(?=\\s*(?::|;|,|\\.|\\)|\\]|\\}|-|$)|\\s+)`,
+  'iu',
+);
+const EXPLICIT_STATUS_RE = new RegExp(
+  `\\b(?:status|result|outcome|verification(?:\\s+status)?)\\s*(?:is|=|:|-)\\s*["'\`]*(${STATUS_TOKEN_PATTERN})(?=\\b|\\s|["'\`])`,
+  'iu',
+);
+
+function normalizeStatusToken(value: string): 'passed' | 'failed' | 'skipped' | undefined {
+  const key = value.trim().toLowerCase().replace(/[\s/_-]+/gu, '');
+  return key === 'pending' ? undefined : VERIFICATION_STATUS_SYNONYMS[key];
+}
+
+function parseRebaseSuccessStatus(value: string): true | undefined {
+  const key = value.trim().toLowerCase().replace(/[\s/_-]+/gu, '');
+  return ['noop', 'noopstandalone', 'notapplicable', 'clean', 'alreadyuptodate'].includes(key)
+    ? true
+    : undefined;
+}
+
 /**
  * Map a reported verification status to the canonical enum the graduation gates
- * require. Returns undefined for an unrecognized value (left untouched so a
- * genuinely unexpected status is not silently masked as passed). "pending" maps
- * to itself and is left as-is.
+ * require. A bare synonym like "succeeded" canonicalizes directly. Verbose
+ * status text is accepted only when it has a leading status token
+ * ("passed: ...") or an explicit result field ("status: failed"); the full raw
+ * text is then retained by the caller as evidence.
  */
-function canonicalizeVerificationStatus(value: string): 'passed' | 'failed' | 'skipped' | undefined {
-  const key = value.trim().toLowerCase().replace(/[\s/_-]+/gu, '');
-  if (key === 'pending') return undefined;
-  return VERIFICATION_STATUS_SYNONYMS[key];
+function parseVerificationStatus(value: string): ParsedVerificationStatus | undefined {
+  const direct = normalizeStatusToken(value);
+  if (direct) return { status: direct, preserveEvidenceText: false };
+
+  const leading = LEADING_STATUS_RE.exec(value);
+  if (leading?.[1]) {
+    const status = normalizeStatusToken(leading[1]);
+    if (status) return { status, preserveEvidenceText: true };
+  }
+
+  const explicit = EXPLICIT_STATUS_RE.exec(value);
+  if (explicit?.[1]) {
+    const status = normalizeStatusToken(explicit[1]);
+    if (status) return { status, preserveEvidenceText: true };
+  }
+
+  return undefined;
+}
+
+function requireCanonicalVerificationStatus(value: string, actionName: string): ParsedVerificationStatus {
+  const parsed = parseVerificationStatus(value);
+  if (!parsed) {
+    throw new Error(verificationStatusRepairPrompt(actionName, value));
+  }
+  return parsed;
+}
+
+function verificationStatusRepairPrompt(source: string, rawStatus: string): string {
+  return `${source} status must begin with "passed" or "failed" (accepted examples: ` +
+    `"passed: npm test completed", "failed: smoke test failed") or include an explicit ` +
+    `"status: passed" / "result: failed" field. Received ambiguous status ${JSON.stringify(rawStatus)}; ` +
+    'call the same verification action again with a canonical status and put details in evidence text.';
 }
 
 function staleTransitionRefreshMutation(snapshot: ReadonlyMap<string, unknown>) {
@@ -1033,13 +1177,14 @@ export const handlers: Record<string, ToolHandler> = {
    * status (after running npm_install/typecheck/test); this handler canonicalizes
    * it to the graduation enum (#107) so a synonym like "succeeded" can't be
    * persisted verbatim and then block the exact-"passed" smoke gate. An
-   * unrecognized status is passed through untouched (never masked as passed).
+   * unrecognized status rejects with a concrete repair prompt before the mode
+   * can advance with a noncanonical gate value.
    */
   async run_static_verification(payload) {
     const rawStatus = optionalStringPayloadField(payload, 'status') ?? 'passed';
     return {
       kind: 'static_verification',
-      status: canonicalizeVerificationStatus(rawStatus) ?? rawStatus,
+      status: requireCanonicalVerificationStatus(rawStatus, 'run_static_verification').status,
       evidence_id: optionalStringPayloadField(payload, 'evidence_id') ?? evidenceId('static'),
     };
   },
@@ -1119,7 +1264,7 @@ export const handlers: Record<string, ToolHandler> = {
       ? (domainRaw as Record<string, unknown>)
       : undefined;
     const rawStatus = optionalStringPayloadField(payload, 'status') ?? 'passed';
-    const status = canonicalizeVerificationStatus(rawStatus) ?? rawStatus;
+    const status = requireCanonicalVerificationStatus(rawStatus, 'run_rebase_static_verification').status;
     const evidenceIdValue = optionalStringPayloadField(payload, 'evidence_id') ?? evidenceId('rebase-static');
 
     let auditPath = '';
