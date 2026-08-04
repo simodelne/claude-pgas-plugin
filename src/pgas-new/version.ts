@@ -3,7 +3,7 @@ export const PGAS_SERVER_PACKAGE = "@simodelne/pgas-server";
 // Authoritative checked engine version for generated scaffolds and docs.
 // package.json/template specs intentionally use `^${PGAS_SERVER_VERSION}`,
 // so those compatible npm ranges should not be described as exact pins.
-export const PGAS_SERVER_VERSION = "3.24.0";
+export const PGAS_SERVER_VERSION = "3.26.0";
 
 export const PGAS_SERVER_RUNTIME_IMPORTS = [
   "@simodelne/pgas-server/plugin.js",

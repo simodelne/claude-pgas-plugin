@@ -5,7 +5,8 @@ const missingLiveProviderEnv = ['PGAS_LIVE_PROVIDER', 'PGAS_API_BASE', 'PGAS_API
   .filter((name) => !process.env[name]);
 const hasLiveProvider = missingLiveProviderEnv.length === 0;
 const requireLive = process.env.PGAS_REQUIRE_LIVE === '1';
-const liveIt = hasLiveProvider || requireLive ? it : it.skip;
+const liveProviderTestMode = hasLiveProvider || requireLive ? 'run' : 'skip';
+const liveIt = liveProviderTestMode === 'run' ? it : it.skip;
 // Real LLM round trips routinely take 10-60s. The default 5s vitest timeout would
 // flake every run, so the live gate uses an explicit upper bound.
 const LIVE_PROVIDER_TIMEOUT_MS = Number(process.env.PGAS_LIVE_PROVIDER_TIMEOUT_MS ?? '180000');
@@ -45,7 +46,9 @@ describe('{{SLUG}} live-provider graduation', () => {
   it('keeps live-provider graduation disabled until provider env is present', () => {
     if (!hasLiveProvider) {
       expect(missingLiveProviderEnv.length).toBeGreaterThan(0);
-      expect(liveIt).toBe(it.skip);
+      if (!requireLive) {
+        expect(liveProviderTestMode).toBe('skip');
+      }
     }
   });
 });

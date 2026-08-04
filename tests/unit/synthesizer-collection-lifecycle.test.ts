@@ -366,7 +366,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
 
   it('keeps no-descriptor generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: 'bae05c355aba5aa1211f9ef1315bb446a9585e30548db27d015af426d2e274c4',
+      spec_yaml: '0c9048f63f08cb9e616e142a79c80524edb51223eb0a8ef5145d0b012fcd8ecb',
       contracts_ts: '9cf1c34fb09d664aef1bbb2b9cf31cb54a6e2943c81007cd561d0975dd2d43af',
       handlers_ts: '3a199dedfb60608b43be6403ca002ed6d79a4fedc7cfa0ab27c02c0777eceab7',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
@@ -391,7 +391,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     };
 
     expect(hashArtifact(synthesizeProgramSpecFromDomain(domainWithLifecycle(noLlmLifecycle)))).toEqual({
-      spec_yaml: 'e4d9fb2501ef5ce68bc6a323c870256e6153936ab1a0bea930cdc975e352c88d',
+      spec_yaml: '21cef3bda1fac192e712a995a4f901f94d6c227efeedc15b11e8f7b42abeb2f6',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '93389854076edd1764904f23b10dc3984cddec466b98c16c773e37f3eb954314',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',

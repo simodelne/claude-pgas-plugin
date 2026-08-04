@@ -275,7 +275,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^3.24.0"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^3.26.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
@@ -296,12 +296,15 @@ describe('template renderer', () => {
       expect(apiTest).toContain('fetchTransport');
       expect(apiTest).toContain('normalizeSessionDomain');
       expect(apiTest).toContain('await server.start()');
+      expect(apiTest).toContain('port: 0');
       expect(apiTest).toContain('fetchTransport({ baseUrl: `http://127.0.0.1:${port}`');
       expect(apiTest).toContain('await server.close()');
       expect(apiTest).toContain('await client.programs.list()');
       expect(apiTest).toContain('await client.sessions.create');
       expect(apiTest).toContain('await client.sessions.get');
       expect(apiTest).toContain('await client.sessions.world');
+      expect(apiTest).toContain("expect(normalized).toHaveProperty('inputs.domain_context')");
+      expect(apiTest).not.toContain("expect(normalized).toHaveProperty('inputs.initial_user_text')");
       expect(apiTest).not.toContain("baseUrl: 'http://127.0.0.1:0'");
       expect(apiTest).not.toContain('expect(httpClient).toBeDefined()');
       expect(liveTest).toContain('await client.sessions.create');
@@ -309,14 +312,21 @@ describe('template renderer', () => {
       expect(liveTest).toContain('await client.sessions.get');
       expect(liveTest).toContain('await client.sessions.rounds');
       expect(liveTest).toContain('const missingLiveProviderEnv');
+      expect(liveTest).toContain('const liveProviderTestMode');
       expect(liveTest).toContain('expect(missingLiveProviderEnv.length).toBeGreaterThan(0)');
+      expect(liveTest).toContain("expect(liveProviderTestMode).toBe('skip')");
+      expect(liveTest).not.toContain('expect(liveIt).toBe(it.skip)');
       expect(liveTest).not.toContain('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation');
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
       expect(deterministicTest).toContain('type TestHarnessAuthorResponse');
-      expect(deterministicTest).toContain("await harness.trigger('start deterministic scaffold')");
-      expect(deterministicTest).toContain("expect(snapshot.mode).toBe('complete')");
+      expect(deterministicTest).toContain('buildDeterministicPath');
+      expect(deterministicTest).toContain('await harness.runToTerminal');
+      expect(deterministicTest).toContain('expect(snapshot.terminal).toBe(true)');
       expect(deterministicTest).toContain('await harness.close()');
+      expect(deterministicTest).not.toContain("effect('example_action')");
+      expect(deterministicTest).not.toContain("expect(snapshot.mode).toBe('complete')");
+      expect(deterministicTest).not.toContain("'work.example_ready'");
       expect(deterministicTest).not.toContain('expect(harness).toBeDefined()');
 
       const renderedText = [registration, server, authorDriver, repl, apiTest, deterministicTest].join('\n');
@@ -605,6 +615,7 @@ describe('template renderer', () => {
     );
     expect(parsed.schema).toMatchObject({
       'inputs.user_text': 'string',
+      'inputs.domain_context': 'object',
       'notebook.*': 'string',
       notebook_pins: 'array',
       'work.started': 'boolean',
