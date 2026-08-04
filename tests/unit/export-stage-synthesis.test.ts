@@ -104,6 +104,55 @@ describe('PR-E2 export stage synthesis', () => {
     }
   });
 
+  it('normalizes DOCX export result contracts before domain_synthesis and bypasses the body generator for export stages', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(customContractExportDomain());
+    const generatorCalls: string[] = [];
+    const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-export-custom-contract-'));
+    try {
+      const withBodies = await synthesizeDomainLogic({
+        ...artifact,
+        created_at: '2026-08-04T00:00:00.000Z',
+      }, {
+        cacheDir,
+        generator: async (request) => {
+          generatorCalls.push(request.stage);
+          return nonExportStageBody();
+        },
+      });
+
+      expect(generatorCalls).not.toContain('finalize_export');
+      const body = withBodies.stage_sources?.finalize_export ?? '';
+      expect(body).toContain("from '../export/docx.js'");
+      expect(body).toContain('renderStructuredDocxDocument');
+      expect(body).toContain('Buffer.from(bytes).toString');
+
+      const exportStage = withBodies.synthesis_context?.stages.find((stage) => stage.slug === 'finalize_export');
+      const resultContract = exportStage?.domain_spec?.produces.result_json as Record<string, unknown> | undefined;
+      expect(Object.keys(resultContract ?? {})).toEqual([
+        'stage',
+        'docx_base64',
+        'docx_bytes',
+        'sha256',
+        'section_count',
+      ]);
+      expect(exportStage?.domain_spec?.produces.items_json).toEqual(['docx_export:<sha256>']);
+
+      const runStage = loadGeneratedExportStage(body);
+      const output = await runStage({
+        stage: 'finalize_export',
+        payload: {},
+        domain: approvedDocumentFinalizationDomain(),
+        domain_spec: exportStage?.domain_spec ?? { reads: [], produces: {}, rules: [], invariants: [] },
+      }, deterministicRuntime());
+      const result = JSON.parse(output.result_json) as Record<string, unknown>;
+      expect(Object.keys(result)).toEqual(Object.keys(resultContract ?? {}));
+      expect(JSON.parse(output.items_json)).toEqual([`docx_export:${String(result.sha256)}`]);
+      expect(Object.keys(result)).not.toEqual(['docx_ready', 'amended_docx_path']);
+    } finally {
+      rmSync(cacheDir, { force: true, recursive: true });
+    }
+  });
+
   it('removes export output shapes from all author-facing action surfaces', () => {
     const artifact = synthesizeProgramSpecFromDomain(exportDomain());
     const spec = load(artifact.spec_yaml) as {
@@ -378,6 +427,24 @@ function stageOutputsOnlyDomain(): Record<string, unknown> {
   };
 }
 
+function approvedDocumentFinalizationDomain(): Record<string, unknown> {
+  return {
+    'work.document.sections': [
+      {
+        id: 'section-1',
+        heading: 'Approved Amendment',
+        status: 'approved',
+        text: 'APPROVED-AMENDED-DOCX-CONTENT',
+      },
+    ],
+    'work.document.sections.0.id': 'section-1',
+    'work.document.sections.0.heading': 'Approved Amendment',
+    'work.document.sections.0.status': 'approved',
+    'work.document.sections.0.text': 'APPROVED-AMENDED-DOCX-CONTENT',
+    'work.document.summary': 'Document finalization complete.',
+  };
+}
+
 function stageOutput(stage: string, summary: string): { result_json: string; items_json: string; digest: string } {
   return {
     result_json: JSON.stringify({ stage, summary }),
@@ -424,6 +491,40 @@ function exportDomain(): Record<string, unknown> {
     ]),
     'intake.delegation_json': JSON.stringify({}),
     'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'export_document.ready' }),
+  };
+}
+
+function customContractExportDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'document-finalization',
+    'program.name': 'Document Finalization',
+    'program.target_dir': '/tmp/document-finalization',
+    'intake.purpose': 'Finalize approved amendments and export the amended document as DOCX.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      {
+        slug: 'finalize_export',
+        kind: 'export_docx',
+        export_kind: 'export_docx',
+        domain_spec: {
+          reads: ['work.document.sections.*.text', 'work.document.summary'],
+          produces: {
+            result_json: { docx_ready: 'boolean', amended_docx_path: 'string' },
+            items_json: ['docx:<amended_docx_path>'],
+          },
+          rules: ['Render accumulated approved amendments into a deterministic DOCX export.'],
+          invariants: ['No LLM round is required in finalize_export.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'finalize_export', trigger: 'finalize', guard_field: 'intake.started' },
+      { from: 'finalize_export', to: 'complete', trigger: 'exported', guard_field: 'finalize_export.ready' },
+    ]),
+    'intake.delegation_json': JSON.stringify({}),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'finalize_export.ready' }),
   };
 }
 
