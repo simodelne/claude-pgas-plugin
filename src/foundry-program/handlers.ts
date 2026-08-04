@@ -35,8 +35,19 @@ import {
 } from './json-normalize.js';
 import { synthesizeDomainLogic, type StageBodyGenerator } from './domain-synthesis.js';
 import type { ReasoningContractGenerator } from './reasoning-contract.js';
-import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain, type SynthesizeProgramSpecOptions } from './synthesizer.js';
-import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesisContext, type SynthesizedArtifact } from './synthesizer-store.js';
+import {
+  adaptReusableDelegationPayloadMapsForDomain,
+  refreshStaleTransitionsForStages,
+  synthesizeProgramSpecFromDomain,
+  type SynthesizeProgramSpecOptions,
+} from './synthesizer.js';
+import {
+  putSynthesizedArtifact,
+  requireSynthesizedArtifact,
+  type DelegationDescriptor,
+  type SynthesisContext,
+  type SynthesizedArtifact,
+} from './synthesizer-store.js';
 
 const defaultStages = [
   { slug: 'start', is_bootstrap: true },
@@ -378,7 +389,9 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
       const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
       const normalized = path === 'intake.stages_json'
         ? parseAndNormalizeStagesJson(value)
-        : parseAndNormalizeJson(value, path);
+        : path === 'intake.delegation_json'
+          ? parseAndNormalizeDelegationForCurrentManifest(snapshot, value)
+          : parseAndNormalizeJson(value, path);
       assertJsonTopLevelType(normalized.value, expectedType, path);
       const canonical = normalized.canonical;
       if (canonical !== stored) {
@@ -389,6 +402,31 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
     const allMutations = [...mutations, ...transitionRefresh];
     return allMutations.length > 0 ? { mutations: allMutations } : undefined;
   }],
+  ['validate_reusable_delegation_payload_map', (snapshot) => {
+    const stored = snapshot.get('intake.delegation_json');
+    if (typeof stored !== 'string') return undefined;
+    const normalized = parseAndNormalizeDelegationForCurrentManifest(snapshot, normalizeDelegationSentinelValue(stored));
+    const error = normalized.errors.join('; ');
+    const mutations: Array<{ op: 'MSet'; path: string; value: unknown }> = [];
+
+    if (snapshot.get('intake.delegation_validation_error') !== error) {
+      mutations.push({ op: 'MSet', path: 'intake.delegation_validation_error', value: error });
+    }
+
+    if (error.length > 0) {
+      if (snapshot.get('intake.q5_recorded') !== false) {
+        mutations.push({ op: 'MSet', path: 'intake.q5_recorded', value: false });
+      }
+      if (snapshot.get('intake.last_question_asked') !== 5) {
+        mutations.push({ op: 'MSet', path: 'intake.last_question_asked', value: 5 });
+      }
+      if (snapshot.get('intake.last_question_text') !== error) {
+        mutations.push({ op: 'MSet', path: 'intake.last_question_text', value: error });
+      }
+    }
+
+    return mutations.length > 0 ? { mutations } : undefined;
+  }],
   ['summarize_design_confirmation', (snapshot) => {
     if (snapshot.get('intake.program_intake_finalized') !== true) return undefined;
     const summary = renderDesignConfirmationSummary(snapshot);
@@ -397,6 +435,61 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
       : { mutations: [{ op: 'MSet' as const, path: 'intake.design_confirmation_summary', value: summary }] };
   }],
 ]);
+
+interface NormalizedDelegationField extends NormalizedJsonField {
+  errors: string[];
+}
+
+function parseAndNormalizeDelegationForCurrentManifest(
+  snapshot: ReadonlyMap<string, unknown>,
+  value: string,
+): NormalizedDelegationField {
+  const normalized = parseAndNormalizeJson(value, 'intake.delegation_json');
+  const manifest = optionalWiringManifestForIntakeDelegation(snapshot);
+  if (!manifest?.available_programs?.length) {
+    return { ...normalized, errors: [] };
+  }
+
+  const domain = domainFromSnapshot(snapshot);
+  const compatibility = adaptReusableDelegationPayloadMapsForDomain(
+    domain,
+    normalized.value as DelegationDescriptor,
+    manifest.available_programs,
+  );
+  return {
+    value: compatibility.delegation,
+    canonical: canonicalJson(compatibility.delegation, 'intake.delegation_json'),
+    errors: compatibility.errors,
+  };
+}
+
+function optionalWiringManifestForIntakeDelegation(
+  snapshot: ReadonlyMap<string, unknown>,
+): WiringManifest | undefined {
+  const domain = domainFromSnapshot(snapshot);
+  const storedManifest = domainValue(domain, 'repo.wiring_manifest_json') ?? domainValue(domain, 'repo.wiring_manifest');
+  if (typeof storedManifest === 'string') {
+    try {
+      return JSON.parse(storedManifest) as WiringManifest;
+    } catch {
+      return undefined;
+    }
+  }
+  if (storedManifest && typeof storedManifest === 'object' && !Array.isArray(storedManifest)) {
+    return storedManifest as WiringManifest;
+  }
+
+  const targetDir = optionalStringDomainField(domain, 'program.target_dir');
+  if (!targetDir || !existsSync(join(targetDir, WIRING_MANIFEST_PATH))) {
+    return undefined;
+  }
+  const result = readWiringManifest(targetDir);
+  return result.ok ? result.manifest : undefined;
+}
+
+function domainFromSnapshot(snapshot: ReadonlyMap<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(snapshot.entries());
+}
 
 function normalizeVerificationStatus(snapshot: ReadonlyMap<string, unknown>, statusPath: string) {
   const rawStatus = snapshot.get(statusPath);

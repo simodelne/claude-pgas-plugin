@@ -28,6 +28,115 @@ afterEach(() => {
 });
 
 describe('foundry repo_targeting continuation flow', () => {
+  it('adapts manifest reusable delegation payload targets to parent-declared Q5 sources before synthesis', async () => {
+    const targetDir = trackedTempRoot('pgas-new-reusable-payload-adapter-');
+    mkdirSync(join(targetDir, '.pgas'), { recursive: true });
+    writeFileSync(join(targetDir, '.pgas/wiring.yml'), nativeSourceDelegablesManifestYaml());
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: documentFinalizationProductPathResponses(
+        targetDir,
+        documentIngestDelegationPayload({
+          'request.extraction_contract': 'inputs.initial_user_text',
+          'domain_context.original_request': 'inputs.initial_user_text',
+        }),
+      ),
+    });
+
+    try {
+      await driveDocumentFinalizationProductPath(harness);
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'scaffold_plan' &&
+          candidate.domain['artifact_plan.status'] === 'draft' &&
+          terminalActionNames(candidate.rounds).includes('synthesize_program_spec'),
+        'adapted existing-repo reusable delegation payload-map synthesis',
+      );
+      const artifact = getSynthesizedArtifact(snapshot.sessionId);
+      if (!artifact?.synthesis_context) {
+        throw new Error('missing synthesized artifact for reusable payload-map adapter falsifier');
+      }
+      const parsed = load(artifact.spec_yaml) as {
+        channels: Record<string, Record<string, unknown>>;
+        action_map: Record<string, Record<string, unknown>>;
+      };
+      const child = artifact.synthesis_context.delegation.children?.[0] as Record<string, unknown> | undefined;
+      const payloadMap = child?.payload_map as Record<string, string> | undefined;
+
+      expect(snapshot.domain['program.synthesis_complete']).toBe(true);
+      expect(child).toMatchObject({
+        id: 'document_ingest',
+        target_spec: 'SimoneOS Document Ingest',
+        registered_name: 'document-ingest',
+        target_slug: 'document-ingest',
+      });
+      expect(payloadMap).toEqual({
+        'request.extraction_contract': 'inputs.initial_user_text',
+        'domain_context.original_request': 'inputs.initial_user_text',
+      });
+      expect(Object.values(payloadMap ?? {})).not.toContain('intake.summary');
+      expect(parsed.channels.document_ingest_call).toMatchObject({
+        target_spec: 'SimoneOS Document Ingest',
+        result_path: 'ingest.delegation.document_ingest.result',
+        optional: true,
+      });
+      expect(parsed.action_map.document_ingest.channel).toBe('document_ingest_call');
+      expect(artifact.registration_ts ?? '').toContain("source: 'inputs.initial_user_text'");
+      expect(artifact.registration_ts ?? '').not.toContain("source: 'intake.summary'");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('rejects manifest reusable delegation payload maps during intake when no parent source override is supplied', async () => {
+    const targetDir = trackedTempRoot('pgas-new-reusable-payload-invalid-');
+    mkdirSync(join(targetDir, '.pgas'), { recursive: true });
+    writeFileSync(join(targetDir, '.pgas/wiring.yml'), nativeSourceDelegablesManifestYaml());
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: documentFinalizationProductPathResponses(
+        targetDir,
+        documentIngestDelegationPayload({
+          'request.extraction_contract': 'intake.summary',
+        }),
+      ),
+    });
+
+    try {
+      await harness.trigger('Attach document finalization to this existing repo.');
+      await harness.trigger('Use the design path.');
+      await harness.trigger('Q1 answer.');
+      await harness.trigger('Q2 answer.');
+      await harness.trigger('Q3 answer.');
+      await harness.trigger('Q4 answer.');
+      await harness.trigger('Q5 answer.');
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'intake_intelligence' &&
+          candidate.domain['intake.q5_recorded'] === false &&
+          typeof candidate.domain['intake.delegation_validation_error'] === 'string',
+        'intake-time reusable delegation payload-map validation failure',
+      );
+      const error = String(snapshot.domain['intake.delegation_validation_error']);
+      const names = terminalActionNames(snapshot.rounds);
+
+      expect(error).toContain('manifest source intake.summary is not declared in this program\'s schema');
+      expect(error).toContain('provide a source mapping');
+      expect(snapshot.domain['program.design_confirmed']).not.toBe(true);
+      expect(names).toContain('record_q5_delegation');
+      expect(names).not.toContain('confirm_design');
+      expect(names).not.toContain('synthesize_program_spec');
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('normalizes a hyphenated manifest delegation slug through product intake while preserving the external binding', async () => {
     const targetDir = trackedTempRoot('pgas-new-hyphenated-delegable-');
     mkdirSync(join(targetDir, '.pgas'), { recursive: true });
@@ -466,6 +575,97 @@ function trackedTempRoot(prefix: string): string {
   return root;
 }
 
+function documentIngestDelegationPayload(payloadMap: Record<string, string>): Record<string, unknown> {
+  return {
+    stages: {
+      ingest: { kind: 'external-adapter', target: 'document-ingest' },
+    },
+    children: [{
+      id: 'document-ingest',
+      stage: 'ingest',
+      action_name: 'document_ingest',
+      synthesize_child: {
+        kind: 'worker',
+        purpose: 'Extract document sections and summary for finalization.',
+        result_fields: { summary: 'string', sections_json: 'string' },
+      },
+      payload_map: payloadMap,
+      result_path: 'ingest.delegation.document_ingest.result',
+      max_delegated_rounds: 12,
+      round_timeout_ms: 120000,
+      optional: true,
+    }],
+  };
+}
+
+function documentFinalizationProductPathResponses(
+  targetDir: string,
+  delegationPayload: Record<string, unknown>,
+): TestHarnessAuthorResponse[] {
+  return [
+    effect('record_program_target', {
+      slug: 'document-finalization',
+      name: 'Document Finalization',
+      target_dir: targetDir,
+    }),
+    effect('choose_design_path', { choice: 'design' }),
+    effect('record_q1_purpose', {
+      purpose: 'Finalize uploaded documents by delegating ingest and preserving a section summary.',
+    }),
+    effect('record_q2_entry_channel', {
+      entry_channel: 'user_text',
+    }),
+    effect('record_q3_stages', {
+      stages_json: JSON.stringify([
+        {
+          slug: 'start',
+          is_bootstrap: true,
+          domain_spec: {
+            reads: ['inputs.initial_user_text'],
+            produces: { result_json: { summary: 'string' } },
+            rules: ['Capture the finalization request for delegation.'],
+            invariants: ['The original request is preserved for delegated ingest.'],
+          },
+        },
+        { slug: 'ingest' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+    }),
+    effect('record_q4_transitions', {
+      transitions_json: JSON.stringify([
+        { from: 'start', to: 'ingest', trigger: 'started', guard_field: 'start.started' },
+        { from: 'ingest', to: 'complete', trigger: 'ingested', guard_field: 'ingest.ready' },
+      ]),
+    }),
+    effect('record_q5_delegation', {
+      delegation_json: JSON.stringify(delegationPayload),
+    }),
+    effect('record_q6_completion', {
+      completion_json: JSON.stringify({ final_stage: 'complete', guard_field: 'ingest.ready' }),
+    }),
+    effect('record_program_intake_finalize', {}),
+    effect('confirm_design', { approved: true }),
+    effect('select_repo_target', { target_kind: 'existing_repo' }),
+    effect('load_wiring_manifest', { repo_root: targetDir }),
+    effect('authorize_existing_repo_target', {}),
+    effect('synthesize_program_spec', {}),
+    effect('plan_artifacts', {}),
+  ];
+}
+
+async function driveDocumentFinalizationProductPath(harness: Awaited<ReturnType<typeof createTestHarness>>): Promise<void> {
+  await harness.trigger('Attach document finalization to this existing repo.');
+  await harness.trigger('Use the design path.');
+  await harness.trigger('Q1 answer.');
+  await harness.trigger('Q2 answer.');
+  await harness.trigger('Q3 answer.');
+  await harness.trigger('Q4 answer.');
+  await harness.trigger('Q5 answer.');
+  await harness.trigger('Q6 answer.');
+  await harness.trigger('Finalize intake.');
+  await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+}
+
 function manifestYaml(): string {
   return `schema_version: 1
 repo:
@@ -508,5 +708,17 @@ function hyphenatedDelegablesManifestYaml(): string {
   - slug: review-service
     target_spec: review-service
     provides: delegation_review
+`;
+}
+
+function nativeSourceDelegablesManifestYaml(): string {
+  return `${manifestYaml()}available_programs:
+  - slug: document-ingest
+    target_spec: SimoneOS Document Ingest
+    provides: delegation_document_ingest
+    payload_map:
+      request.extraction_contract: intake.summary
+      domain_context.original_request: intake.summary
+    result_path: ingest.delegation.document_ingest.result
 `;
 }
