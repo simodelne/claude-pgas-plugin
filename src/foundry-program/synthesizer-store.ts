@@ -24,6 +24,8 @@ export interface CapabilityGap {
 export interface DelegationChildDescriptor {
   id: string;
   stage: string;
+  action_name?: string;
+  ad_hoc?: boolean;
   target_spec?: string;
   registered_name?: string;
   synthesize_child?: DelegationChildSynthesizeDescriptor;
