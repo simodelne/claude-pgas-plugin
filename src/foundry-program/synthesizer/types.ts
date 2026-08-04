@@ -21,6 +21,8 @@ export interface Stage {
   export_kind?: string;
   domain_spec?: StageDomainSpec;
   emit_artifact?: StageArtifactDescriptorInput | StageArtifactDescriptorInput[];
+  tools?: unknown;
+  engine_tools?: unknown;
 }
 
 export type StageInput = Stage | string;

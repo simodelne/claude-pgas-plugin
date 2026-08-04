@@ -12,6 +12,7 @@ export function renderRegistrationSource(
   } = {},
   options: {
     exportHookChannel?: string;
+    syncOutContinuationChannels?: string[];
   } = {},
 ): string {
   const policyEntries = [
@@ -33,6 +34,13 @@ export function renderRegistrationSource(
     : 'handlers, reactionHandlers';
   const exportHookAdapterRegistration = options.exportHookChannel
     ? `      adapters.outputs.set(${tsString(options.exportHookChannel)}, createExportHookAdapter());\n`
+    : '';
+  const syncOutContinuationPolicy = options.syncOutContinuationChannels && options.syncOutContinuationChannels.length > 0
+    ? `    syncOutContinuationPolicy: {
+      channels: ${renderTsValue(options.syncOutContinuationChannels)},
+      maxContinuations: 4,
+    },
+`
     : '';
   const specLoadSnippet = options.exportHookChannel
     ? `  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
@@ -83,8 +91,20 @@ ${specLoadSnippet}  const toolRegistry = createToolRegistry();
   return {
     spec,
     reactionHandlers,
-${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
-      const adapters = createProgramAdapters(spec, ctx, handlers);
+${syncOutContinuationPolicy}${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
+      const adapterHandlers: Record<string, (payload: Record<string, unknown>) => Promise<unknown>> = {
+        ...handlers,
+      };
+      if (spec.tools) {
+        for (const [name, decl] of spec.tools) {
+          if (!toolRegistry.has(name)) continue;
+          const actionName = decl.actionName ?? \`invoke_tool_\${name}\`;
+          adapterHandlers[actionName] = async () => {
+            throw new Error(\`tool adapter for \${name} was not installed\`);
+          };
+        }
+      }
+      const adapters = createProgramAdapters(spec, ctx, adapterHandlers);
       if (spec.tools) {
         for (const [name, decl] of spec.tools) {
           if (toolRegistry.has(name)) {

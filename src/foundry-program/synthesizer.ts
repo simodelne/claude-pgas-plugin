@@ -152,6 +152,20 @@ const SELF_CONTAINED_DOCUMENT_UPLOAD_TYPES = new Set(
 const DOCUMENT_SELF_CONTAINED_GAP_NOTE =
   'PDF extraction is a host connector — use extraction: host_connector with connector_slug; self-contained DOCX is supported by the generated extractor';
 
+interface RegisteredToolDescriptor {
+  name: string;
+  kind: 'registered';
+  provider: 'libraries/search';
+  result_path: string;
+  modes: string[];
+  description: string;
+  parameters: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -269,6 +283,7 @@ export function synthesizeProgramSpecFromDomain(
   if (!modeNameSet.has(completion.final_stage)) {
     throw new Error(`completion.final_stage must reference a named stage; got ${completion.final_stage}`);
   }
+  const registeredTools = collectRegisteredTools(stages, modeNameSet);
   const outgoingModes = new Set(transitions.map((transition) => transition.from));
   const terminalModes = modeNames.filter((modeName) => !outgoingModes.has(modeName));
   if (terminalModes.length === 0) {
@@ -337,6 +352,7 @@ export function synthesizeProgramSpecFromDomain(
     ...(Array.isArray(spec.features) ? spec.features as string[] : []),
     'reactions',
     'inline_world_query',
+    ...(registeredTools.length > 0 ? ['integrations', 'tool_registry'] : []),
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
   ]);
@@ -433,6 +449,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
+  applyRegisteredToolProjection(projection, registeredTools);
   applyScaleSafeProjectionPolicy(projection);
   removeExportDecisionOnlyStageEntries(projection, exportActions);
   spec.projection = projection;
@@ -452,6 +469,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
+  applyRegisteredToolPrompts(prompts, registeredTools);
   removeExportDecisionOnlyStageEntries(prompts, exportActions);
   spec.prompts = prompts;
 
@@ -583,6 +601,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
+  applyRegisteredToolSchema(schema, registeredTools);
   const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
@@ -590,8 +609,21 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
+  applyRegisteredToolGuidance(recordField(spec, 'guidance'), registeredTools);
   removeExportDecisionOnlyStageEntries(recordField(spec, 'guidance'), exportActions);
   applyEngineToolkitGuidance(recordField(spec, 'guidance'), synthesizedModes, queryPolicy.allowedWorldQueryPrefixes.length > 0);
+
+  if (registeredTools.length > 0) {
+    spec.tools = Object.fromEntries(registeredTools.map((tool) => [
+      tool.name,
+      {
+        description: tool.description,
+        parameters: tool.parameters,
+        result_path: tool.result_path,
+        modes: tool.modes,
+      },
+    ]));
+  }
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -622,7 +654,7 @@ export function synthesizeProgramSpecFromDomain(
       docxExtractorImport: './extract/docx.js',
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersIndexBarrelSource(),
-    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
+    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents, registeredTools),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     registration_ts: renderRegistrationSource(toPascalCase(slug), {
@@ -630,6 +662,7 @@ export function synthesizeProgramSpecFromDomain(
       queryPolicy,
     }, {
         exportHookChannel: hasExportDecisionOnly ? EXPORT_HOOK_CHANNEL : undefined,
+        syncOutContinuationChannels: registeredTools.map((tool) => `tool:${tool.name}`),
       }),
     ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
     ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
@@ -1150,6 +1183,25 @@ function applyDelegationSchema(
   }
 }
 
+function applyRegisteredToolSchema(
+  schema: MutableRecord,
+  tools: RegisteredToolDescriptor[],
+): void {
+  for (const tool of tools) {
+    declareObjectPath(schema, tool.result_path);
+  }
+}
+
+function declareObjectPath(schema: MutableRecord, path: string): void {
+  const segments = path.split('.');
+  for (let index = 1; index <= segments.length; index += 1) {
+    const currentPath = segments.slice(0, index).join('.');
+    if (schema[currentPath] === undefined) {
+      schema[currentPath] = 'object';
+    }
+  }
+}
+
 function applyDelegationActions(
   actionMap: MutableRecord,
   children: DelegationChildDescriptor[],
@@ -1196,17 +1248,22 @@ function applyDelegationActionPreconditions(
   for (const child of children) {
     const mode = recordField(modes, child.stage);
     const fanOut = documentFanOutDescriptor(child, documents);
-    appendModePrecondition(
-      mode,
-      delegationRequestActionName(child),
-      { kind: 'FieldFalsy', path: `${delegationStateBase(child)}.requested` },
-    );
+    if (!isAdHocDelegationChild(child)) {
+      appendModePrecondition(
+        mode,
+        delegationRequestActionName(child),
+        { kind: 'FieldFalsy', path: `${delegationStateBase(child)}.requested` },
+      );
+    }
     if (fanOut) {
       appendModePrecondition(
         mode,
         delegationRequestActionName(child),
         { kind: 'FieldFalsy', path: fanOut.completion_guard },
       );
+    }
+    if (isAdHocDelegationChild(child)) {
+      continue;
     }
     for (const action of transitionActionsBySource.get(child.stage) ?? []) {
       appendModePrecondition(
@@ -1333,6 +1390,22 @@ function applyDelegationProjection(
   }
 }
 
+function applyRegisteredToolProjection(
+  projection: MutableRecord,
+  tools: RegisteredToolDescriptor[],
+): void {
+  for (const tool of tools) {
+    for (const modeName of tool.modes) {
+      const modeProjection = recordField(projection, modeName);
+      const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+      modeProjection.include = unique([...include, tool.result_path]);
+      if (!Array.isArray(modeProjection.exclude)) {
+        modeProjection.exclude = [];
+      }
+    }
+  }
+}
+
 function applyDelegationPrompts(
   prompts: MutableRecord,
   children: DelegationChildDescriptor[],
@@ -1346,11 +1419,27 @@ function applyDelegationPrompts(
     const requestShape = isManifestReusedDelegationChild(child)
       ? ''
       : ` Use payload shape { request: { ... } }: put child request fields inside payload.request, not directly under payload.`;
+    if (isAdHocDelegationChild(child)) {
+      prompts[child.stage] = `${existing}Call ${requestAction} as an ad-hoc delegation tool when the current conversation needs ${child.id} work.${requestShape} The runtime records the child result under ${child.result_path} and keeps the conversation in ${child.stage}.`;
+      continue;
+    }
     prompts[child.stage] = fanOut
       ? `${existing}${terminalInstruction}\nFor each uploaded document, call ${requestAction} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
       : isManifestReusedDelegationChild(child)
       ? `${existing}${terminalInstruction}\nCall ${requestAction} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
       : `${existing}${terminalInstruction}\nCall ${requestAction} once with a request object that includes a short topic or query string.${requestShape} When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+  }
+}
+
+function applyRegisteredToolPrompts(
+  prompts: MutableRecord,
+  tools: RegisteredToolDescriptor[],
+): void {
+  for (const tool of tools) {
+    for (const modeName of tool.modes) {
+      const existing = typeof prompts[modeName] === 'string' ? `${prompts[modeName]}\n` : '';
+      prompts[modeName] = `${existing}Use ${tool.name} when the conversation needs ${tool.description.toLowerCase()} The result is recorded at ${tool.result_path}.`;
+    }
   }
 }
 
@@ -1363,6 +1452,17 @@ function applyDelegationGuidance(
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
     const fanOut = documentFanOutDescriptor(child, documents);
     const requestAction = delegationRequestActionName(child);
+    if (isAdHocDelegationChild(child)) {
+      const requestShape = isManifestReusedDelegationChild(child)
+        ? 'empty object payload; delegationPolicy.inputEnrichment supplies child inputs'
+        : 'payload shape { request: { ... } }';
+      guidance[child.stage] = [
+        ...existing,
+        `Ad-hoc delegation tool ${requestAction}: use ${requestShape}; the child result lands at ${child.result_path} and the active mode remains ${child.stage}.`,
+        `Read ${delegationStateBase(child)}.settled / degraded / degrade_reason before relying on the delegated ${child.id} result.`,
+      ];
+      continue;
+    }
     guidance[child.stage] = [
       ...existing,
       terminalActionInstruction([{ name: requestAction, channel: delegationChannelName(child) }]),
@@ -1382,6 +1482,21 @@ function applyDelegationGuidance(
         `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
       ]),
     ];
+  }
+}
+
+function applyRegisteredToolGuidance(
+  guidance: MutableRecord,
+  tools: RegisteredToolDescriptor[],
+): void {
+  for (const tool of tools) {
+    for (const modeName of tool.modes) {
+      const existing = Array.isArray(guidance[modeName]) ? guidance[modeName] as string[] : [];
+      guidance[modeName] = [
+        ...existing,
+        `Registered tool ${tool.name} writes its result to ${tool.result_path}; inspect that path before using the result in later reasoning.`,
+      ];
+    }
   }
 }
 
@@ -2064,7 +2179,7 @@ function delegationChannelName(child: DelegationChildDescriptor): string {
 }
 
 function delegationRequestActionName(child: DelegationChildDescriptor): string {
-  return `request_${child.id}`;
+  return child.action_name ?? `request_${child.id}`;
 }
 
 function delegationSettleReactionName(child: DelegationChildDescriptor): string {
@@ -2077,6 +2192,10 @@ function documentFanOutAdvanceReactionName(child: DelegationChildDescriptor): st
 
 function delegationStateBase(child: DelegationChildDescriptor): string {
   return `${child.stage}.delegation.${child.id}`;
+}
+
+function isAdHocDelegationChild(child: DelegationChildDescriptor): boolean {
+  return child.ad_hoc === true;
 }
 
 function isManifestReusedDelegationChild(child: DelegationChildDescriptor): boolean {
@@ -5273,6 +5392,7 @@ function renderToolsSource(
   collectionLifecycle?: CollectionLifecycleDescriptor,
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
   documents?: DocumentsDescriptor,
+  registeredTools: RegisteredToolDescriptor[] = [],
 ): string {
   void documents;
   const stageActions = codegenStageActions(transitionActions, confirmationLoops);
@@ -5328,19 +5448,93 @@ ${lifecycleTransitions.map((transition) => `  ${transition.action}: {
   },`).join('\n')}
 } as const;`;
 
-  return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+  const registeredToolImport = registeredTools.some((tool) => tool.name === 'web_search')
+    ? `\nimport { createWebSearchProvider } from '../../../libraries/search/index.js';`
+    : '';
+  const registeredToolRegistrations = registeredTools.length === 0
+    ? `  // Stage actions are native action_map entries. Real service adapters belong
+  // behind generated external-adapter stage bodies, not extra topology actions.
+  void _registry;`
+    : registeredTools.map((tool) => {
+      if (tool.name !== 'web_search') {
+        throw new Error(`unsupported registered tool ${tool.name}`);
+      }
+      return '  registerWebSearchTool(registry);';
+    }).join('\n');
+  const registeredToolHelpers = registeredTools.some((tool) => tool.name === 'web_search')
+    ? `
+function registerWebSearchTool(registry: ToolRegistry): void {
+  let webProvider: ReturnType<typeof createWebSearchProvider> | null = null;
+
+  registry.register('web_search', {
+    kind: 'local',
+    fn: async (args: Record<string, unknown>) => {
+      const query = String(args.query ?? '').trim();
+      const jurisdiction = typeof args.jurisdiction === 'string' && args.jurisdiction.trim()
+        ? args.jurisdiction.trim()
+        : '';
+      const maxResults = typeof args.max_results === 'number' && args.max_results > 0
+        ? Math.min(Math.floor(args.max_results), 20)
+        : 8;
+
+      if (!query) {
+        return { status: 'failed', error: 'Empty query', query: '', results: [], result_count: 0 };
+      }
+
+      try {
+        if (!webProvider) {
+          webProvider = createWebSearchProvider();
+        }
+        const fullQuery = jurisdiction && !query.toLowerCase().includes(jurisdiction.toLowerCase())
+          ? \`\${query} \${jurisdiction}\`
+          : query;
+        const searched = await webProvider.search(fullQuery);
+        const results = searched.results.slice(0, maxResults).map((entry) => {
+          const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+            ? entry as Record<string, unknown>
+            : {};
+          return {
+            title: typeof record.title === 'string' ? record.title : '',
+            url: typeof record.url === 'string' ? record.url : '',
+            snippet: typeof record.snippet === 'string' ? record.snippet : '',
+            score: typeof record.score === 'number' ? record.score : undefined,
+          };
+        });
+        return {
+          status: 'ok',
+          query: fullQuery,
+          jurisdiction,
+          result_count: results.length,
+          results,
+        };
+      } catch (error) {
+        return {
+          status: 'failed',
+          query,
+          jurisdiction,
+          result_count: 0,
+          results: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+}
+`
+    : '';
+  const registryParamName = registeredTools.length === 0 ? '_registry' : 'registry';
+
+  return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';${registeredToolImport}
 
 // Native stage actions are declared in specs.yml action_map. This metadata gives
 // implementers one fillable local-tool slot per synthesized stage without adding
 // extra invoke_tool_* actions to the engine topology.
 export const stageActionTools = ${metadata} as const;${lifecycleMetadata}
 
-export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): void {
-  // Stage actions are native action_map entries. Real service adapters belong
-  // behind generated external-adapter stage bodies, not extra topology actions.
-  void _registry;
+export function register${toPascalCase(slug)}Tools(${registryParamName}: ToolRegistry): void {
+${registeredToolRegistrations}
 }
-`;
+${registeredToolHelpers}`;
 }
 
 function renderContractsSource(
@@ -9333,6 +9527,106 @@ function normalizeStages(stages: StageInput[]): Stage[] {
   });
 }
 
+function collectRegisteredTools(
+  stages: Stage[],
+  modeNames: ReadonlySet<string>,
+): RegisteredToolDescriptor[] {
+  const tools: RegisteredToolDescriptor[] = [];
+  const seenNames = new Set<string>();
+  for (const stage of stages) {
+    if (stage.tools === undefined) {
+      continue;
+    }
+    const descriptors = requiredArray(stage.tools, `stage ${stage.slug} tools`);
+    for (const [index, descriptorValue] of descriptors.entries()) {
+      const descriptor = requiredRecord(descriptorValue, `stage ${stage.slug} tools[${String(index)}]`);
+      const kind = requiredString(descriptor.kind, `stage ${stage.slug} tools[${String(index)}].kind`);
+      if (kind !== 'registered') {
+        continue;
+      }
+      const name = requiredString(descriptor.name, `stage ${stage.slug} tools[${String(index)}].name`);
+      if (name !== 'web_search') {
+        throw new Error(`stage ${stage.slug} registered tool must be web_search; got ${name}`);
+      }
+      if (seenNames.has(name)) {
+        throw new Error(`registered tool ${name} is declared more than once`);
+      }
+      seenNames.add(name);
+      const provider = registeredToolProvider(descriptor.provider, stage.slug, index);
+      const modes = descriptor.modes === undefined
+        ? [stage.slug]
+        : requiredStringList(descriptor.modes, `stage ${stage.slug} tools[${String(index)}].modes`);
+      for (const mode of modes) {
+        if (!modeNames.has(mode)) {
+          throw new Error(`stage ${stage.slug} tools[${String(index)}].modes includes unknown mode ${mode}`);
+        }
+      }
+      const resultPath = descriptor.result_path === undefined
+        ? `${stage.slug}.tool_results.${name}`
+        : requiredString(descriptor.result_path, `stage ${stage.slug} tools[${String(index)}].result_path`);
+      tools.push({
+        name,
+        kind,
+        provider,
+        result_path: resultPath,
+        modes: unique(modes),
+        description: typeof descriptor.description === 'string' && descriptor.description.trim().length > 0
+          ? descriptor.description.trim()
+          : 'Search the web for current, source-grounded information.',
+        parameters: registeredToolParameters(descriptor.parameters),
+      });
+    }
+  }
+  return tools;
+}
+
+function registeredToolProvider(value: unknown, stageSlug: string, index: number): RegisteredToolDescriptor['provider'] {
+  const provider = value === undefined
+    ? 'libraries/search'
+    : requiredString(value, `stage ${stageSlug} tools[${String(index)}].provider`);
+  if (provider !== 'libraries/search' && provider !== 'tavily' && provider !== 'web_search') {
+    throw new Error(`stage ${stageSlug} tools[${String(index)}].provider must be libraries/search; got ${provider}`);
+  }
+  return 'libraries/search';
+}
+
+function registeredToolParameters(value: unknown): RegisteredToolDescriptor['parameters'] {
+  if (value === undefined) {
+    return webSearchToolParameters();
+  }
+  const parameters = requiredRecord(value, 'registered tool parameters');
+  if (parameters.type !== 'object') {
+    throw new Error('registered tool parameters.type must be object');
+  }
+  const properties = requiredRecord(parameters.properties, 'registered tool parameters.properties');
+  return {
+    type: 'object',
+    properties,
+    ...(parameters.required === undefined ? {} : { required: requiredStringList(parameters.required, 'registered tool parameters.required') }),
+  };
+}
+
+function webSearchToolParameters(): RegisteredToolDescriptor['parameters'] {
+  return {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Search query.',
+      },
+      jurisdiction: {
+        type: 'string',
+        description: 'Optional jurisdiction hint appended to the query when not already present.',
+      },
+      max_results: {
+        type: 'number',
+        description: 'Maximum number of results to return; default 8, maximum 20.',
+      },
+    },
+    required: ['query'],
+  };
+}
+
 function nonTerminalStageSlugs(stages: Stage[], completion: Completion): string[] {
   return unique(
     stages
@@ -9782,7 +10076,7 @@ export function assertDelegationChildrenDescriptor(
   const channelNames = new Set(context.channelNames);
   const schemaPaths = new Set(context.schemaPaths);
   const seenIds = new Set<string>();
-  const seenStages = new Set<string>();
+  const seenStages = new Map<string, boolean>();
   const seenResultPaths = new Set<string>();
   const seenTargetSpecs = new Set<string>();
   let documentFanOutChildren = 0;
@@ -9819,10 +10113,16 @@ export function assertDelegationChildrenDescriptor(
       throw new Error(`delegation.children[${i}].id must be unique across children; ${id} is declared more than once`);
     }
     seenIds.add(id);
-    const requestAction = `request_${id}`;
+    const requestAction = typeof child.action_name === 'string'
+      ? requiredString(child.action_name, `delegation.children[${i}].action_name`)
+      : `request_${id}`;
+    if (!/^[a-z][a-z0-9_]*$/u.test(requestAction)) {
+      throw new Error(`delegation.children[${i}].action_name must be a slug-safe identifier; got ${requestAction}`);
+    }
     if (actionNames.has(requestAction)) {
       throw new Error(`delegation child ${requestAction} action collides with generated action set`);
     }
+    actionNames.add(requestAction);
     const callChannel = `${id}_call`;
     if (channelNames.has(callChannel)) {
       throw new Error(`delegation child ${callChannel} channel collides with generated channel set`);
@@ -9833,10 +10133,15 @@ export function assertDelegationChildrenDescriptor(
     if (!stageRecord || stageRecord.is_bootstrap === true || stageRecord.is_terminal === true) {
       throw new Error(`delegation.children[${i}].stage must reference a declared non-bootstrap non-terminal stage; got ${stage}`);
     }
-    if (seenStages.has(stage)) {
+    if (child.ad_hoc !== undefined && typeof child.ad_hoc !== 'boolean') {
+      throw new Error(`delegation.children[${i}].ad_hoc must be boolean when present`);
+    }
+    const childAdHoc = child.ad_hoc === true;
+    const existingStageAdHoc = seenStages.get(stage);
+    if (existingStageAdHoc !== undefined && !(existingStageAdHoc && childAdHoc)) {
       throw new Error(`delegation.children[${i}].stage must be unique across children; stage ${stage} is used by more than one child`);
     }
-    seenStages.add(stage);
+    seenStages.set(stage, childAdHoc);
 
     const hasTargetSpec = child.target_spec !== undefined;
     const hasSynthesizeChild = child.synthesize_child !== undefined;
