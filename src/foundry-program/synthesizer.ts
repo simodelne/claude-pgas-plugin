@@ -196,7 +196,7 @@ export function synthesizeProgramSpecFromDomain(
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = normalizePgasChannelId(stringDomainField(domain, 'intake.entry_channel'));
   const initialEntryPath = initialInputPath(entryChannel);
-  const stages = normalizeStages(parseStagesDomainField(domain));
+  let stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const rawDelegation = normalizeDelegationChildInternalIdentifiers(
     resolveDelegationChildrenAgainstManifest(
@@ -249,6 +249,7 @@ export function synthesizeProgramSpecFromDomain(
   const requestedCapabilities = detectRequestedCapabilities(capabilityInput);
   assertSynthesizableCapabilities(capabilityInput);
   const exportDescriptors = exportDescriptorsFor(stages, requestedCapabilities, name);
+  stages = normalizeExportStageContracts(stages, exportDescriptors);
   const stageArtifactDescriptors = stageArtifactDescriptorsFor(stages);
   const exportSurfaces = exportSurfacesFor(exportDescriptors, requestedCapabilities);
   const documentExtractionSurfaces = documentExtractionSurfacesFor(documents);
@@ -3341,6 +3342,54 @@ function exportSurfacesFor(
       : {}),
   };
   return surfaces;
+}
+
+function normalizeExportStageContracts(
+  stages: Stage[],
+  descriptors: readonly ExportStageDescriptor[],
+): Stage[] {
+  if (descriptors.length === 0) {
+    return stages;
+  }
+  const descriptorsByStage = new Map(descriptors.map((descriptor) => [descriptor.stage, descriptor]));
+  return stages.map((stage) => {
+    const descriptor = descriptorsByStage.get(stage.slug);
+    if (!descriptor || !stage.domain_spec) {
+      return stage;
+    }
+    return {
+      ...stage,
+      domain_spec: {
+        ...stage.domain_spec,
+        produces: exportStageProducesContract(descriptor.kind),
+      },
+    };
+  });
+}
+
+function exportStageProducesContract(kind: ExportStageDescriptor['kind']): Record<string, unknown> {
+  if (kind === 'export_docx') {
+    return {
+      result_json: {
+        stage: 'string',
+        docx_base64: 'string',
+        docx_bytes: 'number',
+        sha256: 'string',
+        section_count: 'number',
+      },
+      items_json: ['docx_export:<sha256>'],
+    };
+  }
+  return {
+    result_json: {
+      stage: 'string',
+      html: 'string',
+      html_bytes: 'number',
+      sha256: 'string',
+      section_count: 'number',
+    },
+    items_json: ['html_export:<sha256>'],
+  };
 }
 
 function stageArtifactDescriptorsFor(stages: Stage[]): StageArtifactDescriptor[] {
