@@ -61,6 +61,7 @@ const REQUIRED_INTAKE_GATE_ACTIONS = [
   'record_q4_transitions',
   'record_q5_delegation',
   'record_q6_completion',
+  'record_skill_catalog',
   'record_program_intake_finalize',
   'confirm_design',
   'reject_design_and_revise_q1',

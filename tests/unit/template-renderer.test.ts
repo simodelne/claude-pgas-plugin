@@ -696,6 +696,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(foundryRegistration).toContain('registerPgasNewTools');
     expect(foundryRegistration).toContain('reactionHandlers');
     expect(foundryTools).toContain("'record_q1_purpose'");
+    expect(foundryTools).toContain("'record_skill_catalog'");
     expect(foundryTools).toContain("'revise_artifact_plan'");
 
     expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
@@ -705,6 +706,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         'apply_default_skeleton',
         'ask_design_question',
         ...qActionNames,
+        'record_skill_catalog',
         'record_program_intake_finalize',
         'confirm_design',
         'reject_design_and_revise_q1',
@@ -783,6 +785,14 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([
         { kind: 'FieldTruthy', path: 'intake.q5_recorded' },
         { kind: 'FieldFalsy', path: 'intake.q6_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_skill_catalog).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'program.design_path', value: 'design' },
+        { kind: 'FieldTruthy', path: 'intake.q6_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.skills_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
       ]),
     );
     expect(parsed.modes.intake_intelligence.preconditions?.record_program_intake_finalize).toEqual(
@@ -884,8 +894,22 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       { op: 'MSet', path: 'intake.completion_json', from_arg: 'completion_json' },
       { op: 'MSet', path: 'intake.q6_recorded', value: true },
     ]);
+    expect(parsed.action_map.record_skill_catalog).toMatchObject({
+      description: 'Optionally capture the skill catalog for programs that need opt-in skill activation. Arguments must include skills_json as a JSON-string array of {name, body} entries.',
+      channel: 'widget_output',
+    });
+    expect(parsed.action_map.record_skill_catalog.arg_descriptions?.skills_json).toContain(
+      'JSON-encoded array',
+    );
+    expect(parsed.action_map.record_skill_catalog.arg_descriptions?.skills_json).toContain(
+      'non-empty string fields `name` and `body`',
+    );
+    expect(parsed.action_map.record_skill_catalog.mutations).toEqual([
+      { op: 'MSet', path: 'intake.skills_json', from_arg: 'skills_json' },
+      { op: 'MSet', path: 'intake.skills_recorded', value: true },
+    ]);
     expect(parsed.action_map.record_program_intake_finalize).toMatchObject({
-      description: 'Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires.',
+      description: 'Final commit of the design interview once all 6 Q-answers and any requested skill catalog are recorded. Idempotent. The LLM should call this after record_q6_completion, and after record_skill_catalog when skills are needed.',
       channel: 'widget_output',
     });
     expect(parsed.action_map.record_program_intake_finalize.mutations).toEqual([
@@ -1025,7 +1049,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       'intake.q5_recorded': 'boolean',
       'intake.completion_json': 'string',
       'intake.q6_recorded': 'boolean',
+      'intake.skills_json': 'string',
+      'intake.skills_recorded': 'boolean',
       'intake.program_intake_finalized': 'boolean',
+      'intake.design_confirmation_summary': 'string',
     });
     expect(parsed.schema).not.toHaveProperty('intake.program_intake_recorded');
     expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
@@ -1050,8 +1077,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         expect.stringContaining('Design interview enforcement (Q1-Q6)'),
         expect.stringContaining('ask_design_question with question_number'),
         expect.stringContaining('record_qN_<topic>'),
+        expect.stringContaining('record_skill_catalog'),
         expect.stringContaining('record_program_intake_finalize'),
         expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),
+        expect.stringContaining('skill catalog names'),
         expect.stringContaining("intent='confirm_design'"),
         expect.stringContaining('reject_design_and_revise_qN'),
         expect.stringContaining("Don't re-ask anything you already extracted"),

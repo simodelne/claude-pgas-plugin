@@ -18,6 +18,7 @@ const intakeToolNames = [
   'record_q4_transitions',
   'record_q5_delegation',
   'record_q6_completion',
+  'record_skill_catalog',
   'record_program_intake_finalize',
   'confirm_design',
   'reject_design_and_revise_q1',
@@ -58,6 +59,9 @@ const designTransitions = [
 
 const designDelegation = { strategy: 'none' };
 const designCompletion = { final_stage: 'done', guard_field: 'work.summary_ready' };
+const designSkills = [
+  { name: 'incident-summary', body: 'Summarize incident facts into a concise operational brief.' },
+];
 
 const questionByRound = [
   'Q1 Purpose -- one sentence on what the program does.',
@@ -281,6 +285,11 @@ describe('foundry intake flow', () => {
       kind: 'pgas_new_q6_completion_recorded',
       completion: designCompletion,
       completion_json: JSON.stringify(designCompletion),
+    });
+    await expect(handlers.record_skill_catalog({ skills_json: JSON.stringify(designSkills) })).resolves.toEqual({
+      kind: 'pgas_new_skill_catalog_recorded',
+      skills: designSkills,
+      skills_json: JSON.stringify(designSkills),
     });
     await expect(handlers.record_program_intake_finalize({})).resolves.toEqual({
       kind: 'pgas_new_intake_finalized',

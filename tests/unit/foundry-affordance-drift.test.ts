@@ -16,6 +16,7 @@ const MODEL_ACTION_OMISSION_ALLOWLIST = new Set([
   'record_q5_delegation',
   'record_documents_descriptor',
   'record_q6_completion',
+  'record_skill_catalog',
   'record_program_intake_finalize',
   'confirm_design',
   'reject_design_and_revise_q1',

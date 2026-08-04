@@ -291,6 +291,38 @@ describe('intake Q-action handlers', () => {
     ).rejects.toThrow();
   });
 
+  it('record_skill_catalog accepts skill entries with static bodies', async () => {
+    const skills = [
+      { name: 'clause-amendment', body: 'Propose the narrowest enforceable clause redline.' },
+      { name: 'compare-to-precedent', body: 'Compare the document against approved precedent language.' },
+    ];
+
+    await expect(
+      handlers.record_skill_catalog({ skills_json: JSON.stringify(skills) }),
+    ).resolves.toEqual({
+      kind: 'pgas_new_skill_catalog_recorded',
+      skills,
+      skills_json: JSON.stringify(skills),
+    });
+  });
+
+  it('record_skill_catalog rejects duplicate names and missing bodies', async () => {
+    await expect(
+      handlers.record_skill_catalog({
+        skills_json: JSON.stringify([
+          { name: 'clause-amendment', body: 'First body.' },
+          { name: 'clause-amendment', body: 'Second body.' },
+        ]),
+      }),
+    ).rejects.toThrow(/duplicate skill name/);
+
+    await expect(
+      handlers.record_skill_catalog({
+        skills_json: JSON.stringify([{ name: 'enforceability-review', body: '' }]),
+      }),
+    ).rejects.toThrow(/body.*non-empty string/);
+  });
+
   it('normalize_intake_json_fields canonicalizes smart-quoted transitions before stale-refresh validation', () => {
     const reaction = reactionHandlers.get('normalize_intake_json_fields');
     if (!reaction) throw new Error('missing normalize_intake_json_fields reaction');

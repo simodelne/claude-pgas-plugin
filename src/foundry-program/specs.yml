@@ -28,7 +28,7 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_documents_descriptor, record_q6_completion, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_documents_descriptor, record_q6_completion, record_skill_catalog, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
@@ -61,6 +61,11 @@ modes:
       record_q6_completion:
         - { kind: FieldTruthy, path: intake.q5_recorded }
         - { kind: FieldFalsy, path: intake.q6_recorded }
+      record_skill_catalog:
+        - { kind: FieldEquals, path: program.design_path, value: design }
+        - { kind: FieldTruthy, path: intake.q6_recorded }
+        - { kind: FieldFalsy, path: intake.skills_recorded }
+        - { kind: FieldFalsy, path: intake.program_intake_finalized }
       record_program_intake_finalize:
         - { kind: FieldTruthy, path: intake.q1_recorded }
         - { kind: FieldTruthy, path: intake.q2_recorded }
@@ -288,7 +293,10 @@ projection:
       - intake.documents_recorded
       - intake.completion_json
       - intake.q6_recorded
+      - intake.skills_json
+      - intake.skills_recorded
       - intake.program_intake_finalized
+      - intake.design_confirmation_summary
       - program.slug
       - program.name
       - program.target_dir
@@ -303,13 +311,13 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.target_dir_confirmed, repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.wiring_manifest_json, repo.allowed_imports, repo.write_authorized, repo.required_facilities_missing]
     exclude: []
   architecture_design:
-    include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
+    include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete, intake.skills_json, intake.skills_recorded]
     exclude: []
   scaffold_plan:
     include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, notebook.entries, notebook.pins]
     exclude: []
   domain_synthesis:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized]
+    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, intake.skills_json, intake.skills_recorded]
     exclude: []
   branch_write:
     include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
@@ -373,10 +381,15 @@ prompts:
       3. Fire the corresponding `record_qN_<topic>` action with the user's
          answer parsed into that action's named argument.
       4. Move to the next question.
-    - After Q6 fires, immediately fire `record_program_intake_finalize`.
+    - After Q6 fires, if the requested program needs opt-in skills or the user
+      provided a skill catalog, first fire `record_skill_catalog`; otherwise
+      immediately fire `record_program_intake_finalize`.
     - Do NOT attempt to batch multiple answers into one action. Do NOT attempt
       to fire `record_program_intake_finalize` before all six qN_recorded flags
       are true -- the engine will reject it.
+    - Do NOT fire `record_program_intake_finalize` before `record_skill_catalog`
+      when the user requested skills, skill activation, a skill catalog, or a
+      conversational hub that activates skill playbooks.
     - When you are ready to commit state: Make exactly ONE terminal tool call
       from the mode's vocabulary. The arguments to each tool are structured
       per the tool's schema; emit them as the tool's argument object, not as a
@@ -391,8 +404,11 @@ prompts:
        or `{choice: "design"}` based on what the user asked for.
     3. If `choice = "default"`: call `apply_default_skeleton` immediately.
     4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
-       recording each answer with its corresponding Q-action, then call
-       `record_program_intake_finalize`.
+       recording each answer with its corresponding Q-action. If the program
+       needs opt-in skills or the user provided a skill catalog, call
+       `record_skill_catalog` after Q6 and before
+       `record_program_intake_finalize`; otherwise call
+       `record_program_intake_finalize` after Q6.
        If and only if the user explicitly needs uploaded document intake,
        call `record_documents_descriptor` after Q5 and before Q6 with a
        JSON-string `documents_json` descriptor.
@@ -673,8 +689,31 @@ action_map:
       - { op: MSet, path: intake.completion_json, from_arg: completion_json }
       - { op: MSet, path: intake.q6_recorded, value: true }
     channel: widget_output
+  record_skill_catalog:
+    description: "Optionally capture the skill catalog for programs that need opt-in skill activation. Arguments must include skills_json as a JSON-string array of {name, body} entries."
+    arg_descriptions:
+      skills_json: |
+        Provide a JSON-encoded array. Each array item must be an object with
+        non-empty string fields `name` and `body`.
+
+        Valid example:
+        "[{\"name\":\"clause-amendment\",\"body\":\"Static skill body shown only after activation.\"},{\"name\":\"compare-to-precedent\",\"body\":\"Static precedent comparison instructions.\"}]"
+
+        Use this action only when the requested program needs opt-in skills,
+        skill activation, a skill catalog, or a conversational hub that can
+        activate skill playbooks. The body is the complete static skill text
+        that downstream synthesis stores in the generated activation catalog.
+
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
+    mutations:
+      - { op: MSet, path: intake.skills_json, from_arg: skills_json }
+      - { op: MSet, path: intake.skills_recorded, value: true }
+    channel: widget_output
   record_program_intake_finalize:
-    description: "Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires."
+    description: "Final commit of the design interview once all 6 Q-answers and any requested skill catalog are recorded. Idempotent. The LLM should call this after record_q6_completion, and after record_skill_catalog when skills are needed."
     mutations:
       - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
@@ -979,12 +1018,20 @@ reactions:
       - intake.q5_recorded
       - intake.documents_recorded
       - intake.q6_recorded
+      - intake.skills_recorded
     write_scope:
       - intake.stages_json
       - intake.transitions_json
       - intake.delegation_json
       - intake.documents_json
       - intake.completion_json
+      - intake.skills_json
+  summarize_design_confirmation:
+    event: AfterMutation
+    watch:
+      - intake.program_intake_finalized
+    write_scope:
+      - intake.design_confirmation_summary
   normalize_static_verification_status:
     event: AfterMutation
     watch:
@@ -1056,7 +1103,10 @@ schema:
   intake.documents_recorded: boolean
   intake.completion_json: string
   intake.q6_recorded: boolean
+  intake.skills_json: string
+  intake.skills_recorded: boolean
   intake.program_intake_finalized: boolean
+  intake.design_confirmation_summary: string
   intake.research_confirmed: boolean
   intake.user_requested_research: boolean
   intake.research_allowed: boolean
@@ -1133,7 +1183,7 @@ guidance:
     - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
     - "After record_program_target, if program.design_path is not set, call choose_design_path with choice='design' when the user asked to design the program or choice='default' when the user asked for the default skeleton."
     - "If program.design_path == 'default' and intake.program_intake_finalized is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Call ask_design_question with question_number (1..6) and question_text. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
+    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Call ask_design_question with question_number (1..6) and question_text. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, call record_skill_catalog before record_program_intake_finalize if and only if the requested program needs opt-in skills or the user provided a skill catalog; otherwise immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
     - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Call ask_design_question for the question round; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
@@ -1142,9 +1192,10 @@ guidance:
     - "Q5 Delegation — does any stage delegate to a child session / another program, or need an explicit per-stage execution model? Default if skipped: 'none'. Use {\"stages\":{\"<slug>\":{\"kind\":\"llm-reasoning\"|\"pure-compute\"|\"external-adapter\",\"reasoning_per_turn\":true|false}}} only when the user gives explicit per-stage execution intent; otherwise keep the legacy no-delegation shapes like {}, {\"enabled\":false}, or none."
     - "Optional Documents Descriptor — after Q5 and before Q6, call record_documents_descriptor only when the user explicitly needs uploaded document intake. Use a JSON-string object with stage, upload_types, extraction, result_path, and optional required/fidelity_floor. For no uploaded documents, skip this action or record 'none'."
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
+    - "Optional Skill Catalog — after Q6 and before record_program_intake_finalize, call record_skill_catalog only when the user explicitly needs opt-in skills, skill activation, a skill catalog, or a conversational hub that activates skill playbooks. Use a JSON-string array of {name, body} entries. For programs without skills, skip this action."
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
-    - "For Q3-Q6 and documents_json, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
-    - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
+    - "For Q3-Q6, documents_json, and skills_json, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
+    - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design'); if intake.skills_json is present, list the skill catalog names so the user can confirm them. Instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
     - "On user_confirmation with decision='reject' and instruction naming Q1, Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN action (for example reject_design_and_revise_q3 for Q3). Re-ask/record that Q and then re-emit the confirm_design echo-back; preserve later recorded answers unless the user explicitly asks to revise them."
