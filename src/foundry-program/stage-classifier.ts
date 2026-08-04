@@ -1,4 +1,4 @@
-export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter';
+export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter' | 'conversational-hub';
 
 export interface ClassifiedStage {
   slug: string;
@@ -17,7 +17,9 @@ interface StageInput {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  archetype?: unknown;
   kind?: unknown;
+  type?: unknown;
   export_kind?: unknown;
   domain_spec?: unknown;
 }
@@ -111,6 +113,15 @@ function classifyStage(
     };
   }
 
+  const explicitStageArchetype = explicitStageArchetypeFromStage(stage);
+  if (explicitStageArchetype === 'conversational-hub') {
+    return {
+      slug,
+      archetype: 'conversational-hub',
+      rationale: `conversational hub: ${slug} was explicitly marked as a hub/conversational stage in Q3 stages.`,
+    };
+  }
+
   const explicitArchetype = explicitDelegationArchetype(stageDelegation);
   const stageScopedText = [
     slug,
@@ -137,6 +148,14 @@ function classifyStage(
       rationale: explicitArchetype === 'external-adapter'
         ? `external adapter: ${slug} was explicitly marked as an external adapter stage in Q5 delegation.${explicitGap ? ' Host connector implementation is required outside foundry code.' : ''}`
         : `external adapter: ${slug} references an integration/service boundary, so synthesis emits an in-memory mock.${explicitGap ? ' Host connector implementation is required outside foundry code.' : ''}`,
+    };
+  }
+
+  if (explicitArchetype === 'conversational-hub') {
+    return {
+      slug,
+      archetype: 'conversational-hub',
+      rationale: `conversational hub: ${slug} was explicitly marked as a hub/conversational stage in Q5 delegation.`,
     };
   }
 
@@ -171,6 +190,13 @@ function classifyStage(
   };
 }
 
+function explicitStageArchetypeFromStage(stage: StageInput): StageArchetype | undefined {
+  const explicit = [stage.archetype, stage.kind, stage.type]
+    .find((candidate): candidate is string => typeof candidate === 'string')
+    ?.toLowerCase();
+  return normalizeExplicitArchetype(explicit);
+}
+
 function explicitExportKind(stage: StageInput): 'export_docx' | 'export_html' | undefined {
   const raw = [stage.kind, stage.export_kind]
     .find((candidate): candidate is string => typeof candidate === 'string')
@@ -189,10 +215,18 @@ function explicitDelegationArchetype(value: unknown): StageArchetype | undefined
   if (!explicit) {
     return record.reasoning_per_turn === true ? 'llm-reasoning' : undefined;
   }
-  if (['llm-reasoning', 'llm_reasoning', 'reasoning'].includes(explicit)) return 'llm-reasoning';
-  if (['pure-compute', 'pure_compute', 'compute', 'deterministic'].includes(explicit)) return 'pure-compute';
-  if (['external-adapter', 'external_adapter', 'adapter', 'integration'].includes(explicit)) return 'external-adapter';
+  const normalized = normalizeExplicitArchetype(explicit);
+  if (normalized) return normalized;
   if (record.reasoning_per_turn === true) return 'llm-reasoning';
+  return undefined;
+}
+
+function normalizeExplicitArchetype(value: string | undefined): StageArchetype | undefined {
+  if (!value) return undefined;
+  if (['conversational-hub', 'conversational_hub', 'conversation-hub', 'conversation_hub', 'hub', 'conversational', 'conversation'].includes(value)) return 'conversational-hub';
+  if (['llm-reasoning', 'llm_reasoning', 'reasoning'].includes(value)) return 'llm-reasoning';
+  if (['pure-compute', 'pure_compute', 'compute', 'deterministic'].includes(value)) return 'pure-compute';
+  if (['external-adapter', 'external_adapter', 'adapter', 'integration'].includes(value)) return 'external-adapter';
   return undefined;
 }
 

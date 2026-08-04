@@ -67,9 +67,11 @@ import {
   exportRenderPendingReactionName,
   exportTransitionActions,
   guardFieldsBySourceMode,
+  isConversationalHubTransitionAction,
   isExportTransitionAction,
   outputProjectionFields,
   planTransitionActions,
+  transitionActionChannel,
 } from './synthesizer/topology.js';
 import { renderRegistrationSource } from './synthesizer/registration-artifacts.js';
 import { validateSynthesizedSpec } from './synthesizer/validation.js';
@@ -477,6 +479,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsReactions(recordField(spec, 'reactions'), documents);
   applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren, documents);
   applyExportDecisionOnlyReactions(recordField(spec, 'reactions'), exportActions);
+  applyConversationalHubGuardResetReactions(recordField(spec, 'reactions'), transitionActions);
 
   spec.channels = {
     ...recordField(spec, 'channels'),
@@ -537,6 +540,9 @@ export function synthesizeProgramSpecFromDomain(
   }
   for (const modeName of intermediateModes) {
     const classification = stageClassificationBySlug.get(modeName);
+    if (classification?.archetype === 'conversational-hub') {
+      continue;
+    }
     if (classification?.archetype === 'llm-reasoning') {
       schema[`${modeName}.result_json`] = 'string';
       schema[`${modeName}.items_json`] = 'string';
@@ -589,7 +595,7 @@ export function synthesizeProgramSpecFromDomain(
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
-  const bodyStageSlugs = nonTerminalStageSlugs(stages, completion);
+  const bodyStageSlugs = bodyStageSlugsFor(stages, completion, stageClassificationBySlug);
 
   const contractsTs = appendDocumentExtractionHostConnectorContracts(
     renderContractsSource(stages, stageClassification, transitionActions, reasoningContractsBySlug),
@@ -780,6 +786,9 @@ function applyStageOutputChannels(
     if (action.name === 'begin_work') {
       continue;
     }
+    if (isConversationalHubTransitionAction(action)) {
+      continue;
+    }
     if (action.archetype === 'llm-reasoning' && !reasoningContractsBySlug.has(action.source)) {
       continue;
     }
@@ -835,6 +844,29 @@ function applyExportDecisionOnlyReactions(reactions: MutableRecord, exportAction
   }
 }
 
+function applyConversationalHubGuardResetReactions(
+  reactions: MutableRecord,
+  transitionActions: TransitionAction[],
+): void {
+  for (const [source, actions] of actionsBySourceMode(transitionActions)) {
+    if (!actions.some(isConversationalHubTransitionAction)) {
+      continue;
+    }
+    const guardFields = unique(actions.map((action) => action.guardField).filter(isString));
+    if (guardFields.length === 0) {
+      continue;
+    }
+    reactions[conversationalHubGuardResetReactionName(source)] = {
+      event: 'OnTransition',
+      write_scope: guardFields,
+    };
+  }
+}
+
+function conversationalHubGuardResetReactionName(stage: string): string {
+  return `reset_${safeIdentifier(stage)}_hub_branch_guards`;
+}
+
 function applyExportDecisionOnlyIntegrations(spec: MutableRecord, exportActions: TransitionAction[]): void {
   if (exportActions.length === 0) {
     return;
@@ -887,7 +919,7 @@ function collectFlatMirrorStages(
       continue;
     }
     const archetype = stageClassificationBySlug.get(stageSlug)?.archetype;
-    if (archetype !== undefined && archetype !== 'llm-reasoning') {
+    if (archetype !== undefined && archetype !== 'llm-reasoning' && archetype !== 'conversational-hub') {
       flatMirrorStages.add(stageSlug);
     }
   }
@@ -3094,7 +3126,9 @@ function renderHandlersSource(
     options.delegationChildren.some((child) => childHasDocumentFanOut(child, options.documents));
   const usesDocxExtractor = documentsDemandsSelfContainedDocx(options.documents);
   const bodyActions = unique([
-    ...stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source),
+    ...stageActions
+      .filter((action) => action.archetype !== 'llm-reasoning' && !isConversationalHubTransitionAction(action))
+      .map((action) => action.source),
     ...exportActions.map((action) => action.source),
   ]);
   const stageImports = bodyActions
@@ -3224,6 +3258,17 @@ ${fieldResolvers}
     };
   },`;
     }
+    if (isConversationalHubTransitionAction(action)) {
+      return `  async ${action.name}(payload) {
+    return {
+      kind: 'conversational_hub_transition',
+      action: ${tsString(action.name)},
+      stage: ${tsString(action.source)},
+      target: ${tsString(action.target)},
+      payload,
+    };
+  },`;
+    }
 
     return `  async ${action.name}(payload) {
     const output = await run${toPascalCase(action.source)}(
@@ -3241,6 +3286,9 @@ ${fieldResolvers}
     : '';
   const exportRenderPendingReactionEntries = options.includeReactionHandlers
     ? renderExportRenderPendingReactionEntries(exportActions)
+    : '';
+  const conversationalHubResetReactionEntries = options.includeReactionHandlers
+    ? renderConversationalHubGuardResetReactionEntries(transitionActions)
     : '';
   const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
@@ -3262,6 +3310,7 @@ ${fieldResolvers}
     stageOutputMirrorReactionEntries ||
     reasoningFieldMirrorReactionEntries ||
     exportRenderPendingReactionEntries ||
+    conversationalHubResetReactionEntries ||
     usesConfirmationLoopHandlers ||
     usesDelegationHandlers ||
     usesDocumentReactionHandlers ||
@@ -3310,7 +3359,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -3507,6 +3556,30 @@ function renderExportRenderPendingReactionEntries(exportActions: TransitionActio
     }
     return undefined;
   }]`).join('');
+}
+
+function renderConversationalHubGuardResetReactionEntries(
+  transitionActions: TransitionAction[],
+): string {
+  return [...actionsBySourceMode(transitionActions)]
+    .filter(([, actions]) => actions.some(isConversationalHubTransitionAction))
+    .map(([source, actions]) => {
+      const guardFields = unique(actions.map((action) => action.guardField).filter(isString));
+      if (guardFields.length === 0) {
+        return '';
+      }
+      const mutations = guardFields
+        .map((path) => `{ op: 'MSet' as const, path: ${tsString(path)}, value: false }`)
+        .join(', ');
+      return `,
+  [${tsString(conversationalHubGuardResetReactionName(source))}, (_snapshot, trigger, mode) => {
+    if (mode !== ${tsString(source)} || !String(trigger).endsWith(${tsString(`->${source}`)})) {
+      return undefined;
+    }
+    return { mutations: [${mutations}] };
+  }]`;
+    })
+    .join('');
 }
 
 function renderExportHookAdapter(exportActions: TransitionAction[]): string {
@@ -5208,6 +5281,16 @@ function renderToolsSource(
     : [];
   const stageMetadata = stageActions.map((action) => {
   const reasoningContract = action.archetype === 'llm-reasoning' ? reasoningContractsBySlug.get(action.source) : undefined;
+  const outputPath = isConversationalHubTransitionAction(action)
+    ? undefined
+    : action.archetype === 'llm-reasoning'
+      ? `${action.source}.result_json`
+      : `${action.source}.output`;
+  const itemsPath = isConversationalHubTransitionAction(action)
+    ? undefined
+    : action.archetype === 'llm-reasoning'
+      ? `${action.source}.items_json`
+      : `${action.source}.output.items_json`;
   const reasoningLines = reasoningContract
     ? `
     result_fields: [${reasoningContract.result_schema.fields.map((field) => tsString(field.name)).join(', ')}],
@@ -5218,8 +5301,8 @@ function renderToolsSource(
     target: ${tsString(action.target)},
     archetype: ${tsString(action.archetype)},
     guard_paths: [${action.guardField ? tsString(action.guardField) : ''}],
-    output_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`)},
-    items_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.items_json` : `${action.source}.output.items_json`)},${reasoningLines}
+    ${outputPath ? `output_path: ${tsString(outputPath)},` : 'output_path: undefined,'}
+    ${itemsPath ? `items_path: ${tsString(itemsPath)},` : 'items_path: undefined,'}${reasoningLines}
     description: ${tsString(`Generated stage action metadata for ${action.source}.`)},
   },`;
 }).join('\n');
@@ -5307,7 +5390,11 @@ export const stageReasoningContracts = ${JSON.stringify(Object.fromEntries(reaso
         stage: action.source,
         target: action.target,
         archetype: action.archetype,
-        output_path: action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`,
+        output_path: isConversationalHubTransitionAction(action)
+          ? undefined
+          : action.archetype === 'llm-reasoning'
+            ? `${action.source}.result_json`
+            : `${action.source}.output`,
         guard_path: action.guardField,
         adapter_kind: action.adapter_kind,
         export_kind: action.export_kind,
@@ -5320,11 +5407,14 @@ export const stageReasoningContracts = ${JSON.stringify(Object.fromEntries(reaso
     null,
     2,
   );
+  const stageArchetypeUnion = stageClassification.some((stage) => stage.archetype === 'conversational-hub')
+    ? "'pure-compute' | 'llm-reasoning' | 'external-adapter' | 'conversational-hub'"
+    : "'pure-compute' | 'llm-reasoning' | 'external-adapter'";
 
   return `import { createHash } from 'node:crypto';
 import type { HandlerPayload } from './handlers/_resolver.js';
 
-export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter';
+export type StageArchetype = ${stageArchetypeUnion};
 
 export interface StageDomainSpec {
   reads: readonly string[];
@@ -5484,10 +5574,13 @@ function renderSmokeTestSource(
   }
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
   const authorPathActions = pathActions.filter((action) => !isExportTransitionAction(action));
+  const firstMode = stages[0]?.slug ?? '';
   const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
   const hasContractResponses = authorPathActions.some((action) =>
     action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source));
+  const hasHubResponses = authorPathActions.some(isConversationalHubTransitionAction);
   const responses = authorPathActions.map((action) => {
+    const channel = transitionActionChannel(action, firstMode, reasoningContractsBySlug);
     if (action.archetype === 'llm-reasoning') {
       const reasoningContract = reasoningContractsBySlug.get(action.source);
       if (reasoningContract) {
@@ -5508,12 +5601,15 @@ function renderSmokeTestSource(
           result_json: JSON.stringify(${JSON.stringify(canned.result)}),
           items_json: JSON.stringify(${JSON.stringify(canned.items)}),
 ${cannedFieldArgs}
-        }, 'stage_output'),`;
+        }, ${tsString(channel)}),`;
       }
       return `        effect(${tsString(action.name)}, {
           result_json: JSON.stringify({ stage: ${tsString(action.source)}, status: 'reasoned' }),
           items_json: JSON.stringify([${tsString(`${action.source}-item`)}]),
         }),`;
+    }
+    if (isConversationalHubTransitionAction(action)) {
+      return `        effect(${tsString(action.name)}, {}, ${tsString(channel)}),`;
     }
     return `        effect(${tsString(action.name)}, { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),`;
   }).join('\n');
@@ -5550,7 +5646,7 @@ ${externalAdapterAssertions ? `${externalAdapterAssertions}\n` : ''}    } finall
   });
 });
 
-${hasContractResponses
+${hasContractResponses || hasHubResponses
     ? `function effect(name: string, payload: Record<string, unknown>, channel?: string): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel: channel ?? (name === 'begin_work' ? 'widget_output' : 'stage_output'), payload }] };
 }`
@@ -5558,6 +5654,10 @@ ${hasContractResponses
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }`}
 `;
+}
+
+function smokeTransitionActionUsesWidgetOutput(action: TransitionAction | undefined): boolean {
+  return action?.archetype === 'llm-reasoning' || action?.archetype === 'conversational-hub';
 }
 
 function renderDocumentFanOutDelegationSmokeTestSource(
@@ -5586,8 +5686,8 @@ function renderDocumentFanOutDelegationSmokeTestSource(
         }`;
   const uploadTransition = transitionActions.find((action) => action.source === documents.stage);
   const uploadTransitionAction = uploadTransition?.name ?? `complete_${safeIdentifier(documents.stage)}`;
-  const uploadTransitionChannel = uploadTransition?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
-  const uploadTransitionPayload = uploadTransition?.archetype === 'llm-reasoning'
+  const uploadTransitionChannel = smokeTransitionActionUsesWidgetOutput(uploadTransition) ? 'widget_output' : 'stage_output';
+  const uploadTransitionPayload = smokeTransitionActionUsesWidgetOutput(uploadTransition)
     ? `{
           result_json: JSON.stringify({ document_source_ready: true }),
           items_json: JSON.stringify(['document-source-ready']),
@@ -5595,8 +5695,8 @@ function renderDocumentFanOutDelegationSmokeTestSource(
     : `{ __stage_runtime: { now_iso: '2026-07-26T00:00:00.000Z', random: 0.25 } }`;
   const fanOutTransition = transitionActions.find((action) => action.source === child.stage);
   const fanOutTransitionAction = fanOutTransition?.name ?? `complete_${safeIdentifier(child.stage)}`;
-  const fanOutTransitionChannel = fanOutTransition?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
-  const fanOutTransitionPayload = fanOutTransition?.archetype === 'llm-reasoning'
+  const fanOutTransitionChannel = smokeTransitionActionUsesWidgetOutput(fanOutTransition) ? 'widget_output' : 'stage_output';
+  const fanOutTransitionPayload = smokeTransitionActionUsesWidgetOutput(fanOutTransition)
     ? `{
           result_json: JSON.stringify({ reviewed_document_count: 5, status: 'complete' }),
           items_json: JSON.stringify(['five document review delegations']),
@@ -5852,8 +5952,8 @@ function renderDocumentUploadSmokeTestSource(
 ): string {
   const transitionAction = transitionActions.find((action) => action.source === documents.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(documents.stage)}`;
-  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
-  const transitionPayload = transitionAction?.archetype === 'llm-reasoning'
+  const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
+  const transitionPayload = smokeTransitionActionUsesWidgetOutput(transitionAction)
     ? `{
           result_json: JSON.stringify({ document_source_ready: true }),
           items_json: JSON.stringify(['document-source-ready']),
@@ -7136,7 +7236,7 @@ function renderReuseDelegationSmokeTestSource(
   const childRegistryName = child.registered_name ?? childTargetSpec;
   const transitionAction = transitionActions.find((action) => action.source === child.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
-  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
   const resultPath = child.result_path;
   const base = delegationStateBase(child);
   const policy = delegationPolicyForChildren([child]);
@@ -7499,7 +7599,7 @@ function renderMultiChildDelegationSmokeTestSource(
     const specName = delegationTargetSpec(child);
     const transitionAction = transitionActions.find((action) => action.source === child.stage);
     const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
-    const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+    const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
     const topic = `seeded multi-child topic ${String(index)}`;
     const resultVar = `result_${safeIdentifier(delegationStateBase(child))}`;
     return {
@@ -7837,7 +7937,7 @@ function renderDelegationSmokeTestSource(
     : `    expect(result.seeded_topic).toBe('seeded delegation topic');`;
   const transitionAction = transitionActions.find((action) => action.source === child.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
-  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
   const resultPath = child.result_path;
   const base = delegationStateBase(child);
   return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -9153,12 +9253,9 @@ function terminalActionDescriptorForTransition(
   firstMode: string,
   reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
 ): TerminalActionDescriptor {
-  const isBootstrap = action.source === firstMode;
-  const hasContract = reasoningContractsBySlug.has(action.source);
-  const hasResultPath = !isBootstrap && (action.archetype !== 'llm-reasoning' || hasContract);
   return {
     name: action.name,
-    channel: hasResultPath ? 'stage_output' : 'widget_output',
+    channel: transitionActionChannel(action, firstMode, reasoningContractsBySlug),
   };
 }
 
@@ -9242,6 +9339,15 @@ function nonTerminalStageSlugs(stages: Stage[], completion: Completion): string[
       .filter((stage) => !stage.is_terminal && stage.slug !== completion.final_stage)
       .map((stage) => stage.slug),
   );
+}
+
+function bodyStageSlugsFor(
+  stages: Stage[],
+  completion: Completion,
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+): string[] {
+  return nonTerminalStageSlugs(stages, completion)
+    .filter((stage) => stageClassificationBySlug.get(stage)?.archetype !== 'conversational-hub');
 }
 
 function domainSpecsByStage(stages: Stage[]): Record<string, StageDomainSpec> {
@@ -10144,6 +10250,10 @@ function requiredString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }
 
 function optionalStringValue(value: unknown, label: string): string | undefined {

@@ -163,4 +163,20 @@ describe('stage classifier', () => {
       rationale: expect.stringContaining('explicitly marked'),
     });
   });
+
+  it('recognizes conversational hub stages declared directly in Q3 stages', () => {
+    const classified = classifyStagesForDomain(domain({
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'hub', kind: 'hub', archetype: 'conversational_hub' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.delegation_json': JSON.stringify({}),
+    }));
+
+    expect(classified.find((stage) => stage.slug === 'hub')).toMatchObject({
+      archetype: 'conversational-hub',
+      rationale: expect.stringContaining('hub/conversational'),
+    });
+  });
 });

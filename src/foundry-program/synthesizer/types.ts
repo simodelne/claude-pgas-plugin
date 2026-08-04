@@ -16,6 +16,7 @@ export interface Stage {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  archetype?: string;
   kind?: string;
   export_kind?: string;
   domain_spec?: StageDomainSpec;
