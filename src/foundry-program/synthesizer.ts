@@ -271,6 +271,7 @@ export function synthesizeProgramSpecFromDomain(
     exportDescriptors,
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
+  const hasConversationalHub = stageClassification.some((stage) => stage.archetype === 'conversational-hub');
   if (confirmationLoops.length > 0) {
     assertConfirmationLoopDescriptors(confirmationLoops, collectionLifecycle, stages, stageClassificationBySlug);
     completion = {
@@ -370,6 +371,7 @@ export function synthesizeProgramSpecFromDomain(
     ...(Array.isArray(spec.features) ? spec.features as string[] : []),
     'reactions',
     'inline_world_query',
+    ...(hasConversationalHub ? ['durable_channel'] : []),
     ...(skills.length > 0 ? ['activation', 'skill_triage'] : []),
     ...(registeredTools.length > 0 ? ['integrations', 'tool_registry'] : []),
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
@@ -521,7 +523,11 @@ export function synthesizeProgramSpecFromDomain(
 
   spec.channels = {
     ...recordField(spec, 'channels'),
-    [entryChannel]: { direction: 'In', sync: 'Async' },
+    [entryChannel]: {
+      direction: 'In',
+      sync: 'Async',
+      ...(hasConversationalHub ? { durable: true, durability: { max_retries: 3, ordering: 'fifo' } } : {}),
+    },
     stage_output: { direction: 'Out', sync: 'Sync' },
     ...(hasExportDecisionOnly ? { [EXPORT_HOOK_CHANNEL]: { direction: 'Out', sync: 'Sync' } } : {}),
   };
