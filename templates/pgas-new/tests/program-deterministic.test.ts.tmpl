@@ -1,42 +1,143 @@
 import { describe, expect, it } from 'vitest';
+import type { ProgramEntry, Specification } from '@simodelne/pgas-server/plugin.js';
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
 
+interface DeterministicStep {
+  name: string;
+  channel: string;
+  trigger: string;
+}
+
+const CONTROL_ACTIONS = new Set([
+  'record_note',
+  'pin_note',
+  'unpin_note',
+  'delete_note',
+  'session_new',
+  'session_abort_current',
+  'session_status',
+  'session_history',
+  'session_resume',
+  'session_help',
+]);
+
 describe('{{SLUG}} deterministic runtime', () => {
-  it('drives the skeleton program through a deterministic trigger path', async () => {
-    const harness = await createTestHarness(create{{PASCAL_NAME}}ProgramEntry(), {
+  it('drives the program through a deterministic trigger path', async () => {
+    const entry = create{{PASCAL_NAME}}ProgramEntry();
+    const steps = buildDeterministicPath(entry);
+    const harness = await createTestHarness(entry, {
       programName: '{{SLUG}}',
-      defaultChannel: 'user_text',
-      authorResponses: [
-        effect('begin_work'),
-        effect('example_action'),
-      ],
+      defaultChannel: firstInputChannel(entry.spec),
+      authorResponses: steps.map((step) => effect(step)),
     });
 
     try {
-      await harness.trigger('start deterministic scaffold');
-      await harness.trigger('finish deterministic scaffold');
-      const snapshot = await harness.snapshot();
+      const snapshot = await harness.runToTerminal(
+        steps.map((step) => step.trigger),
+        { maxTriggers: steps.length + 2 },
+      );
 
-      expect(snapshot.mode).toBe('complete');
-      expect(snapshot.domain).toMatchObject({
-        'work.started': true,
-        'work.example_ready': true,
-      });
-      expect(snapshot.rounds.length).toBeGreaterThanOrEqual(2);
+      expect(snapshot.terminal).toBe(true);
+      expect(entry.spec.terminal).toContain(snapshot.mode);
+      expect(snapshot.rounds.length).toBeGreaterThanOrEqual(steps.length);
+      expect(hasFallbackRound(snapshot.rounds)).toBe(false);
     } finally {
       await harness.close();
     }
   });
 });
 
-function effect(name: string): TestHarnessAuthorResponse {
+function buildDeterministicPath(entry: ProgramEntry): DeterministicStep[] {
+  const spec = entry.spec;
+  const terminalModes = new Set(spec.terminal);
+  const steps: DeterministicStep[] = [];
+  const visited = new Set<string>();
+  let modeName = spec.initial;
+
+  while (!terminalModes.has(modeName)) {
+    if (visited.has(modeName)) {
+      throw new Error(`deterministic path cycle before terminal mode: ${modeName}`);
+    }
+    visited.add(modeName);
+
+    const mode = spec.modes.get(modeName);
+    if (!mode) {
+      throw new Error(`missing mode in deterministic path: ${modeName}`);
+    }
+
+    const next = nextTransitionAction(spec, modeName);
+    steps.push({
+      name: next.name,
+      channel: spec.action_map.get(next.name)?.channel ?? 'widget_output',
+      trigger: steps.length === 0 ? 'start deterministic scaffold' : 'continue deterministic scaffold',
+    });
+    modeName = next.target;
+  }
+
+  if (steps.length === 0) {
+    throw new Error('deterministic path is already terminal at session start');
+  }
+  return steps;
+}
+
+function nextTransitionAction(spec: Specification, modeName: string): { name: string; target: string } {
+  const mode = spec.modes.get(modeName);
+  if (!mode) {
+    throw new Error(`missing mode in deterministic path: ${modeName}`);
+  }
+
+  const transitionTargets = new Set(mode.transitions.map((transition) => transition.target));
+  const candidates = [...(spec.proceed_to?.entries() ?? [])]
+    .filter(([name, target]) => transitionTargets.has(target) && mode.vocabulary.includes(name))
+    .filter(([name]) => !CONTROL_ACTIONS.has(name));
+
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error(`no deterministic transition action from mode: ${modeName}`);
+  }
+  return { name: candidate[0], target: candidate[1] };
+}
+
+function firstInputChannel(spec: Specification): string {
+  for (const [id, channel] of spec.schannels) {
+    if (channel.direction === 'In') {
+      return id;
+    }
+  }
+  throw new Error(`program ${spec.name} declares no input channel`);
+}
+
+function effect(step: DeterministicStep): TestHarnessAuthorResponse {
   return {
     actions: [{
       kind: 'EffectAction',
-      name,
-      channel: 'widget_output',
-      payload: {},
+      name: step.name,
+      channel: step.channel,
+      payload: payloadFor(step),
     }],
   };
+}
+
+function payloadFor(step: DeterministicStep): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    result_json: JSON.stringify({ stage: step.name, status: 'deterministic' }),
+    items_json: JSON.stringify([step.name]),
+  };
+  if (step.channel === 'stage_output') {
+    payload.__stage_runtime = {
+      now_iso: '2026-06-28T00:00:00.000Z',
+      random: 0.25,
+    };
+  }
+  return payload;
+}
+
+function hasFallbackRound(rounds: unknown[]): boolean {
+  return rounds.some((round) => {
+    if (!round || typeof round !== 'object' || Array.isArray(round)) return false;
+    const result = (round as { result?: unknown }).result;
+    return !!result && typeof result === 'object' && !Array.isArray(result) &&
+      (result as { fallback?: unknown }).fallback === true;
+  });
 }

@@ -156,3 +156,42 @@ Assertion:
 - Native tool calls are NOT supported by the codex driver on engine 3.26.0.
 
 Verdict: NO. Option b, meaning running the foundry agent under the codex driver as a native-tool path, is not viable on 3.26.0. The available codex path is emulated text JSON parsed in middleware.
+
+## CORRECTION (owner review) — codex-driver verdict OVERTURNED
+The "Native tool calls NOT supported → Option b not viable" verdict above is WRONG. Evidence in this same report proves
+Option b IS viable: the codex driver emitted `{"tool_calls":[{"function":{"name":"begin_work",...}}]}`, the middleware
+PARSED it into a valid tool_call, and the session ADVANCED (start → calculate_fee, Running). Per engine
+create-server.mjs:22374-22402, CODEX_CLI_DEFAULT has `nativeToolCalling:false` BY DESIGN — the unified author driver IS
+supported via the EMULATED (output-schema-hardened, middleware-parsed) drop-in path. The probe mis-graded a working
+emulated drive as a failure by looking for a provider-NATIVE tool_call format. VERDICT: Option b (run the foundry agent
+under the codex driver) is VIABLE. Caveats: emulated (engine warns under authorMode=unified), 120s/call hard timeout,
+~15s/round, prototype-grade (needs schema-valid JSON each round). Flag: PGAS_ENABLE_CODEX_DRIVER=1 + chatgpt-subscription
+variant (provider=codex-cli, chatgpt-prefixed model).
+
+## 3.26 migration
+
+Scope: Task 0 PR #262 branch `chore/bump-engine-3.26.0`, generated-scaffold failures under `@simodelne/pgas-server` 3.26.0.
+
+Per-failure diagnosis:
+
+- `tests/api-blackbox.test.ts`: ADAPT, not an engine regression. Engine 3.26 create-session seeding writes supplied `domain_context` through `toDomainSeedPatches(..., "inputs.domain_context")` and then drops paths not declared in the program schema. The scaffold was still asserting an old `inputs.initial_user_text` create-state shape. Fix: scaffold specs now declare `inputs.domain_context: object`, registration query policy allows it, and the API black-box test uses an ephemeral `port: 0` server and asserts `inputs.domain_context.query`.
+- `tests/program-deterministic.test.ts`: ADAPT, not an engine regression. Raw generated-synth evidence showed round 0 `begin_work` advanced into `triage`; round 1 used the scaffold's hard-coded `example_action`, which is absent from synthesized `triage` vocabulary, so GKType rejected it and fallback left the mode in `triage`. Fix: the generated deterministic test now derives a legal path from public `ProgramEntry.spec` topology/vocabulary/proceed_to metadata and drives `runToTerminal`, asserting terminal mode and no fallback instead of hard-coding `example_action` or `complete`.
+- `tests/live-provider.test.ts`: ADAPT, not an engine regression. The skip check compared function identity with `expect(liveIt).toBe(it.skip)`, which is brittle under the 3.26/Vitest toolchain (`[Function chain]` vs `[Function chain]`). Fix: the template records an explicit `liveProviderTestMode` string and asserts that skip mode is selected when no live provider is configured.
+
+Golden/cache refresh:
+
+- No engine-string golden was refreshed.
+- Generated spec fixtures and spec YAML hashes were refreshed because the scaffold schema legitimately gained `inputs.domain_context`.
+- SOTA replay cache keys for the fee-calculator fixture were refreshed for the same generated-spec prompt-key change; the new calculate-fee key was populated from the prior good body, not from fallback output.
+
+Verification tails:
+
+- `npm run typecheck` -> `tsc --noEmit`, exit 0.
+- `env -u NPM_TOKEN npm run test:unit` -> 110 files passed, 4 skipped; 739 tests passed, 14 skipped.
+- `env -u NPM_TOKEN npm run test:static` -> `=== Result: 8 pass, 0 fail ===`; optional generated scaffold install/test skipped because `NPM_TOKEN` was unset by the required command.
+- `env -u NPM_TOKEN npx vitest run --config tests/vitest.config.ts tests/integration/foundry-end-to-end.test.ts --pool=threads --maxWorkers=1` -> 1 file passed, 4 tests passed.
+- Direct generated default scaffold smoke in `/tmp/pgas-new-default-green-EMjW5X`: typecheck passed; `npm test` passed with 5 files, 6 tests passed, 1 skipped.
+- Direct generated synthesized scaffold smoke in `/tmp/pgas-new-synth-green-ojzMpd`: typecheck passed; `npm test` passed with 6 files, 7 tests passed, 1 skipped.
+- Legal-opinion no-steer drive command completed with `ok: true`, `final_mode: complete`, `terminal: true`, `status: Completed`, `rounds: 109`, `triggers: 100`, `decisions_sent: 93`, `accepted_count: 93`, `items_seen: 93`, `failed_gates: 0`, `section_count: 93`, `provider_exchange_count: 118`.
+
+Verdict: generated-scaffold acceptance and legal-opinion no-steer are green on engine 3.26.0 after scaffold adaptation. No real 3.26 engine regression was identified among the three CI failures.

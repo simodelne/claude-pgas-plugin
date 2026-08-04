@@ -22,6 +22,7 @@ describe('{{SLUG}} API black-box contract', () => {
       programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
       drivers: stubHandles(),
       devMode: true,
+      port: 0,
     });
 
     try {
@@ -44,7 +45,8 @@ describe('{{SLUG}} API black-box contract', () => {
       expect(JSON.stringify(httpPrograms)).toContain('{{SLUG}}');
       expect(envelope.sessionId).toBe(session.sessionId);
       expect(httpEnvelope.sessionId).toBe(session.sessionId);
-      expect(normalized).toHaveProperty('inputs.initial_user_text');
+      expect(normalized).toHaveProperty('inputs.domain_context');
+      expect(normalized['inputs.domain_context']).toMatchObject({ query: 'static black-box verification' });
     } finally {
       await server.close();
     }
