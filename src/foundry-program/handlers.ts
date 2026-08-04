@@ -162,12 +162,139 @@ function applyOptionalDocumentsSentinel(payload: Record<string, unknown>): Recor
   return normalized === raw ? payload : { ...payload, documents_json: normalized };
 }
 
+interface IntakeSkillCatalogEntry {
+  name: string;
+  body: string;
+}
+
+function parseAndNormalizeSkillCatalogJson(rawValue: string): NormalizedJsonField {
+  const parsed = parseAndNormalizeJson(rawValue, 'intake.skills_json');
+  const skills = normalizeIntakeSkillCatalog(parsed.value);
+  return {
+    value: skills,
+    canonical: canonicalJson(skills, 'intake.skills_json'),
+  };
+}
+
+function normalizeIntakeSkillCatalog(value: unknown): IntakeSkillCatalogEntry[] {
+  assertJsonTopLevelType(value, 'array', 'intake.skills_json');
+  const seen = new Set<string>();
+  return (value as unknown[]).map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`intake.skills_json[${index}] must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const name = requiredNonEmptyString(record.name, `intake.skills_json[${index}].name`);
+    if (seen.has(name)) {
+      throw new Error(`duplicate skill name in intake.skills_json: ${name}`);
+    }
+    seen.add(name);
+    return {
+      name,
+      body: requiredNonEmptyString(record.body, `intake.skills_json[${index}].body`),
+    };
+  });
+}
+
+function requiredNonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function renderDesignConfirmationSummary(snapshot: ReadonlyMap<string, unknown>): string {
+  const target = stringSnapshotValue(snapshot, 'program.target_dir') ?? '(target not recorded)';
+  const modes = summarizeStagesJson(snapshot.get('intake.stages_json'));
+  const transitions = summarizeTransitionsJson(snapshot.get('intake.transitions_json'));
+  const documents = summarizeDocumentsJson(snapshot.get('intake.documents_json'));
+  const skills = summarizeSkillCatalogJson(snapshot.get('intake.skills_json'));
+  return [
+    `Target: ${target}`,
+    `Modes: ${modes}`,
+    `Transitions: ${transitions}`,
+    `Documents: ${documents}`,
+    skills.length > 0 ? `Skill catalog (${skills.length}): ${skills.join(', ')}` : 'Skill catalog: none',
+  ].join('\n');
+}
+
+function stringSnapshotValue(snapshot: ReadonlyMap<string, unknown>, path: string): string | undefined {
+  const value = snapshot.get(path);
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function summarizeStagesJson(value: unknown): string {
+  const parsed = parseStoredJsonArray(value);
+  if (!parsed) return '(not recorded)';
+  const names = parsed.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const slug = (entry as Record<string, unknown>).slug;
+      return typeof slug === 'string' ? slug : undefined;
+    }
+    return undefined;
+  }).filter((entry): entry is string => !!entry);
+  return names.length > 0 ? names.join(' -> ') : '(not recorded)';
+}
+
+function summarizeTransitionsJson(value: unknown): string {
+  const parsed = parseStoredJsonArray(value);
+  if (!parsed) return '(not recorded)';
+  const summaries = parsed.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const record = entry as Record<string, unknown>;
+      const from = typeof record.from === 'string' ? record.from : '?';
+      const to = typeof record.to === 'string' ? record.to : '?';
+      const guard = typeof record.guard_field === 'string' ? ` guard ${record.guard_field}` : '';
+      return `${from}->${to}${guard}`;
+    }
+    return undefined;
+  }).filter((entry): entry is string => !!entry);
+  return summaries.length > 0 ? summaries.join('; ') : '(not recorded)';
+}
+
+function summarizeDocumentsJson(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return 'none';
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'none';
+    const record = parsed as Record<string, unknown>;
+    if (record.enabled === false) return 'none';
+    const stage = typeof record.stage === 'string' ? record.stage : 'unspecified stage';
+    const resultPath = typeof record.result_path === 'string' ? ` at ${record.result_path}` : '';
+    return `${stage}${resultPath}`;
+  } catch {
+    return 'recorded';
+  }
+}
+
+function summarizeSkillCatalogJson(value: unknown): string[] {
+  if (typeof value !== 'string' || value.length === 0) return [];
+  try {
+    return normalizeIntakeSkillCatalog(JSON.parse(value) as unknown).map((skill) => skill.name);
+  } catch {
+    return [];
+  }
+}
+
+function parseStoredJsonArray(value: unknown): unknown[] | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const intakeJsonPaths = [
   'intake.stages_json',
   'intake.transitions_json',
   'intake.delegation_json',
   'intake.documents_json',
   'intake.completion_json',
+  'intake.skills_json',
 ] as const;
 
 const approveArtifactPlanPreconditions = [
@@ -227,9 +354,10 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['normalize_rebase_status', (snapshot) => normalizeRebaseStatus(snapshot, 'graduation.rebase_status')],
   ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
   ['normalize_intake_json_fields', (snapshot) => {
-    const mutations = intakeJsonPaths.flatMap((path) => {
+    const mutations: Array<{ op: 'MSet'; path: string; value: string }> = [];
+    for (const path of intakeJsonPaths) {
       const stored = snapshot.get(path);
-      if (typeof stored !== 'string') return [];
+      if (typeof stored !== 'string') continue;
       // record_q5_delegation stores the raw arg via `from_arg`, so a "none"-class
       // reply reaches this reaction unnormalized. Apply the delegation sentinel on
       // the state value BEFORE parsing, or the raw "none" fails "expected a JSON
@@ -240,17 +368,33 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
         : path === 'intake.documents_json'
           ? normalizeDocumentsSentinelValue(stored)
           : stored;
+      if (path === 'intake.skills_json') {
+        const normalized = parseAndNormalizeSkillCatalogJson(value);
+        if (normalized.canonical !== stored) {
+          mutations.push({ op: 'MSet', path, value: normalized.canonical });
+        }
+        continue;
+      }
       const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
       const normalized = path === 'intake.stages_json'
         ? parseAndNormalizeStagesJson(value)
         : parseAndNormalizeJson(value, path);
       assertJsonTopLevelType(normalized.value, expectedType, path);
       const canonical = normalized.canonical;
-      return canonical === stored ? [] : [{ op: 'MSet' as const, path, value: canonical }];
-    });
+      if (canonical !== stored) {
+        mutations.push({ op: 'MSet', path, value: canonical });
+      }
+    }
     const transitionRefresh = staleTransitionRefreshMutation(snapshot);
     const allMutations = [...mutations, ...transitionRefresh];
     return allMutations.length > 0 ? { mutations: allMutations } : undefined;
+  }],
+  ['summarize_design_confirmation', (snapshot) => {
+    if (snapshot.get('intake.program_intake_finalized') !== true) return undefined;
+    const summary = renderDesignConfirmationSummary(snapshot);
+    return snapshot.get('intake.design_confirmation_summary') === summary
+      ? undefined
+      : { mutations: [{ op: 'MSet' as const, path: 'intake.design_confirmation_summary', value: summary }] };
   }],
 ]);
 
@@ -512,6 +656,16 @@ export const handlers: Record<string, ToolHandler> = {
       kind: 'pgas_new_q6_completion_recorded',
       completion: completion.value,
       completion_json: completion.canonical,
+    };
+  },
+
+  async record_skill_catalog(payload) {
+    const raw = stringField(payload, 'skills_json');
+    const skills = parseAndNormalizeSkillCatalogJson(raw);
+    return {
+      kind: 'pgas_new_skill_catalog_recorded',
+      skills: skills.value,
+      skills_json: skills.canonical,
     };
   },
 
