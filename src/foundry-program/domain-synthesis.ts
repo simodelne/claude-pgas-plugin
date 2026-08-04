@@ -1997,16 +1997,23 @@ function assertBehavioralOutput(
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return 'result_json must encode an object';
   }
-  if ((result as { stage?: unknown }).stage !== stage) {
-    return [
-      `result_json must start with a 'stage' key equal to ${stage}.`,
-      `Got result_json.stage=${String((result as { stage?: unknown }).stage)}.`,
-      "Fix: construct result_json with stage: input.stage as the first top-level key before the remaining domain_spec.produces.result_json keys.",
-    ].join(' ');
-  }
-  const schemaError = assertResultJsonSchema(result, domainSpec, stage);
-  if (schemaError) {
-    return schemaError;
+  const schema = resultJsonSchema(domainSpec);
+  if (schema) {
+    const schemaError = assertResultJsonSchema(result, domainSpec, stage);
+    if (schemaError) {
+      return schemaError;
+    }
+    if (Object.hasOwn(schema, 'stage')) {
+      const stageError = assertResultJsonStage(result, stage);
+      if (stageError) {
+        return stageError;
+      }
+    }
+  } else {
+    const stageError = assertResultJsonStage(result, stage);
+    if (stageError) {
+      return stageError;
+    }
   }
   const feeProposalError = assertFeeProposalComputation(result as Record<string, unknown>, domainSpec);
   if (feeProposalError) {
@@ -2025,6 +2032,17 @@ function assertBehavioralOutput(
     if (adapterKind !== expectedExternalAdapterKind) {
       return `expected external-adapter adapter_kind to equal ${expectedExternalAdapterKind}; got ${String(adapterKind)}`;
     }
+  }
+  return undefined;
+}
+
+function assertResultJsonStage(result: unknown, stage: string): string | undefined {
+  if ((result as { stage?: unknown }).stage !== stage) {
+    return [
+      `result_json must start with a 'stage' key equal to ${stage}.`,
+      `Got result_json.stage=${String((result as { stage?: unknown }).stage)}.`,
+      "Fix: construct result_json with stage: input.stage as the first top-level key before the remaining domain_spec.produces.result_json keys.",
+    ].join(' ');
   }
   return undefined;
 }
@@ -2130,26 +2148,34 @@ function parseOutputResult(output: unknown): Record<string, unknown> {
 }
 
 function assertResultJsonSchema(result: unknown, domainSpec: StageDomainSpec | undefined, stage: string): string | undefined {
-  const schema = domainSpec?.produces.result_json;
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+  const schema = resultJsonSchema(domainSpec);
+  if (!schema) {
     return undefined;
   }
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return 'result_json must encode an object';
   }
   const expectedKeys = Object.keys(schema);
-  if (expectedKeys.length === 0) {
-    return undefined;
-  }
   const actualKeys = Object.keys(result as Record<string, unknown>);
   if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    const stageDeclared = Object.hasOwn(schema, 'stage');
+    const contractLine = stageDeclared
+      ? `result_json must start with a 'stage' key equal to ${stage} and must match domain_spec.produces.result_json keys/order.`
+      : 'result_json must match domain_spec.produces.result_json keys/order.';
     return [
-      `result_json must start with a 'stage' key equal to ${stage} and must match domain_spec.produces.result_json keys/order.`,
+      contractLine,
       `Expected keys: ${JSON.stringify(expectedKeys)}; got ${JSON.stringify(actualKeys)}.`,
       `Fix: construct result_json as { ${expectedKeys.map((key) => key === 'stage' ? 'stage: input.stage' : `${key}: ...`).join(', ')} } and do not add, remove, or reorder top-level keys.`,
     ].join(' ');
   }
   return undefined;
+}
+
+function resultJsonSchema(domainSpec?: StageDomainSpec): Record<string, unknown> | undefined {
+  const schema = domainSpec?.produces.result_json;
+  return schema && typeof schema === 'object' && !Array.isArray(schema)
+    ? schema as Record<string, unknown>
+    : undefined;
 }
 
 function assertItemsJsonSchema(items: unknown[], domainSpec?: StageDomainSpec): string | undefined {
@@ -2643,8 +2669,8 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
  * When the LLM stage-body generator exhausts its repair attempts for a
  * pure-compute / in-memory external-adapter stage, we synthesize a mechanical
  * body that is guaranteed to satisfy the baseline behavioral gate
- * (`result_json.stage === <stage>`, exact domain_spec.produces.result_json key
- * order, one item per declared items_json template, non-empty items). This is
+ * (exact domain_spec.produces.result_json key order, one item per declared
+ * items_json template, non-empty items). This is
  * fully mechanical (SI-3): no LLM call, no freeform emission — the shape is
  * derived deterministically from the frozen contract's domain_spec.
  *
@@ -2661,15 +2687,14 @@ function renderDeterministicFallbackStageBody(
   domainSpec?: StageDomainSpec,
 ): string {
   void stage;
-  const schema = domainSpec?.produces.result_json;
-  const resultEntries: string[] = ['stage: input.stage'];
-  if (schema && typeof schema === 'object' && !Array.isArray(schema)) {
-    for (const key of Object.keys(schema as Record<string, unknown>)) {
-      if (key === 'stage') {
-        continue;
-      }
-      resultEntries.push(`${tsPropertyKey(key)}: ${fallbackFieldExpression((schema as Record<string, unknown>)[key])}`);
+  const schema = resultJsonSchema(domainSpec);
+  const resultEntries: string[] = [];
+  if (schema) {
+    for (const key of Object.keys(schema)) {
+      resultEntries.push(`${tsPropertyKey(key)}: ${fallbackResultFieldExpression(key, schema[key], archetype)}`);
     }
+  } else {
+    resultEntries.push('stage: input.stage');
   }
 
   const itemTemplates = domainSpec?.produces.items_json;
@@ -2679,10 +2704,6 @@ function renderDeterministicFallbackStageBody(
   } else {
     itemsExpression = `[input.stage + ':complete']`;
   }
-
-  const adapterKindLine = archetype === 'external-adapter'
-    ? "    adapter_kind: 'in_memory_mock',\n"
-    : '';
 
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 
@@ -2696,7 +2717,7 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
   void requestText;
   const result = {
 ${resultEntries.map((entry) => `    ${entry},`).join('\n')}
-${adapterKindLine}  };
+  };
   return {
     result_json: JSON.stringify(result),
     items_json: JSON.stringify(${itemsExpression}),
@@ -2704,6 +2725,20 @@ ${adapterKindLine}  };
   };
 }
 `;
+}
+
+function fallbackResultFieldExpression(
+  key: string,
+  schemaValue: unknown,
+  archetype: 'pure-compute' | 'external-adapter',
+): string {
+  if (key === 'stage') {
+    return 'input.stage';
+  }
+  if (key === 'adapter_kind' && archetype === 'external-adapter') {
+    return "'in_memory_mock'";
+  }
+  return fallbackFieldExpression(schemaValue);
 }
 
 function tsPropertyKey(key: string): string {

@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createContext, Script } from 'node:vm';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
@@ -232,6 +234,47 @@ function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
       { slug: stage, archetype: 'external-adapter', adapter_kind: 'in_memory_mock', rationale: `${stage} calls an external adapter` },
     ],
     body_stage_slugs: [stage],
+  };
+}
+
+function externalArtifactWithResultSchema(): SynthesizedArtifact {
+  return {
+    ...artifactWithContext(),
+    mode_names: ['intake', 'ingest', 'done'],
+    stage_classification: [
+      { slug: 'ingest', archetype: 'external-adapter', adapter_kind: 'in_memory_mock', rationale: 'ingest calls a document adapter' },
+    ],
+    body_stage_slugs: ['ingest'],
+    synthesis_context: {
+      ...artifactWithContext().synthesis_context!,
+      program_slug: 'document-finalization',
+      program_name: 'Document Finalization',
+      purpose: 'Ingest document sections before finalizing a legal opinion.',
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'ingest',
+          domain_spec: {
+            reads: ['inputs.initial_user_text'],
+            produces: {
+              result_json: {
+                summary: 'string',
+                section_count: 'number',
+              },
+              items_json: ['summary:<summary>'],
+            },
+            rules: ['Summarize the ingested document sections without adding stage metadata to result_json.'],
+            invariants: ['result_json must contain exactly summary and section_count.'],
+          },
+        } as Record<string, unknown> as { slug: string },
+        { slug: 'done', is_terminal: true },
+      ],
+      transitions: [
+        { from: 'intake', to: 'ingest', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'ingest', to: 'done', trigger: 'ingested', guard_field: 'ingest.ready' },
+      ],
+      completion: { final_stage: 'done', guard_field: 'ingest.ready' },
+    },
   };
 }
 
@@ -1244,6 +1287,44 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     });
   });
 
+  it('keeps external-adapter deterministic fallback metadata outside result_json when the produces schema omits it', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(externalArtifactWithResultSchema(), {
+        cacheDir,
+        maxAttempts: 1,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => 'export const nope = 1;',
+      });
+
+      const runStage = loadRunStageForUnitTest(result.stage_sources?.ingest ?? '');
+      const output = await runStage({
+        stage: 'ingest',
+        payload: {},
+        domain: {},
+      }, {
+        now: () => '2026-06-28T00:00:00.000Z',
+        random: () => 0.25,
+        llm: async () => {
+          throw new Error('not used');
+        },
+      });
+      const parsedOutput = parseStageOutputForUnitTest(output);
+
+      expect(Object.keys(parsedOutput.result)).toEqual(['summary', 'section_count']);
+      expect(parsedOutput.result).not.toHaveProperty('stage');
+      expect(parsedOutput.result).not.toHaveProperty('adapter_kind');
+      expect(parsedOutput.adapter_kind).toBe('in_memory_mock');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'ingest',
+        archetype: 'external-adapter',
+        adapter_kind: 'in_memory_mock',
+        behavioral_gate: 'passed',
+        deterministic_fallback: true,
+      }));
+    });
+  });
+
   it('rejects banned stage body capabilities before acceptance', async () => {
     // Use a fee-proposal stage (which the deterministic fallback cannot satisfy)
     // so the banned-capability rejection still surfaces terminally instead of
@@ -1578,3 +1659,51 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     });
   });
 });
+
+function loadRunStageForUnitTest(body: string): (input: unknown, runtime: unknown) => Promise<unknown> | unknown {
+  const transpiled = ts.transpileModule(body, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      strict: true,
+    },
+  });
+  const exportsObject: Record<string, unknown> = {};
+  const moduleObject = { exports: exportsObject };
+  const context = createContext({
+    exports: exportsObject,
+    module: moduleObject,
+    TextEncoder,
+    Uint8Array,
+  });
+  new Script(transpiled.outputText, { filename: 'unit-stage.behavior.cjs' }).runInContext(context, {
+    timeout: 1_000,
+  });
+  const exported = moduleObject.exports as Record<string, unknown>;
+  const runStage = exported.runStage ?? exportsObject.runStage;
+  if (typeof runStage !== 'function') {
+    throw new Error('runStage export was not callable');
+  }
+  return runStage as (input: unknown, runtime: unknown) => Promise<unknown> | unknown;
+}
+
+function parseStageOutputForUnitTest(output: unknown): {
+  adapter_kind?: unknown;
+  result: Record<string, unknown>;
+} {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    throw new Error('stage output did not encode an object');
+  }
+  const resultJson = (output as { result_json?: unknown }).result_json;
+  if (typeof resultJson !== 'string') {
+    throw new Error('stage output did not include result_json');
+  }
+  const result = JSON.parse(resultJson) as unknown;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw new Error('result_json did not encode an object');
+  }
+  return {
+    adapter_kind: (output as { adapter_kind?: unknown }).adapter_kind,
+    result: result as Record<string, unknown>,
+  };
+}
