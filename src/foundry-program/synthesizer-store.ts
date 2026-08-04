@@ -105,6 +105,10 @@ export interface SynthesisContext {
   }>;
   delegation: DelegationDescriptor;
   documents?: DocumentsDescriptor;
+  skills?: Array<{
+    name: string;
+    body: string;
+  }>;
   export_descriptors?: ExportStageDescriptor[];
   export_surfaces?: ExportSurfaces;
   document_extraction_surfaces?: DocumentExtractionSurfaces;

@@ -96,6 +96,9 @@ const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
 const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
 const DOCUMENT_SKIP_STATUS = 'no_documents_available';
 const PROPOSE_ITEM_ACTION = 'propose_item';
+const SKILL_PROVIDER_NAME = 'skill';
+const SKILL_TRIAGE_DECISION_PATH = 'skill_triage_settled';
+const SKILL_BODY_TYPE = 'string';
 const TERMINAL_ACTION_GENERIC_EXAMPLE =
   'Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"<action>","channel":"<channel>","payload":{}}]}. Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.';
 const TERMINAL_ACTION_PROTOCOL =
@@ -166,6 +169,11 @@ interface RegisteredToolDescriptor {
   };
 }
 
+interface SkillCatalogEntry {
+  name: string;
+  body: string;
+}
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -197,6 +205,7 @@ export function synthesizeProgramSpecFromDomain(
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
   const confirmationLoops = interaction?.confirmation_loops ?? [];
   const delegationChildren = delegation.children ?? [];
+  const skills = normalizeSkillCatalog(optionalSkillCatalogDomainField(domain));
 
   if (delegation.children !== undefined) {
     assertStages(stages);
@@ -352,6 +361,7 @@ export function synthesizeProgramSpecFromDomain(
     ...(Array.isArray(spec.features) ? spec.features as string[] : []),
     'reactions',
     'inline_world_query',
+    ...(skills.length > 0 ? ['activation', 'skill_triage'] : []),
     ...(registeredTools.length > 0 ? ['integrations', 'tool_registry'] : []),
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
@@ -602,6 +612,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
   applyRegisteredToolSchema(schema, registeredTools);
+  applySkillTriageSpec(spec, skills);
   const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
@@ -679,6 +690,7 @@ export function synthesizeProgramSpecFromDomain(
       transitions,
       delegation,
       ...(documents ? { documents } : {}),
+      ...(skills.length > 0 ? { skills } : {}),
       ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
       ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
       ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
@@ -715,6 +727,7 @@ export function resynthesizeWithReasoningContracts(
     ...(context.documents ? { 'intake.documents_json': JSON.stringify(context.documents) } : {}),
     'intake.completion_json': JSON.stringify(context.completion),
     ...(context.interaction ? { 'intake.interaction_json': JSON.stringify(context.interaction) } : {}),
+    ...(context.skills ? { 'intake.skills_json': JSON.stringify(context.skills) } : {}),
   }, { ...options, reasoningContracts: contracts });
 }
 
@@ -914,6 +927,32 @@ function applyExportDecisionOnlyIntegrations(spec: MutableRecord, exportActions:
         result_path: `${stage}.output`,
       })),
     },
+  };
+}
+
+function applySkillTriageSpec(spec: MutableRecord, skills: SkillCatalogEntry[]): void {
+  if (skills.length === 0) {
+    return;
+  }
+
+  const advisorySchema = recordOrEmpty(spec.advisory_schema);
+  for (const skill of skills) {
+    advisorySchema[`${SKILL_PROVIDER_NAME}.${skill.name}`] = SKILL_BODY_TYPE;
+  }
+  spec.advisory_schema = advisorySchema;
+
+  const activationProviders = recordOrEmpty(spec.activation_providers);
+  if (activationProviders[SKILL_PROVIDER_NAME] !== undefined) {
+    throw new Error(`activation provider "${SKILL_PROVIDER_NAME}" is already declared`);
+  }
+  activationProviders[SKILL_PROVIDER_NAME] = {
+    targets: Object.fromEntries(skills.map((skill) => [skill.name, { body: skill.body }])),
+  };
+  spec.activation_providers = activationProviders;
+
+  spec.decision_schema = {
+    ...recordOrEmpty(spec.decision_schema),
+    [SKILL_TRIAGE_DECISION_PATH]: SKILL_BODY_TYPE,
   };
 }
 
@@ -10534,6 +10573,44 @@ function optionalJsonDomainField(domain: Record<string, unknown>, path: string):
     throw new Error(`optional JSON-string domain field must be a string when present: ${path}`);
   }
   return JSON.parse(value) as unknown;
+}
+
+function optionalSkillCatalogDomainField(domain: Record<string, unknown>): unknown {
+  const direct = domainValue(domain, 'intake.skills');
+  if (typeof direct === 'string') {
+    return JSON.parse(direct) as unknown;
+  }
+  if (direct !== undefined) {
+    return direct;
+  }
+  return optionalJsonDomainField(domain, 'intake.skills_json');
+}
+
+function normalizeSkillCatalog(value: unknown): SkillCatalogEntry[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return requiredArray(value, 'intake.skills').map((entry, index) => {
+    const record = requiredRecord(entry, `intake.skills[${index}]`);
+    const name = requiredString(record.name, `intake.skills[${index}].name`);
+    if (seen.has(name)) {
+      throw new Error(`duplicate skill name in intake.skills: ${name}`);
+    }
+    seen.add(name);
+    return {
+      name,
+      body: requiredSkillBody(record.body, `intake.skills[${index}].body`),
+    };
+  });
+}
+
+function requiredSkillBody(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
 }
 
 function requiredRecord(value: unknown, label: string): Record<string, unknown> {
