@@ -113,6 +113,31 @@ export function isExportTransitionAction(action: TransitionAction): boolean {
   return action.export_kind === 'export_docx' || action.export_kind === 'export_html';
 }
 
+export function isConversationalHubTransitionAction(action: TransitionAction): boolean {
+  return action.archetype === 'conversational-hub';
+}
+
+function transitionActionHasResultPath(
+  action: TransitionAction,
+  firstMode: string,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+): boolean {
+  if (action.source === firstMode || isConversationalHubTransitionAction(action)) {
+    return false;
+  }
+  return action.archetype !== 'llm-reasoning' || reasoningContractsBySlug.has(action.source);
+}
+
+export function transitionActionChannel(
+  action: TransitionAction,
+  firstMode: string,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+): 'stage_output' | 'widget_output' {
+  return transitionActionHasResultPath(action, firstMode, reasoningContractsBySlug)
+    ? 'stage_output'
+    : 'widget_output';
+}
+
 export function exportRenderHookActionName(stage: string): string {
   return `render_${safeIdentifier(stage)}_export`;
 }
@@ -132,6 +157,9 @@ export function outputProjectionFields(
   flatMirrorStages: ReadonlySet<string>,
 ): string[] {
   const classification = stageClassificationBySlug.get(modeName);
+  if (classification?.archetype === 'conversational-hub') {
+    return [];
+  }
   if (classification?.archetype !== 'llm-reasoning') {
     return flatMirrorStages.has(modeName)
       ? [`${modeName}.output`, `${modeName}.result_json`, `${modeName}.items_json`]
@@ -151,8 +179,13 @@ export function actionMapEntryFor(
   const isBootstrap = action.source === firstMode;
   const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
   const isContractedReasoningStage = contract !== undefined;
-  const isResultPathStage = !isBootstrap && (action.archetype !== 'llm-reasoning' || isContractedReasoningStage);
-  const isDeterministicResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
+  const isHubAction = isConversationalHubTransitionAction(action);
+  const isResultPathStage = transitionActionHasResultPath(
+    action,
+    firstMode,
+    reasoningContract ? new Map([[action.source, reasoningContract]]) : new Map(),
+  );
+  const isDeterministicResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning' && !isHubAction;
   const domainSpecForDescription = domainSpec && isDeterministicResultPathStage
     ? deterministicActionDomainSpecDescription(domainSpec)
     : domainSpec;
@@ -193,6 +226,10 @@ export function actionMapEntryFor(
   return {
     description: isBootstrap
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
+      : isHubAction
+        ? action.source === action.target
+          ? `Stay in conversational hub ${action.source}; use only for an explicit no-op/stay decision.`
+          : `Choose the ${action.target} branch from conversational hub ${action.source}. Non-terminal hub tools should omit this action so the session remains in ${action.source}.${domainSpecDescription}`
       : action.archetype === 'llm-reasoning'
         ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${reasoningEnvelopeDescription}`
         : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}${deterministicResultPathInstruction}`,
@@ -213,7 +250,11 @@ export function actionMapEntryFor(
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
-    channel: isResultPathStage ? 'stage_output' : 'widget_output',
+    channel: transitionActionChannel(
+      action,
+      firstMode,
+      reasoningContract ? new Map([[action.source, reasoningContract]]) : new Map(),
+    ),
   };
 }
 
