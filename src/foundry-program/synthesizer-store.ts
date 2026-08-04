@@ -28,6 +28,7 @@ export interface DelegationChildDescriptor {
   ad_hoc?: boolean;
   target_spec?: string;
   registered_name?: string;
+  target_slug?: string;
   synthesize_child?: DelegationChildSynthesizeDescriptor;
   fan_out?: DelegationDocumentFanOutDescriptor;
   payload_map: Record<string, string>;
