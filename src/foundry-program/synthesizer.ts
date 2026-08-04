@@ -198,9 +198,11 @@ export function synthesizeProgramSpecFromDomain(
   const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
-  const rawDelegation = resolveDelegationChildrenAgainstManifest(
-    parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json'),
-    options.availablePrograms ?? [],
+  const rawDelegation = normalizeDelegationChildInternalIdentifiers(
+    resolveDelegationChildrenAgainstManifest(
+      parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json'),
+      options.availablePrograms ?? [],
+    ),
   );
   const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
   const documents = normalizeDocumentsDescriptor(rawDocuments);
@@ -7239,6 +7241,20 @@ function resolveDelegationChildrenAgainstManifest(
 
   let changed = false;
   const children = delegation.children.map((child) => {
+    const reuseEntry = reusableAgentEntryForChild(child, availablePrograms, delegationTargetForStage(delegation, child.stage));
+    if (reuseEntry) {
+      changed = true;
+      const { synthesize_child: _deleted, ...rewritten } = child;
+      return {
+        ...rewritten,
+        target_spec: reuseEntry.target_spec,
+        registered_name: reuseEntry.slug,
+        target_slug: reuseEntry.slug,
+        payload_map: reuseEntry.payload_map ?? child.payload_map,
+        result_path: reuseEntry.result_path ?? child.result_path,
+      };
+    }
+
     const researchEntry = availablePrograms.find((candidate) =>
       candidate.provides === 'delegation_research_agent' &&
       child.synthesize_child?.kind === 'research_agent' &&
@@ -7250,27 +7266,9 @@ function resolveDelegationChildrenAgainstManifest(
         ...rewritten,
         target_spec: researchEntry.target_spec,
         registered_name: researchEntry.slug,
+        target_slug: researchEntry.slug,
         payload_map: researchEntry.payload_map ?? child.payload_map,
         result_path: researchEntry.result_path ?? child.result_path,
-      };
-    }
-
-    // Slice A: reuse of the existing simoneos document-ingest / review agents.
-    // These children are target_spec-only from the notebook (nothing to
-    // synthesize — the agent already exists), so we validate-and-stamp: match a
-    // manifest entry by its document-ingest / review provides tag whose
-    // target_spec or slug names the author's target_spec, then stamp
-    // registered_name (for the allowedTargetPrograms both-names fix) and
-    // normalize target_spec to the manifest's canonical spec name.
-    const reuseEntry = reusableAgentEntryForChild(child, availablePrograms);
-    if (reuseEntry) {
-      changed = true;
-      return {
-        ...child,
-        target_spec: reuseEntry.target_spec,
-        registered_name: reuseEntry.slug,
-        payload_map: reuseEntry.payload_map ?? child.payload_map,
-        result_path: reuseEntry.result_path ?? child.result_path,
       };
     }
 
@@ -7278,6 +7276,88 @@ function resolveDelegationChildrenAgainstManifest(
   });
 
   return changed ? { ...delegation, children } : delegation;
+}
+
+function normalizeDelegationChildInternalIdentifiers(delegation: DelegationDescriptor): DelegationDescriptor {
+  if (!Array.isArray(delegation.children) || delegation.children.length === 0) {
+    return delegation;
+  }
+
+  let changed = false;
+  const children = delegation.children.map((child) => {
+    const normalized = normalizeDelegationChildInternalIdentifier(child);
+    if (normalized !== child) {
+      changed = true;
+    }
+    return normalized;
+  });
+
+  return changed ? { ...delegation, children } : delegation;
+}
+
+function normalizeDelegationChildInternalIdentifier(child: DelegationChildDescriptor): DelegationChildDescriptor {
+  const id = slugSafeDelegationIdentifier(child.id);
+  const actionName = child.action_name === undefined
+    ? undefined
+    : slugSafeDelegationIdentifier(child.action_name);
+  const resultPath = id === child.id
+    ? child.result_path
+    : normalizeDelegationResultPathForInternalId(child.result_path, child.stage, child.id, id);
+
+  let changed = false;
+  let next: DelegationChildDescriptor = child;
+  if (id !== child.id || actionName !== child.action_name || resultPath !== child.result_path) {
+    changed = true;
+    next = {
+      ...next,
+      id,
+      ...(actionName === undefined ? {} : { action_name: actionName }),
+      result_path: resultPath,
+    };
+  }
+
+  if (
+    id !== child.id &&
+    next.synthesize_child !== undefined &&
+    next.target_spec === undefined &&
+    next.synthesize_child.slug === undefined
+  ) {
+    changed = true;
+    next = {
+      ...next,
+      synthesize_child: {
+        ...next.synthesize_child,
+        slug: child.id,
+      },
+    };
+  }
+
+  return changed ? next : child;
+}
+
+function slugSafeDelegationIdentifier(value: string): string {
+  const normalized = normalizeProgramNameForSelfTarget(value);
+  if (/^[a-z][a-z0-9_]*$/u.test(normalized)) {
+    return normalized;
+  }
+  return `child_${normalized.length > 0 ? normalized : 'program'}`;
+}
+
+function normalizeDelegationResultPathForInternalId(
+  resultPath: string,
+  stage: string,
+  oldId: string,
+  newId: string,
+): string {
+  const oldBase = `${stage}.delegation.${oldId}`;
+  if (resultPath === oldBase) {
+    return `${stage}.delegation.${newId}`;
+  }
+  const oldPrefix = `${oldBase}.`;
+  if (resultPath.startsWith(oldPrefix)) {
+    return `${stage}.delegation.${newId}.${resultPath.slice(oldPrefix.length)}`;
+  }
+  return resultPath;
 }
 
 const REUSABLE_AGENT_PROVIDES: readonly WiringAvailableProgram['provides'][] = [
@@ -7294,17 +7374,63 @@ const DELEGATION_PAYLOAD_TARGET_ROOTS = ['request.', 'domain_context.', 'answers
 function reusableAgentEntryForChild(
   child: DelegationChildDescriptor,
   availablePrograms: WiringAvailableProgram[],
+  stageTarget: string | undefined,
 ): WiringAvailableProgram | undefined {
-  // Only a target_spec-only child (author declares no synthesize_child) can be
-  // wired to an already-registered agent; a synthesize_child demand is the
-  // research path handled above.
-  const requestedTarget = child.target_spec?.trim();
-  if (!requestedTarget || child.synthesize_child !== undefined) {
+  // Reuse an already-registered document-ingest/review agent when the notebook
+  // names a manifest target either directly on the child or in Q5's per-stage
+  // execution model. This keeps hyphenated manifest slugs external while the
+  // generated child id remains a slug-safe PGAS identifier.
+  const requestedTargets = reusableAgentTargetCandidates(child, stageTarget);
+  if (requestedTargets.length === 0) {
     return undefined;
   }
   return availablePrograms.find((candidate) =>
     REUSABLE_AGENT_PROVIDES.includes(candidate.provides) &&
-    (candidate.target_spec === requestedTarget || candidate.slug === requestedTarget));
+    requestedTargets.some((requestedTarget) =>
+      candidate.target_spec === requestedTarget || candidate.slug === requestedTarget));
+}
+
+function reusableAgentTargetCandidates(child: DelegationChildDescriptor, stageTarget: string | undefined): string[] {
+  const idFallback = child.target_spec === undefined ? [child.id] : [];
+  return unique([
+    child.target_spec,
+    child.target_slug,
+    child.registered_name,
+    stageTarget,
+    ...idFallback,
+  ].flatMap((value) => typeof value === 'string' && value.trim().length > 0 ? [value.trim()] : []));
+}
+
+function delegationTargetForStage(delegation: DelegationDescriptor, stage: string): string | undefined {
+  const descriptor = delegationDescriptorForStage(delegation, stage);
+  if (!descriptor) {
+    return undefined;
+  }
+  return [
+    descriptor.target,
+    descriptor.target_slug,
+    descriptor.program_slug,
+    descriptor.program,
+    descriptor.target_spec,
+    descriptor.slug,
+  ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim();
+}
+
+function delegationDescriptorForStage(
+  delegation: DelegationDescriptor,
+  stage: string,
+): Record<string, unknown> | undefined {
+  const stages = optionalRecord(delegation.stages);
+  const executionModel = optionalRecord(delegation.execution_model);
+  const executionModelStages = optionalRecord(executionModel?.stages);
+  const legacyStage = optionalRecord(delegation[stage]);
+  return optionalRecord(stages?.[stage]) ??
+    optionalRecord(executionModelStages?.[stage]) ??
+    legacyStage;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
 }
 
 function childResultStage(child: DelegationChildDescriptor): 'research' | 'work' {
