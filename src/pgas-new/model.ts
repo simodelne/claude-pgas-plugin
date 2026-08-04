@@ -150,9 +150,15 @@ export interface PgasNewState {
     live_provider_intent: boolean;
     ready_for_live: boolean;
     static_evidence_id?: string;
+    static_verification_status_text?: string;
+    smoke_verification_status_text?: string;
     live_evidence_id?: string;
+    live_verification_status_text?: string;
     generated_live_drive_evidence_id?: string;
+    generated_live_drive_status_text?: string;
     rebase_evidence_id?: string;
+    rebase_status_text?: string;
+    rebase_verification_status_text?: string;
     rebase_static_evidence_id?: string;
   };
   curator_requests: {

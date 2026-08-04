@@ -6,6 +6,8 @@ import { createTestHarness, type TestHarness, type TestHarnessAuthorResponse } f
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { legalActionsForMode } from '../../src/pgas-new/gates.js';
+import { createInitialState, type PgasNewMode, type PgasNewState } from '../../src/pgas-new/model.js';
 import { waitForSnapshot } from './foundry-test-utils.js';
 
 const stages = [
@@ -37,6 +39,12 @@ interface CommandCheck {
 }
 
 const tempRoots: string[] = [];
+const VERBOSE_STATIC_PASS_STATUS = 'passed: npm_typecheck and npm_test completed for document-finalization static verification';
+const VERBOSE_SMOKE_PASS_STATUS = 'passed: generated-program smoke verification completed';
+const VERBOSE_LIVE_DRIVE_PASS_STATUS = 'passed: generated-program live drive completed';
+const VERBOSE_LIVE_PASS_STATUS = 'passed: live-provider verification completed';
+const VERBOSE_REBASE_PASS_STATUS = 'passed: branch rebased cleanly on origin/main';
+const VERBOSE_REBASE_STATIC_PASS_STATUS = 'passed: post-rebase static verification completed';
 
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
@@ -186,7 +194,44 @@ describe('foundry end-to-end acceptance gate', () => {
     }
   }, 600_000);
 
-  it('canonicalizes verification result statuses before downstream graduation gates', async () => {
+  it('canonicalizes verbose static verification status before the smoke verification gate', async () => {
+    const tempRoot = trackedTempRoot('pgas-new-foundry-verbose-static-status-');
+    const targetDir = join(tempRoot, 'incident-triage');
+    const harness = await createHarness(successWithVerboseStaticStatus(targetDir));
+
+    try {
+      const seenModes = [await harness.getMode()];
+
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Create an incident triage PGAS program.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the design path.' });
+      for (let i = 0; i < 7; i += 1) {
+        await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      }
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+        'draft artifact plan before verbose static status regression',
+      );
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (snap) => terminalActionNames(snap.rounds).includes('run_static_verification'),
+        'verbose static verification action recorded',
+      );
+
+      expect(snapshot.domain['graduation.static_verification']).toBe('passed');
+      expect(snapshot.domain['graduation.static_verification_status_text']).toBe(VERBOSE_STATIC_PASS_STATUS);
+      expect(legalActionsForMode(stateFromFlatDomain(snapshot.domain, 'smoke_verify'), 'smoke_verify')).toContain(
+        'run_smoke_verification',
+      );
+    } finally {
+      await harness.close();
+    }
+  }, 600_000);
+
+  it('canonicalizes verbose verification result statuses before downstream graduation gates', async () => {
     const tempRoot = trackedTempRoot('pgas-new-foundry-status-canonical-');
     const targetDir = join(tempRoot, 'incident-triage');
     vi.spyOn(handlers, 'run_smoke_verification').mockResolvedValue({
@@ -199,7 +244,7 @@ describe('foundry end-to-end acceptance gate', () => {
       status: 'passed',
       evidence_id: 'live-synonym',
     });
-    const harness = await createHarness(successWithVerificationStatusSynonyms(targetDir));
+    const harness = await createHarness(successWithVerboseVerificationStatuses(targetDir));
 
     try {
       const seenModes = [await harness.getMode()];
@@ -238,6 +283,12 @@ describe('foundry end-to-end acceptance gate', () => {
       expect(finalSnapshot.domain['graduation.live_verification']).toBe('passed');
       expect(finalSnapshot.domain['graduation.rebase_status']).toBe('passed');
       expect(finalSnapshot.domain['graduation.rebase_verification']).toBe('passed');
+      expect(finalSnapshot.domain['graduation.static_verification_status_text']).toBe(VERBOSE_STATIC_PASS_STATUS);
+      expect(finalSnapshot.domain['graduation.smoke_verification_status_text']).toBe(VERBOSE_SMOKE_PASS_STATUS);
+      expect(finalSnapshot.domain['graduation.generated_live_drive_status_text']).toBe(VERBOSE_LIVE_DRIVE_PASS_STATUS);
+      expect(finalSnapshot.domain['graduation.live_verification_status_text']).toBe(VERBOSE_LIVE_PASS_STATUS);
+      expect(finalSnapshot.domain['graduation.rebase_status_text']).toBe(VERBOSE_REBASE_PASS_STATUS);
+      expect(finalSnapshot.domain['graduation.rebase_verification_status_text']).toBe(VERBOSE_REBASE_STATIC_PASS_STATUS);
     } finally {
       await harness.close();
     }
@@ -333,22 +384,31 @@ function successWithCompositeChecks(targetDir: string): TestHarnessAuthorRespons
   return sequence;
 }
 
-function successWithVerificationStatusSynonyms(targetDir: string): TestHarnessAuthorResponse[] {
+function successWithVerboseStaticStatus(targetDir: string): TestHarnessAuthorResponse[] {
+  const sequence = successAuthorResponses(targetDir);
+  return sequence.map((response) =>
+    firstActionName(response) === 'run_static_verification'
+      ? effect('run_static_verification', { status: VERBOSE_STATIC_PASS_STATUS, evidence_id: 'static-verbose' })
+      : response,
+  );
+}
+
+function successWithVerboseVerificationStatuses(targetDir: string): TestHarnessAuthorResponse[] {
   const sequence = successAuthorResponses(targetDir);
   return sequence.map((response) => {
     switch (firstActionName(response)) {
       case 'run_static_verification':
-        return effect('run_static_verification', { status: 'succeeded', evidence_id: 'static-synonym' });
+        return effect('run_static_verification', { status: VERBOSE_STATIC_PASS_STATUS, evidence_id: 'static-verbose' });
       case 'run_smoke_verification':
-        return effect('run_smoke_verification', { status: 'succeeded', evidence_id: 'smoke-synonym' });
+        return effect('run_smoke_verification', { status: VERBOSE_SMOKE_PASS_STATUS, evidence_id: 'smoke-verbose' });
       case 'run_live_provider_verification':
-        return effect('run_live_provider_verification', { status: 'succeeded', evidence_id: 'live-synonym' });
+        return effect('run_live_provider_verification', { status: VERBOSE_LIVE_PASS_STATUS, evidence_id: 'live-verbose' });
       case 'run_generated_live_drive_verification':
-        return markGeneratedLiveDrivePassed('succeeded', 'live-drive-synonym');
+        return markGeneratedLiveDrivePassed(VERBOSE_LIVE_DRIVE_PASS_STATUS, 'live-drive-verbose');
       case 'git_rebase_latest':
-        return effect('git_rebase_latest', { status: 'succeeded', evidence_id: 'rebase-synonym' });
+        return effect('git_rebase_latest', { status: VERBOSE_REBASE_PASS_STATUS, evidence_id: 'rebase-verbose' });
       case 'run_rebase_static_verification':
-        return effect('run_rebase_static_verification', { status: 'succeeded', evidence_id: 'rebase-static-synonym' });
+        return effect('run_rebase_static_verification', { status: VERBOSE_REBASE_STATIC_PASS_STATUS, evidence_id: 'rebase-static-verbose' });
       default:
         return response;
     }
@@ -492,6 +552,28 @@ function terminal(name: string, payload: Record<string, unknown> = {}): Record<s
       : 'widget_output',
     payload,
   };
+}
+
+function stateFromFlatDomain(domain: Record<string, unknown>, mode: PgasNewMode): PgasNewState {
+  const state = createInitialState();
+  state.session.current_mode = mode;
+  for (const [path, value] of Object.entries(domain)) {
+    setFlatPath(state as unknown as Record<string, unknown>, path, value);
+  }
+  return state;
+}
+
+function setFlatPath(target: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split('.');
+  let cursor = target;
+  for (const part of parts.slice(0, -1)) {
+    const current = cursor[part];
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      cursor[part] = {};
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  cursor[parts[parts.length - 1] ?? path] = value;
 }
 
 function continuationNotice(): Record<string, unknown> {

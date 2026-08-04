@@ -928,7 +928,14 @@ action_map:
   npm_typecheck: { description: "Run typecheck.", mutations: [], channel: widget_output }
   npm_test: { description: "Run tests.", mutations: [], channel: widget_output }
   run_static_verification:
-    description: "Record static verification evidence."
+    description: |
+      Record static verification evidence. Status is stored canonically as
+      passed/failed/skipped; verbose leading forms such as "passed: npm test
+      completed" are accepted and retained separately as status evidence.
+      Ambiguous status text is rejected before leaving static_verify.
+    arg_descriptions:
+      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      evidence_id: 'Stable evidence identifier for the static verification run.'
     mutations:
       - { op: MSet, path: graduation.static_verification, from_arg: status }
       - { op: MSet, path: graduation.static_evidence_id, from_arg: evidence_id }
@@ -950,7 +957,14 @@ action_map:
     mutations: []
     channel: composite_checks_output
   run_smoke_verification:
-    description: "Run deterministic generated-program smoke verification and record evidence."
+    description: |
+      Run deterministic generated-program smoke verification and record evidence.
+      Status is stored canonically as passed/failed/skipped; verbose leading
+      forms are retained separately as status evidence. Ambiguous status text is
+      rejected before leaving smoke_verify.
+    arg_descriptions:
+      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      evidence_id: 'Stable evidence identifier for the smoke verification run.'
     mutations:
       - { op: MSet, path: graduation.smoke_verification, from_arg: status }
       - { op: MSet, path: graduation.smoke_evidence_id, from_arg: evidence_id }
@@ -964,7 +978,14 @@ action_map:
     channel: widget_output
   run_api_blackbox_verification: { description: "Run black-box API verification.", mutations: [], channel: widget_output }
   run_live_provider_verification:
-    description: "Record live provider verification evidence."
+    description: |
+      Record live provider verification evidence. Status is stored canonically as
+      passed/failed/skipped; verbose leading forms are retained separately as
+      status evidence. Ambiguous status text is rejected before leaving
+      live_verify.
+    arg_descriptions:
+      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      evidence_id: 'Stable evidence identifier for the live-provider verification run.'
     mutations:
       - { op: MSet, path: graduation.live_verification, from_arg: status }
       - { op: MSet, path: graduation.live_evidence_id, from_arg: evidence_id }
@@ -980,6 +1001,9 @@ action_map:
       LLM-echoed `status` arg, so a mispredicted arg cannot fake a pass.
       Rides the Sync live_drive_output channel because result_path requires a
       Sync Out channel (ER-2) — same pattern as run_parallel_static_checks.
+    arg_descriptions:
+      status: 'Predicted live-drive result. Handler output is authoritative; verbose passed:/failed: text is canonicalized and retained as status evidence.'
+      evidence_id: 'Stable evidence identifier for the generated live-drive verification run.'
     result_path: graduation.generated_live_drive_report
     mutations:
       - { op: MSet, path: graduation.generated_live_drive, from_arg: status }
@@ -987,7 +1011,14 @@ action_map:
       - { op: MSet, path: graduation.generated_live_drive_recorded, value: true }
     channel: live_drive_output
   git_rebase_latest:
-    description: "Rebase on latest target repo state and record rebase status."
+    description: |
+      Rebase on latest target repo state and record rebase status. A recorded
+      known successful/no-op rebase resolves to passed; verbose passed:/failed:
+      text is retained separately as status evidence. Ambiguous status text is
+      rejected before leaving rebase_verify.
+    arg_descriptions:
+      status: 'Rebase result. Use passed or failed when known; verbose text must begin with passed: or failed: to be retained as status evidence.'
+      evidence_id: 'Stable evidence identifier for the rebase operation.'
     mutations:
       - { op: MSet, path: graduation.rebase_status, from_arg: status }
       - { op: MSet, path: graduation.rebase_evidence_id, from_arg: evidence_id }
@@ -999,6 +1030,12 @@ action_map:
       graduation audit artifact from governed graduation state (#100). The handler
       rewrites the audit markdown's evidence rows to actual statuses/ids so a
       terminal pr_graduation does not ship an audit that still reads "pending".
+      Status is stored canonically as passed/failed/skipped; verbose leading
+      forms are retained separately as status evidence. Ambiguous status text is
+      rejected before leaving rebase_verify.
+    arg_descriptions:
+      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      evidence_id: 'Stable evidence identifier for the post-rebase static verification run.'
     mutations:
       - { op: MSet, path: graduation.rebase_verification, from_arg: status }
       - { op: MSet, path: graduation.rebase_static_evidence_id, from_arg: evidence_id }
@@ -1054,18 +1091,21 @@ reactions:
       - graduation.static_verification_recorded
     write_scope:
       - graduation.static_verification
+      - graduation.static_verification_status_text
   normalize_smoke_verification_status:
     event: AfterMutation
     watch:
       - graduation.smoke_verification_recorded
     write_scope:
       - graduation.smoke_verification
+      - graduation.smoke_verification_status_text
   normalize_live_verification_status:
     event: AfterMutation
     watch:
       - graduation.live_verification_recorded
     write_scope:
       - graduation.live_verification
+      - graduation.live_verification_status_text
   # RC-4 forbids watching the written path itself, so (like the other
   # normalize_* reactions) this watches the recorded flag + the deterministic
   # handler report. Scripted/live writers must set
@@ -1078,18 +1118,21 @@ reactions:
     write_scope:
       - graduation.generated_live_drive
       - graduation.generated_live_drive_evidence_id
+      - graduation.generated_live_drive_status_text
   normalize_rebase_status:
     event: AfterMutation
     watch:
       - graduation.rebase_recorded
     write_scope:
       - graduation.rebase_status
+      - graduation.rebase_status_text
   normalize_rebase_static_verification_status:
     event: AfterMutation
     watch:
       - graduation.rebase_static_verification_recorded
     write_scope:
       - graduation.rebase_verification
+      - graduation.rebase_verification_status_text
 
 schema:
   inputs.user_text: string
@@ -1164,24 +1207,30 @@ schema:
   artifacts.generated_paths: array
   curator_requests.requests: array
   graduation.static_verification: string
+  graduation.static_verification_status_text: string
   graduation.static_verification_recorded: boolean
   graduation.static_evidence_id: string
   graduation.smoke_verification: string
+  graduation.smoke_verification_status_text: string
   graduation.smoke_verification_recorded: boolean
   graduation.smoke_evidence_id: string
   graduation.live_verification: string
+  graduation.live_verification_status_text: string
   graduation.live_verification_recorded: boolean
   graduation.live_provider_intent: boolean
   graduation.ready_for_live: boolean
   graduation.live_evidence_id: string
   graduation.generated_live_drive: string
+  graduation.generated_live_drive_status_text: string
   graduation.generated_live_drive_recorded: boolean
   graduation.generated_live_drive_evidence_id: string
   graduation.generated_live_drive_report: object
   graduation.rebase_status: string
+  graduation.rebase_status_text: string
   graduation.rebase_recorded: boolean
   graduation.rebase_evidence_id: string
   graduation.rebase_verification: string
+  graduation.rebase_verification_status_text: string
   graduation.rebase_static_verification_recorded: boolean
   graduation.rebase_static_evidence_id: string
   graduation.composite_checks: object

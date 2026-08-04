@@ -25,6 +25,10 @@ describe('#107 run_static_verification canonicalizes the reported status', () =>
     return result.status;
   }
 
+  it('rewrites a verbose leading pass sentence to the canonical "passed"', async () => {
+    expect(await staticStatus('passed: npm_typecheck and npm_test completed')).toBe('passed');
+  });
+
   it('rewrites a synonym ("succeeded") to the canonical "passed"', async () => {
     expect(await staticStatus('succeeded')).toBe('passed');
   });
@@ -42,8 +46,67 @@ describe('#107 run_static_verification canonicalizes the reported status', () =>
     expect(await staticStatus('skipped')).toBe('skipped');
   });
 
-  it('leaves an unrecognized status untouched (does not mask as passed)', async () => {
-    expect(await staticStatus('weird-custom')).toBe('weird-custom');
+  it('rejects an unrecognized status instead of masking it as passed', async () => {
+    await expect(staticStatus('weird-custom')).rejects.toThrow(/verification status/i);
+  });
+});
+
+describe('graduation verification status reactions canonicalize verbose status text', () => {
+  const cases = [
+    {
+      reactionName: 'normalize_static_verification_status',
+      statusPath: 'graduation.static_verification',
+      evidencePath: 'graduation.static_verification_status_text',
+      raw: 'passed: npm_typecheck and npm_test completed for document-finalization static verification',
+    },
+    {
+      reactionName: 'normalize_smoke_verification_status',
+      statusPath: 'graduation.smoke_verification',
+      evidencePath: 'graduation.smoke_verification_status_text',
+      raw: 'passed: generated-program smoke test completed',
+    },
+    {
+      reactionName: 'normalize_live_verification_status',
+      statusPath: 'graduation.live_verification',
+      evidencePath: 'graduation.live_verification_status_text',
+      raw: 'passed: live-provider verification completed',
+    },
+    {
+      reactionName: 'normalize_rebase_static_verification_status',
+      statusPath: 'graduation.rebase_verification',
+      evidencePath: 'graduation.rebase_verification_status_text',
+      raw: 'passed: post-rebase static verification completed',
+    },
+  ] as const;
+
+  it.each(cases)('canonicalizes $statusPath and preserves the verbose text as evidence', ({ reactionName, statusPath, evidencePath, raw }) => {
+    const reaction = reactionHandlers.get(reactionName);
+    expect(reaction).toBeTypeOf('function');
+
+    expect(reaction!(new Map<string, unknown>([[statusPath, raw]]), undefined as never, undefined as never)).toEqual({
+      mutations: [
+        { op: 'MSet', path: statusPath, value: 'passed' },
+        { op: 'MSet', path: evidencePath, value: raw },
+      ],
+    });
+  });
+
+  it('canonicalizes recorded rebase status text and preserves the verbose text as evidence', () => {
+    const reaction = reactionHandlers.get('normalize_rebase_status');
+    const raw = 'passed: branch rebased cleanly on origin/main';
+    expect(reaction!(new Map<string, unknown>([['graduation.rebase_status', raw]]), undefined as never, undefined as never)).toEqual({
+      mutations: [
+        { op: 'MSet', path: 'graduation.rebase_status', value: 'passed' },
+        { op: 'MSet', path: 'graduation.rebase_status_text', value: raw },
+      ],
+    });
+  });
+
+  it('rejects ambiguous recorded verification text before the ladder can progress', () => {
+    const reaction = reactionHandlers.get('normalize_static_verification_status');
+    expect(() =>
+      reaction!(new Map<string, unknown>([['graduation.static_verification', 'static checks looked okay']]), undefined as never, undefined as never),
+    ).toThrow(/run_static_verification status must begin with "passed" or "failed"/i);
   });
 });
 
@@ -84,10 +147,11 @@ describe('#106 git_rebase_latest tolerates standalone targets without an origin'
 
 // A recorded rebase means git_rebase_latest succeeded or was a standalone no-op
 // (conflicts throw and never record). The engine model predicts the status arg
-// and, for a standalone target, may report "no-op-standalone"/"skipped" — which
-// must still open the exact-"passed" rebase_verify gate. Regression: a live
-// standalone drive stalled with graduation.rebase_status="no-op-standalone".
-describe('normalize_rebase_status: any recorded non-failure rebase resolves to passed', () => {
+// and, for a standalone target, may report known no-op/clean labels — which must
+// still open the exact-"passed" rebase_verify gate. Ambiguous free text rejects.
+// Regression: a live standalone drive stalled with
+// graduation.rebase_status="no-op-standalone".
+describe('normalize_rebase_status canonicalizes recorded rebase results', () => {
   const reaction = reactionHandlers.get('normalize_rebase_status');
 
   function resolve(status: string): unknown {
@@ -101,15 +165,20 @@ describe('normalize_rebase_status: any recorded non-failure rebase resolves to p
 
   it('maps a model-invented standalone no-op status to passed', () => {
     expect(resolve('no-op-standalone')).toEqual({
-      mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'passed' }],
+      mutations: [
+        { op: 'MSet', path: 'graduation.rebase_status', value: 'passed' },
+        { op: 'MSet', path: 'graduation.rebase_status_text', value: 'no-op-standalone' },
+      ],
     });
   });
 
-  it('maps skipped/other non-failure phrasings to passed', () => {
+  it('maps skipped/known non-failure phrasings to passed', () => {
     for (const status of ['skipped', 'noop', 'not applicable', 'n/a', 'done', 'clean']) {
-      expect(resolve(status)).toEqual({
-        mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'passed' }],
-      });
+      const expectedMutations = [{ op: 'MSet', path: 'graduation.rebase_status', value: 'passed' }];
+      if (['noop', 'not applicable', 'clean'].includes(status)) {
+        expectedMutations.push({ op: 'MSet', path: 'graduation.rebase_status_text', value: status });
+      }
+      expect(resolve(status)).toEqual({ mutations: expectedMutations });
     }
   });
 
@@ -126,5 +195,11 @@ describe('normalize_rebase_status: any recorded non-failure rebase resolves to p
     expect(resolve('error')).toEqual({
       mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'failed' }],
     });
+  });
+
+  it('rejects ambiguous free-text rebase status before the ladder can progress', () => {
+    expect(() => resolve('branch looked clean after manual review')).toThrow(
+      /git_rebase_latest status must begin with "passed" or "failed"/i,
+    );
   });
 });
