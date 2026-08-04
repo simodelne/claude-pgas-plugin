@@ -192,6 +192,6 @@ Verification tails:
 - `env -u NPM_TOKEN npx vitest run --config tests/vitest.config.ts tests/integration/foundry-end-to-end.test.ts --pool=threads --maxWorkers=1` -> 1 file passed, 4 tests passed.
 - Direct generated default scaffold smoke in `/tmp/pgas-new-default-green-EMjW5X`: typecheck passed; `npm test` passed with 5 files, 6 tests passed, 1 skipped.
 - Direct generated synthesized scaffold smoke in `/tmp/pgas-new-synth-green-ojzMpd`: typecheck passed; `npm test` passed with 6 files, 7 tests passed, 1 skipped.
-- Legal-opinion no-steer drive command completed with `ok: true`, `final_mode: complete`, `terminal: true`, `status: Completed`, `rounds: 109`, `triggers: 100`, `decisions_sent: 93`, `accepted_count: 93`, `items_seen: 93`, `failed_gates: 0`, `section_count: 93`, `provider_exchange_count: 118`.
+- Legal-opinion no-steer drive command completed with `ok: true`, `final_mode: complete`, `terminal: true`, `status: Completed`, `rounds: 109`, `triggers: 100`, `decisions_sent: 93`, `accepted_count: 93`, `items_seen: 93`, `failed_gates: 0`, `fallback_actions: 0`, `section_count: 93`, `provider_exchange_count: 118`; current-run log scan found `status=400: 0`, `SYSTEM_PROVIDER_REQUEST: 0`, and `OpenAI-compatible request rejected: 0`.
 
 Verdict: generated-scaffold acceptance and legal-opinion no-steer are green on engine 3.26.0 after scaffold adaptation. No real 3.26 engine regression was identified among the three CI failures.
