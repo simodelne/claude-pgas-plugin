@@ -63,7 +63,7 @@ describe('foundry intake tool-call protocol guidance', () => {
 
   it('uses native tool_calls schemas without leaking from_arg into the prompt', async () => {
     const captured: {
-      prompt?: string;
+      prompts: string[];
       toolNames: string[];
       targetTool?: Record<string, unknown>;
       questionTool?: Record<string, unknown>;
@@ -72,31 +72,58 @@ describe('foundry intake tool-call protocol guidance', () => {
       delegationTool?: Record<string, unknown>;
       completionTool?: Record<string, unknown>;
     } = {
+      prompts: [],
       toolNames: [],
     };
     const server = await createUnifiedServer(async (messages, tools) => {
-      captured.prompt = messages.map((message) => message.content ?? '').join('\n');
-      captured.toolNames = tools.map((tool) => tool.function.name);
-      captured.targetTool = tools.find((tool) => tool.function.name === 'record_program_target')?.function.parameters;
-      captured.questionTool = tools.find((tool) => tool.function.name === 'ask_design_question')?.function.parameters;
-      captured.stagesTool = tools.find((tool) => tool.function.name === 'record_q3_stages')?.function.parameters;
-      captured.transitionsTool = tools.find((tool) => tool.function.name === 'record_q4_transitions')?.function.parameters;
-      captured.delegationTool = tools.find((tool) => tool.function.name === 'record_q5_delegation')?.function.parameters;
-      captured.completionTool = tools.find((tool) => tool.function.name === 'record_q6_completion')?.function.parameters;
+      captured.prompts.push(messages.map((message) => message.content ?? '').join('\n'));
+      for (const tool of tools) {
+        if (!captured.toolNames.includes(tool.function.name)) {
+          captured.toolNames.push(tool.function.name);
+        }
+      }
+      captured.targetTool ??= tools.find((tool) => tool.function.name === 'record_program_target')?.function.parameters;
+      captured.questionTool ??= tools.find((tool) => tool.function.name === 'ask_design_question')?.function.parameters;
+      captured.stagesTool ??= tools.find((tool) => tool.function.name === 'record_q3_stages')?.function.parameters;
+      captured.transitionsTool ??= tools.find((tool) => tool.function.name === 'record_q4_transitions')?.function.parameters;
+      captured.delegationTool ??= tools.find((tool) => tool.function.name === 'record_q5_delegation')?.function.parameters;
+      captured.completionTool ??= tools.find((tool) => tool.function.name === 'record_q6_completion')?.function.parameters;
 
-      return {
-        tool_calls: [{
-          id: 'call_target',
-          function: {
-            name: 'record_program_target',
-            arguments: JSON.stringify({
-              slug: 'native-target',
-              name: 'Native Target',
-              target_dir: '/tmp/native-target',
-            }),
-          },
-        }],
-      };
+      if (tools.some((tool) => tool.function.name === 'record_program_target')) {
+        return toolCall('record_program_target', {
+          slug: 'native-target',
+          name: 'Native Target',
+          target_dir: '/tmp/native-target',
+        });
+      }
+      if (tools.some((tool) => tool.function.name === 'choose_design_path')) {
+        return toolCall('choose_design_path', { choice: 'design' });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q1_purpose')) {
+        return toolCall('record_q1_purpose', { purpose: 'Build a native-target PGAS program.' });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q2_entry_channel')) {
+        return toolCall('record_q2_entry_channel', { entry_channel: 'user_text' });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q3_stages')) {
+        return toolCall('record_q3_stages', {
+          stages_json: '[{"slug":"intake","is_bootstrap":true},{"slug":"analysis"},{"slug":"complete","is_terminal":true}]',
+        });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q4_transitions')) {
+        return toolCall('record_q4_transitions', {
+          transitions_json: '[{"from":"intake","to":"analysis","guard_field":"intake.ready"}]',
+        });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q5_delegation')) {
+        return toolCall('record_q5_delegation', { delegation_json: '{}' });
+      }
+      if (tools.some((tool) => tool.function.name === 'record_q6_completion')) {
+        return toolCall('record_q6_completion', {
+          completion_json: '{"final_stage":"complete","guard_field":"analysis.done"}',
+        });
+      }
+      return toolCall('record_user_note', { note: 'No intake capture tool was available.' });
     });
 
     try {
@@ -104,16 +131,22 @@ describe('foundry intake tool-call protocol guidance', () => {
         method: 'POST',
         body: JSON.stringify({ program: 'pgas-new' }),
       });
-      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'user_text',
-          payload: 'Create a PGAS program named Native Target in /tmp/native-target.',
-        }),
-      });
+      for (let round = 0; round < 8 && captured.completionTool === undefined; round += 1) {
+        await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+          method: 'POST',
+          body: JSON.stringify({
+            channel: 'user_text',
+            payload: round === 0
+              ? 'Create a PGAS program named Native Target in /tmp/native-target. Use the design interview path.'
+              : 'Continue the design interview.',
+          }),
+        });
+      }
       const world = await fetchJson<{ domain: Record<string, unknown> }>(server, `/sessions/${created.sessionId}/world`);
 
-      expect(captured.prompt).not.toContain('from_arg');
+      for (const prompt of captured.prompts) {
+        expect(prompt).not.toContain('from_arg');
+      }
       expect(captured.toolNames).toContain('record_program_target');
       expect(captured.toolNames).toContain('ask_design_question');
       expect(captured.questionTool).toMatchObject({
