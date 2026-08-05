@@ -64,6 +64,15 @@ const VERIFICATION_COMMAND_IDS = new Set<SemanticCommandId>([
   'runGeneratedStaticTests',
   'runGeneratedSmokeTest',
 ]);
+const GENERATED_SMOKE_VITEST_ARGS = [
+  '--no-install',
+  'vitest',
+  'run',
+  'tests/generated-program-smoke.test.ts',
+  'tests/*-deterministic.test.ts',
+  '--pool=threads',
+  '--maxWorkers=1',
+];
 
 export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown as SpawnImpl): CommandRunner {
   return {
@@ -73,7 +82,7 @@ export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown 
     runGeneratedStaticTests: (request) =>
       runSemanticCommand('runGeneratedStaticTests', request, { command: 'npm', args: ['run', 'test:static'] }, spawnImpl),
     runGeneratedSmokeTest: (request) =>
-      runSemanticCommand('runGeneratedSmokeTest', request, { command: 'npm', args: ['test', '--', 'tests/generated-program-smoke.test.ts'] }, spawnImpl),
+      runSemanticCommand('runGeneratedSmokeTest', request, { command: 'npx', args: GENERATED_SMOKE_VITEST_ARGS }, spawnImpl),
     gitStatus: (request) => runSemanticCommand('gitStatus', request, { command: 'git', args: ['status', '--short'] }, spawnImpl),
     gitRebaseLatest: (request) => {
       const branch = request.branch ?? 'main';

@@ -6304,6 +6304,15 @@ function renderSmokeTestSource(
   if (documents && documentFanOutSmokeChild) {
     return renderDocumentFanOutDelegationSmokeTestSource(slug, name, entryChannel, documents, documentFanOutSmokeChild, transitionActions);
   }
+  const documentIngestReuseSmokeChild = documents
+    ? delegationChildren.find((child) =>
+      isDocumentIngestUploadDelegationChild(child, documents) &&
+      child.target_spec !== undefined &&
+      child.registered_name !== undefined)
+    : undefined;
+  if (documents && documentIngestReuseSmokeChild) {
+    return renderDocumentUploadReuseDelegationSmokeTestSource(slug, name, entryChannel, documents, documentIngestReuseSmokeChild, transitionActions);
+  }
   if (documents) {
     return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions);
   }
@@ -6677,6 +6686,397 @@ function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
       }
       if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
         throw new Error(\`expected generated document fan-out prompt to include \${response.expectPromptIncludes}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: string): ScriptedAuthorResponse {
+  return { response, ...(expectPromptIncludes ? { expectPromptIncludes } : {}) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+`;
+}
+
+function renderDocumentUploadReuseDelegationSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  documents: DocumentsDescriptor,
+  child: DelegationChildDescriptor,
+  transitionActions: TransitionAction[],
+): string {
+  const parentPascal = toPascalCase(slug);
+  const childTargetSpec = delegationTargetSpec(child);
+  const childRegistryName = child.registered_name ?? child.target_slug ?? childTargetSpec;
+  const transitionAction = transitionActions.find((action) => action.source === documents.stage);
+  const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(documents.stage)}`;
+  const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
+  const transitionPayload = smokeTransitionActionUsesWidgetOutput(transitionAction)
+    ? `{
+          result_json: JSON.stringify({ document_ingest_settled: true }),
+          items_json: JSON.stringify(['document-ingest-settled']),
+        }`
+    : `{ __stage_runtime: { now_iso: '2026-07-16T00:00:00.000Z', random: 0.25 } }`;
+  const expectedPostIngestMode = transitionAction?.target ?? documents.stage;
+  const resultPath = documents.result_path;
+  const readyPath = documentsSourceReadyPath(documents);
+  const base = delegationStateBase(child);
+  const delegationResultPath = child.result_path;
+  const childSpecYaml = `name: ${JSON.stringify(childTargetSpec)}
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+
+preamble: |
+  Inline document-ingest manifest-reuse smoke child for ${name}.
+
+initial: receive
+terminal: [complete]
+
+features:
+  - base
+
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
+
+modes:
+  receive:
+    vocabulary: [accept_request]
+    channels: [user_text, child_output]
+    transitions:
+      - target: work
+        guard: { kind: FieldTruthy, path: child.received }
+  work:
+    vocabulary: [finish_work]
+    channels: [user_text, child_output]
+    transitions:
+      - target: complete
+        guard: { kind: FieldTruthy, path: work.done }
+  complete:
+    vocabulary: []
+    channels: [child_output]
+
+proceed_to:
+  accept_request: work
+  finish_work: complete
+
+projection:
+  receive:
+    include: [inputs.request, inputs.domain_context]
+    exclude: []
+  work:
+    include: [inputs.request, child.received, work.summary, work.structured_data]
+    exclude: []
+  complete:
+    include: [inputs.request, child.received, work.done, work.summary, work.structured_data]
+    exclude: []
+
+prompts:
+  receive: "Accept the delegated document-ingest request."
+  work: "Finish document ingest and return summary plus sections."
+  complete: "Terminal."
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  accept_request:
+    description: "Record that the delegated document-ingest request was received."
+    mutations:
+      - { op: MSet, path: child.received, value: true }
+    channel: child_output
+  finish_work:
+    description: "Complete delegated document ingest."
+    mutations:
+      - { op: MSet, path: work.done, value: true }
+      - { op: MSet, path: work.summary, from_arg: summary }
+      - { op: MSet, path: work.structured_data, from_arg: structured_data }
+      - { op: MSet, path: work.seeded_topic, from_arg: seeded_topic }
+    channel: child_output
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.domain_context: object
+  child.received: boolean
+  work.done: boolean
+  work.summary: string
+  work.structured_data: object
+  work.seeded_topic: string
+
+repair_bound: 2
+
+fallback:
+  channel: child_output
+  payload: { ok: false }
+`;
+  return `import { File } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import {
+  createProgramAdapters,
+  loadSpecWithPatterns,
+  type ProgramEntry,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
+import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+describe('generated document upload plus manifest reuse delegation smoke', () => {
+  it('runs required upload and reused document-ingest delegation through the route for ${name}', async () => {
+    const sentinel = \`PGAS-UPLOAD-SENTINEL-\${randomUUID()}\`;
+    const content = [
+      'Generated route-level upload smoke fixture.',
+      sentinel,
+      'ASCII payload keeps byte length equal to character count for exact assertions.',
+    ].join('\\n');
+    const result = await runUploadDelegationScenario([
+      scripted(effect('begin_work', {})),
+      scripted(effect('${DOCUMENT_REQUEST_ACTION}', {})),
+      scripted(effect('${DOCUMENT_INGEST_ACTION}', {}, 'stage_output')),
+      scripted(effect(${tsString(delegationRequestActionName(child))}, {}, ${tsString(delegationChannelName(child))})),
+      scripted(effect('accept_request', { accepted: true }, 'child_output')),
+      scripted(effect('finish_work', {
+        summary: 'complete document ingest',
+        structured_data: {
+          summary: 'complete document ingest',
+          sections: [{
+            id: 'sec-1',
+            heading: 'Uploaded Source',
+            status: 'ready',
+            text: content,
+          }],
+        },
+        seeded_topic: content,
+      }, 'child_output')),
+      scripted(effect(${tsString(transitionActionName)}, ${transitionPayload}, ${tsString(transitionChannel)})),
+    ], async ({ client, sessionId }) => {
+      const upload = await uploadText(client, sessionId, 'source.txt', content);
+      const [fileRef] = refsFromUpload(upload);
+      expect(fileRef).toBeDefined();
+      await client.sessions.trigger(sessionId, {
+        channel: '${DOCUMENT_UPLOAD_CHANNEL}',
+        payload: { ['${DOCUMENT_INTAKE_ROOT}.file_refs']: [{ fileId: fileRef.fileId, name: fileRef.name }] },
+      });
+      return { fileRef, content, sentinel };
+    });
+
+    expect(result.upload?.fileRef.fileId).toEqual(expect.any(String));
+    expect(documentRefLanded(result.afterUpload.domain, String(result.upload?.fileRef.fileId))).toBe(true);
+    const source = resultAt(result.final.domain, ${tsString(resultPath)});
+    expect(source.status).toBe('extracted');
+    expect(source.full_text).toBe(result.upload?.content);
+    expect(String(source.full_text)).toContain(result.upload?.sentinel);
+    expect(source.char_count).toBe(result.upload?.content.length);
+    expect(source.file_count).toBe(1);
+    expect(result.final.domain[${tsString(readyPath)}]).toBe(true);
+    const delegationResult = resultAt(result.final.domain, ${tsString(delegationResultPath)});
+    expect(delegationResult.status, JSON.stringify(result.final.domain)).toBe('complete');
+    expect(delegationResult.summary).toBe('complete document ingest');
+    expect(result.final.domain[${tsString(`${base}.settled`)}]).toBe(true);
+    expect(result.final.domain[${tsString(`${base}.degraded`)}]).toBe(false);
+    expect(firstDefined(source.summary, result.final.domain[${tsString(`${resultPath}.summary`)}])).toBe('complete document ingest');
+    expect(firstDefined(nestedValue(source, 'sections.sec-1.text'), result.final.domain[${tsString(`${resultPath}.sections.sec-1.text`)}])).toBe(result.upload?.content);
+    expect(result.final.mode).toBe(${tsString(expectedPostIngestMode)});
+  });
+});
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+  awaiting?: Record<string, unknown>;
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+  expectPromptIncludes?: string;
+}
+
+interface UploadEvidence {
+  fileRef: Record<string, unknown>;
+  content: string;
+  sentinel: string;
+}
+
+async function runUploadDelegationScenario(
+  script: ScriptedAuthorResponse[],
+  act: (ctx: { client: PgasClient; sessionId: string }) => Promise<UploadEvidence | void>,
+): Promise<{ afterRequest: Snapshot; afterUpload: Snapshot; final: Snapshot; upload?: UploadEvidence }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-upload-reuse-delegation-smoke-'));
+  const server = await createPgasServer({
+    programs: [
+      { name: ${tsString(slug)}, entry: create${parentPascal}ProgramEntry() },
+      { name: ${tsString(childRegistryName)}, entry: createDocumentIngestStubChildEntry(tempDir) },
+    ],
+    drivers: {
+      authorHandle: scriptedAuthor(script),
+      observerHandle: {
+        modelId: 'generated-upload-reuse-delegation-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    storage: { uploadsDir: join(tempDir, 'uploads') },
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated upload reuse delegation smoke' });
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'request generated document upload' });
+    const afterRequest = await readSnapshot(client, sessionId);
+    expect(afterRequest.mode).toBe(${tsString(documents.stage)});
+    expect(afterRequest.awaiting?.channelId).toBe('${DOCUMENT_UPLOAD_CHANNEL}');
+    const upload = await act({ client, sessionId }) ?? undefined;
+    const afterUpload = await readSnapshot(client, sessionId);
+    let final = afterUpload;
+    for (let attempt = 0; attempt < 8 && final.mode !== ${tsString(expectedPostIngestMode)}; attempt += 1) {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated upload reuse delegation smoke \${String(attempt + 1)}\` });
+      final = await readSnapshot(client, sessionId);
+    }
+    return { afterRequest, afterUpload, final, ...(upload ? { upload } : {}) };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function uploadText(client: PgasClient, sessionId: string, name: string, content: string): Promise<unknown> {
+  const form = new FormData();
+  const file = new File([content], name, { type: 'text/plain' });
+  form.append('files', file as unknown as Blob, file.name);
+  return client.files.upload(sessionId, form);
+}
+
+function refsFromUpload(response: unknown): Array<Record<string, unknown>> {
+  if (isRecord(response) && Array.isArray(response.files)) {
+    return response.files.filter(isRecord);
+  }
+  return [];
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+    awaiting: isRecord(state?.awaitingUserDecision) ? state.awaitingUserDecision : undefined,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (isRecord(direct)) {
+    return direct;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function documentRefLanded(domain: Record<string, unknown>, fileId: string): boolean {
+  const refs = domain['${DOCUMENT_INTAKE_ROOT}.file_refs'];
+  if (Array.isArray(refs) && refs.some((ref) => isRecord(ref) && ref.fileId === fileId)) {
+    return true;
+  }
+  if (domain['${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId'] === fileId) {
+    return true;
+  }
+  const first = domain['${DOCUMENT_INTAKE_ROOT}.file_refs.0'];
+  return isRecord(first) && first.fileId === fileId;
+}
+
+function createDocumentIngestStubChildEntry(tempDir: string): ProgramEntry {
+  const specPath = join(tempDir, 'document-ingest-stub-specs.yml');
+  writeFileSync(specPath, documentIngestStubChildSpec(), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  return {
+    spec,
+    delegationResultPolicy: {
+      fields: [
+        { path: 'work.summary', key: 'summary' },
+        { path: 'work.structured_data', key: 'structured_data' },
+        { path: 'work.seeded_topic', key: 'seeded_topic' },
+      ],
+    },
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, documentIngestStubHandlers),
+  };
+}
+
+const documentIngestStubHandlers: Record<string, ToolHandler> = {
+  async accept_request(payload) {
+    return { ok: true, action: 'accept_request', payload };
+  },
+  async finish_work(payload) {
+    return { ok: true, action: 'finish_work', payload };
+  },
+};
+
+function documentIngestStubChildSpec(): string {
+  return ${JSON.stringify(childSpecYaml)};
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function firstDefined(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined);
+}
+
+function nestedValue(record: Record<string, unknown>, path: string): unknown {
+  let current: unknown = record;
+  for (const part of path.split('.')) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-upload-reuse-delegation-smoke-author',
+    async complete(prompt: string) {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated upload reuse delegation smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
+        throw new Error(\`expected generated upload reuse delegation prompt to include \${response.expectPromptIncludes}\`);
       }
       return JSON.stringify(response.response);
     },

@@ -350,6 +350,25 @@ describe('verification handlers', () => {
     expect(spawnMock).toHaveBeenCalledWith('npm', ['test', '--', 'tests/api-blackbox.test.ts'], expect.any(Object));
   });
 
+  it('runs generated Vitest smoke files directly and records a failed smoke gate on nonzero exit', async () => {
+    spawnMock.mockImplementationOnce(() => fakeChild({
+      code: 1,
+      stderr: 'AssertionError: expected ingest to be finalization_hub\n',
+    }));
+
+    await expect(handlers.run_smoke_verification(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+      kind: 'smoke_verification',
+      command: 'npx --no-install vitest run tests/generated-program-smoke.test.ts tests/*-deterministic.test.ts --pool=threads --maxWorkers=1',
+      status: 'failed',
+      reason: expect.stringContaining('expected ingest to be finalization_hub'),
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'npx',
+      ['--no-install', 'vitest', 'run', 'tests/generated-program-smoke.test.ts', 'tests/*-deterministic.test.ts', '--pool=threads', '--maxWorkers=1'],
+      expect.objectContaining({ cwd: '/tmp/out' }),
+    );
+  });
+
   it('skips live provider verification when provider URL is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
 
@@ -396,6 +415,89 @@ describe('verification handlers', () => {
       }));
     } finally {
       restoreEnv('PGAS_OPENAI_BASE_URL', previousBaseUrl);
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
+
+  it('uses a reused child target_slug for live-drive child program import instead of display target_spec', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce({
+      ...successfulLiveDrive(),
+      delegation: {
+        child_program: 'document-ingest',
+        result_status: 'complete',
+        child_session_id: 'child-session-1',
+        child_rounds: 2,
+        optional: true,
+        settled: true,
+        degraded: false,
+        degrade_reason: '',
+        exported_fields: {},
+      },
+      delegation_verdict: {
+        delegation_engaged: true,
+        result_complete: true,
+        child_session_distinct: true,
+        child_rounds_ok: true,
+        settled: true,
+        parent_complete: true,
+        provider_hits_ok: true,
+        no_stub_markers: true,
+        notes: [],
+      },
+      delegation_engaged: true,
+      upload: {
+        source_status: 'extracted',
+        char_count: 100,
+        expected_char_count: 100,
+        source_ready: true,
+        full_text_excerpt: 'uploaded document text',
+        sentinel_present: true,
+        uploaded_file_id: 'file-1',
+        refs_landed: true,
+        upload_accepted: true,
+      },
+      upload_verdict: {
+        upload_engaged: true,
+        upload_accepted: true,
+        refs_landed: true,
+        content_extracted: true,
+        sentinel_present: true,
+        extraction_exact: true,
+        source_ready: true,
+        parent_complete: true,
+        provider_hits_ok: true,
+        no_stub_markers: true,
+        notes: [],
+      },
+      upload_engaged: true,
+    });
+
+    try {
+      await expect(
+        handlers.run_generated_live_drive_verification!(payload({
+          cwd: '/tmp/out',
+          domain: reusedDocumentIngestDelegationDomain(),
+        })),
+      ).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'passed',
+      });
+
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        delegationScript: expect.objectContaining({
+          stage: 'ingest',
+          childProgram: 'document-ingest',
+        }),
+      }));
+      expect(driveGeneratedProgramLiveMock).not.toHaveBeenCalledWith(expect.objectContaining({
+        delegationScript: expect.objectContaining({
+          childProgram: 'SimoneOS Document Ingest',
+        }),
+      }));
+    } finally {
       restoreEnv('PGAS_OPENAI_MODEL', previousModel);
     }
   });
@@ -914,6 +1016,41 @@ function delegationDomain(): Record<string, unknown> {
         round_timeout_ms: 5000,
         optional: true,
       }],
+    }),
+  };
+}
+
+function reusedDocumentIngestDelegationDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'document-finalization',
+    'intake.purpose': 'Upload a document, route ingestion through the manifest-reused document-ingest child, then enter a hub.',
+    'intake.entry_channel': 'user_text',
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'finalization_hub.finalize_requested',
+    }),
+    'intake.delegation_json': JSON.stringify({
+      children: [{
+        id: 'document_ingest',
+        stage: 'ingest',
+        target_spec: 'SimoneOS Document Ingest',
+        registered_name: 'document-ingest',
+        target_slug: 'document-ingest',
+        payload_map: {
+          'request.documents': 'work.document.documents',
+        },
+        result_path: 'ingest.delegation.document_ingest.result',
+        optional: true,
+      }],
+    }),
+    'intake.documents_json': JSON.stringify({
+      version: 1,
+      stage: 'ingest',
+      upload_types: ['text/plain', 'text/markdown'],
+      extraction: 'self_contained',
+      target: { root: 'work.document' },
+      required: true,
+      fidelity_floor: { min_chars: 40 },
     }),
   };
 }
