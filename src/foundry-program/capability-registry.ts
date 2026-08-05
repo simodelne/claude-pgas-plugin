@@ -74,6 +74,13 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     gap_note: 'browser navigation permanently host-side; foundry ships contract + mock + spec/connector guards only',
   },
   {
+    capability: 'cross_session_persistence',
+    status: 'scaffolds_with_gap',
+    evidence: capabilityEvidence(['typed PersistenceHostConnector + in-memory dedupe/upsert mock; real DB / CRM store is host-side']),
+    since_version: '3.26.0',
+    gap_note: 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)',
+  },
+  {
     capability: 'collection_lifecycle_aggregate',
     status: 'synthesizes',
     evidence: 'collection_lifecycle synthesis emits per-status transitions + an all-terminal aggregate gate (Gap 2).',
@@ -290,6 +297,11 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
     capability: 'web_navigation_guarded',
     pattern: /\b(?:web[_ -]?navigation|guarded browser navigation|navigat\w*|crawl\w*|scrap\w*|brows\w*|websites?|social (?:profiles?|pages?|sources?))\b/i,
     label: 'guarded web navigation',
+  },
+  {
+    capability: 'cross_session_persistence',
+    pattern: /\b(?:cross[- ]session(?:al)? (?:persistence|store|database|crm)|(?:persist|persists|persisted|persisting|persistence)\w*[^.]{0,55}\b(?:across sessions|cross[- ]session|leads?|contacts?|crm|database|store)\b|(?:upsert|dedupe)\w*[^.]{0,55}\b(?:leads?|contacts?|records?|crm|database|store)\b|(?:leads?|contacts?)[^.]{0,55}\b(?:persist|upsert|dedupe|across sessions|cross[- ]session|crm store|database store)\b|crm store|database store)\b/i,
+    label: 'cross-session persistence',
   },
   {
     capability: 'delegation_child_session',
