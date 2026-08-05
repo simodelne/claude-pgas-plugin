@@ -209,6 +209,10 @@ const DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT = {
   max_concurrency: 1,
 } as const;
 
+const LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH = 'work.config.sources';
+const LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH = 'work.current_source';
+const LEAD_RESEARCH_SOURCE_FAN_OUT_RESULTS_PATH = 'work.aggregate.per_source';
+
 const FORBIDDEN_LEAD_RESEARCH_WEB_IO_NAMES = [
   'checkout',
   'payment',
@@ -312,7 +316,7 @@ export function synthesizeProgramSpecFromDomain(
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
   const hasConversationalHub = stageClassification.some((stage) => stage.archetype === 'conversational-hub');
-  stages = bindWebNavigationGuardContextToStages(stages, stageClassificationBySlug, domain, purpose);
+  stages = bindWebNavigationGuardContextToStages(stages, stageClassificationBySlug, domain, purpose, delegationChildren);
   if (confirmationLoops.length > 0) {
     assertConfirmationLoopDescriptors(confirmationLoops, collectionLifecycle, stages, stageClassificationBySlug);
     completion = {
@@ -604,6 +608,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsActions(actionMap, documents);
   applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
+  applySourceConfigFanOutInitialization(actionMap, delegationChildren, domain);
   applyEngineNotebookActions(actionMap);
   applySessionControlActionDescriptions(actionMap);
   applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource, documents);
@@ -1321,6 +1326,30 @@ function applyDelegationSchema(
         schema[`${fanOut.result_path}.*.${field}`] = type;
       }
     }
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
+    if (sourceFanOut) {
+      const indexPath = sourceFanOut.index_path ?? `${child.stage}.fan_out.index`;
+      schema[indexPath] = 'number';
+      schema[sourceFanOut.completion_guard] = 'boolean';
+      schema[LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH] = 'array';
+      schema[`${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.*`] = 'object';
+      schema[`${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.*.url`] = 'string';
+      schema[`${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.*.allowed_domains`] = 'array';
+      schema[sourceFanOut.current_document] = 'object';
+      schema[`${sourceFanOut.current_document}.url`] = 'string';
+      schema[`${sourceFanOut.current_document}.allowed_domains`] = 'array';
+      schema[`${sourceFanOut.current_document}.source_index`] = 'number';
+      schema[sourceFanOut.result_path] = 'array';
+      schema[`${sourceFanOut.result_path}.*`] = 'object';
+      schema[`${sourceFanOut.result_path}.*.source`] = 'string';
+      schema[`${sourceFanOut.result_path}.*.source_index`] = 'number';
+      schema[`${sourceFanOut.result_path}.*.status`] = 'string';
+      schema[`${sourceFanOut.result_path}.*.items`] = 'array';
+      schema[`${sourceFanOut.result_path}.*.pages_visited`] = 'number';
+      schema[`${sourceFanOut.result_path}.*.audit`] = 'array';
+      schema[`${sourceFanOut.result_path}.*.degraded`] = 'boolean';
+      schema[`${sourceFanOut.result_path}.*.reason`] = 'string';
+    }
   }
   // Base paths for the `system_query_result` continuation payload. The skeleton
   // declares sub-paths (inputs.query_meta.*, inputs.query_result.*); the ingestion
@@ -1388,6 +1417,35 @@ function applyDelegationActions(
   }
 }
 
+function applySourceConfigFanOutInitialization(
+  actionMap: MutableRecord,
+  children: DelegationChildDescriptor[],
+  domain: Record<string, unknown>,
+): void {
+  if (!children.some(childHasSourceConfigFanOut)) {
+    return;
+  }
+  const beginWork = actionMap.begin_work;
+  if (!beginWork || typeof beginWork !== 'object' || Array.isArray(beginWork)) {
+    return;
+  }
+  const beginWorkAction = beginWork as MutableRecord;
+  const mutations = Array.isArray(beginWorkAction.mutations)
+    ? beginWorkAction.mutations as MutableRecord[]
+    : [];
+  const sources = webNavigationSourcesForDomain(domain).map((source, index) => ({
+    ...source,
+    source_index: index,
+  }));
+  for (const [index, source] of sources.entries()) {
+    const path = `${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.${String(index)}`;
+    if (!mutations.some((mutation) => mutation.path === path)) {
+      mutations.push({ op: 'MSet', path, value: source });
+    }
+  }
+  beginWorkAction.mutations = mutations;
+}
+
 function applyDelegationActionPreconditions(
   modes: MutableRecord,
   children: DelegationChildDescriptor[],
@@ -1396,7 +1454,7 @@ function applyDelegationActionPreconditions(
 ): void {
   for (const child of children) {
     const mode = recordField(modes, child.stage);
-    const fanOut = documentFanOutDescriptor(child, documents);
+    const fanOut = delegationFanOutDescriptor(child, documents);
     if (!isAdHocDelegationChild(child)) {
       appendModePrecondition(
         mode,
@@ -1470,6 +1528,29 @@ function applyDelegationReactions(
       };
       continue;
     }
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
+    if (sourceFanOut) {
+      const base = delegationStateBase(child);
+      reactions[sourceConfigFanOutAdvanceReactionName(child)] = {
+        event: 'AfterRound',
+        watch: [],
+        write_scope: [
+          sourceFanOut.source,
+          sourceFanOut.index_path ?? `${child.stage}.fan_out.index`,
+          sourceFanOut.completion_guard,
+          `${sourceFanOut.result_path}.*`,
+          `${base}.settled`,
+          `${base}.degraded`,
+          `${base}.degrade_reason`,
+          `${base}.requested`,
+          sourceFanOut.current_document,
+          `${sourceFanOut.current_document}.url`,
+          `${sourceFanOut.current_document}.allowed_domains`,
+          `${sourceFanOut.current_document}.source_index`,
+        ],
+      };
+      continue;
+    }
     const base = delegationStateBase(child);
     const harvestScope = documents && isDocumentIngestUploadDelegationChild(child, documents)
       ? documentIngestHarvestWriteScope(documents)
@@ -1536,8 +1617,9 @@ function applyDelegationProjection(
   for (const child of children) {
     const hostIndex = modeNames.indexOf(child.stage);
     const fanOut = documentFanOutDescriptor(child, documents);
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
     const resultPaths = delegationResultProjectionPaths(child);
-    const fanOutPaths = documentFanOutProjectionPaths(child, documents);
+    const fanOutPaths = delegationFanOutProjectionPaths(child, documents);
     const hostPaths = [
       ...resultPaths,
       ...fanOutPaths,
@@ -1551,11 +1633,12 @@ function applyDelegationProjection(
     if (!Array.isArray(hostProjection.exclude)) {
       hostProjection.exclude = [];
     }
-    const downstreamDelegationPaths = fanOut ? [] : resultPaths;
+    const downstreamDelegationPaths = fanOut || sourceFanOut ? [] : resultPaths;
+    const downstreamFanOutPaths = sourceFanOut ? sourceConfigFanOutProjectionPaths(child) : [];
     for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
       const downstreamProjection = recordField(projection, modeName);
       const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
-      downstreamProjection.include = unique([...include, ...downstreamDelegationPaths]);
+      downstreamProjection.include = unique([...include, ...downstreamDelegationPaths, ...downstreamFanOutPaths]);
       if (!Array.isArray(downstreamProjection.exclude)) {
         downstreamProjection.exclude = [];
       }
@@ -1669,6 +1752,7 @@ function applyDelegationPrompts(
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
     const fanOut = documentFanOutDescriptor(child, documents);
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
     const uploadDocuments = documents && isDocumentIngestUploadDelegationChild(child, documents)
       ? documents
       : undefined;
@@ -1683,6 +1767,8 @@ function applyDelegationPrompts(
     }
     prompts[child.stage] = fanOut
       ? `${existing}${terminalInstruction}\nFor each uploaded document, call ${requestAction} once for ${fanOut.current_document}.${requestShape} The runtime records each child result under ${fanOut.result_path} and advances ${fanOut.current_document}. When ${fanOut.completion_guard} is true, proceed via the normal transition action.`
+      : sourceFanOut
+        ? `${existing}${terminalInstruction}\nFor each configured source in ${sourceFanOut.source}, call ${requestAction} once for ${sourceFanOut.current_document}.${requestShape} The runtime records each bounded navigation result under ${sourceFanOut.result_path} and advances ${sourceFanOut.current_document}. When ${sourceFanOut.completion_guard} is true, proceed via the normal transition action.`
       : uploadDocuments
         ? `${existing}${terminalInstruction}\nAfter ${DOCUMENT_INGEST_ACTION} sets ${documentsSourceReadyPath(uploadDocuments)}, call ${requestAction} once with an empty object payload. delegationPolicy.inputEnrichment supplies ${documentsCollectionPath(uploadDocuments)} and ${documentsExtractionContractPath(uploadDocuments)} to the child. When ${delegationStateBase(child)}.settled is true, use the normal transition action; the reaction harvests summary and sections into ${uploadDocuments.result_path}.`
         : isManifestReusedDelegationChild(child)
@@ -1711,6 +1797,7 @@ function applyDelegationGuidance(
   for (const child of children) {
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
     const fanOut = documentFanOutDescriptor(child, documents);
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
     const uploadDocuments = documents && isDocumentIngestUploadDelegationChild(child, documents)
       ? documents
       : undefined;
@@ -1734,6 +1821,11 @@ function applyDelegationGuidance(
         `For ${requestAction}, emit payload: { request: { ... } }; put document_id, document_name, topic, context, and other child request fields inside request, not directly under payload.`,
         `Repeat ${requestAction} on later rounds while ${fanOut.completion_guard} is false; the reaction advances the document cursor after each child result.`,
         `When ${fanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
+        ] : sourceFanOut ? [
+          `Call ${requestAction} once for the projected ${sourceFanOut.current_document}; deterministic payload enrichment supplies only that source slice.`,
+          `For ${requestAction}, emit payload: { request: { ... } }; put source, purpose, guard, and other child request fields inside request, not directly under payload.`,
+          `Repeat ${requestAction} on later rounds while ${sourceFanOut.completion_guard} is false; the reaction advances the source cursor after each bounded navigation result.`,
+          `When ${sourceFanOut.completion_guard} is true, use the stage transition action and do not dispatch another child.`,
         ] : uploadDocuments ? [
           `Call ${requestAction} only after ${DOCUMENT_INGEST_ACTION} has set ${documentsSourceReadyPath(uploadDocuments)}; deterministic payload enrichment supplies ${uploadDocuments.result_path}.documents and ${uploadDocuments.result_path}.extraction_contract.`,
           `Wait until ${delegationStateBase(child)}.settled is true; the settlement reaction harvests the document-ingest result into ${uploadDocuments.result_path}.summary and ${uploadDocuments.result_path}.sections before transition.`,
@@ -2218,7 +2310,7 @@ function documentFanOutDescriptor(
   child: DelegationChildDescriptor,
   documents?: DocumentsDescriptor,
 ): DelegationDocumentFanOutDescriptor | undefined {
-  if (!documents || !child.fan_out) {
+  if (!documents || !child.fan_out || !documentFanOutCandidateSupported(child, documents)) {
     return undefined;
   }
   return {
@@ -2227,12 +2319,35 @@ function documentFanOutDescriptor(
   };
 }
 
+function sourceConfigFanOutDescriptor(
+  child: DelegationChildDescriptor,
+): DelegationDocumentFanOutDescriptor | undefined {
+  if (!child.fan_out || !sourceConfigFanOutCandidateSupported(child)) {
+    return undefined;
+  }
+  return {
+    ...child.fan_out,
+    index_path: child.fan_out.index_path ?? `${child.stage}.fan_out.index`,
+  };
+}
+
+function delegationFanOutDescriptor(
+  child: DelegationChildDescriptor,
+  documents?: DocumentsDescriptor,
+): DelegationDocumentFanOutDescriptor | undefined {
+  return documentFanOutDescriptor(child, documents) ?? sourceConfigFanOutDescriptor(child);
+}
+
 function childHasDocumentFanOut(child: DelegationChildDescriptor, documents?: DocumentsDescriptor): boolean {
   return documentFanOutDescriptor(child, documents) !== undefined;
 }
 
+function childHasSourceConfigFanOut(child: DelegationChildDescriptor): boolean {
+  return sourceConfigFanOutDescriptor(child) !== undefined;
+}
+
 function documentFanOutCandidateSupported(
-  child: Record<string, unknown>,
+  child: { fan_out?: unknown },
   documents?: DocumentsDescriptor,
 ): boolean {
   if (!documents || documents.required !== true || !isRecord(child.fan_out)) {
@@ -2242,6 +2357,17 @@ function documentFanOutCandidateSupported(
     child.fan_out.current_document === documentsCurrentDocumentPath(documents) &&
     typeof child.fan_out.result_path === 'string' &&
     child.fan_out.result_path.length > 0 &&
+    typeof child.fan_out.completion_guard === 'string' &&
+    child.fan_out.completion_guard.length > 0;
+}
+
+function sourceConfigFanOutCandidateSupported(child: { fan_out?: unknown }): boolean {
+  if (!isRecord(child.fan_out)) {
+    return false;
+  }
+  return child.fan_out.source === LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH &&
+    child.fan_out.current_document === LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH &&
+    child.fan_out.result_path === LEAD_RESEARCH_SOURCE_FAN_OUT_RESULTS_PATH &&
     typeof child.fan_out.completion_guard === 'string' &&
     child.fan_out.completion_guard.length > 0;
 }
@@ -2260,6 +2386,36 @@ function documentFanOutProjectionPaths(child: DelegationChildDescriptor, documen
     `${fanOut.result_path}.*.status`,
     `${fanOut.result_path}.*.reason`,
     ...boundedDelegationResultFields(child).map((field) => `${fanOut.result_path}.*.${field}`),
+  ]);
+}
+
+function sourceConfigFanOutProjectionPaths(child: DelegationChildDescriptor): string[] {
+  const fanOut = sourceConfigFanOutDescriptor(child);
+  if (!fanOut) {
+    return [];
+  }
+  return unique([
+    LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH,
+    `${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.*.url`,
+    `${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.*.allowed_domains`,
+    fanOut.current_document,
+    `${fanOut.current_document}.url`,
+    `${fanOut.current_document}.allowed_domains`,
+    fanOut.index_path ?? `${child.stage}.fan_out.index`,
+    fanOut.completion_guard,
+    `${fanOut.result_path}.*.source`,
+    `${fanOut.result_path}.*.source_index`,
+    `${fanOut.result_path}.*.status`,
+    `${fanOut.result_path}.*.pages_visited`,
+    `${fanOut.result_path}.*.items`,
+    `${fanOut.result_path}.*.audit`,
+  ]);
+}
+
+function delegationFanOutProjectionPaths(child: DelegationChildDescriptor, documents?: DocumentsDescriptor): string[] {
+  return unique([
+    ...documentFanOutProjectionPaths(child, documents),
+    ...sourceConfigFanOutProjectionPaths(child),
   ]);
 }
 
@@ -2556,6 +2712,10 @@ function delegationSettleReactionName(child: DelegationChildDescriptor): string 
 
 function documentFanOutAdvanceReactionName(child: DelegationChildDescriptor): string {
   return `advance_${safeIdentifier(child.id)}_document_fan_out`;
+}
+
+function sourceConfigFanOutAdvanceReactionName(child: DelegationChildDescriptor): string {
+  return `advance_${safeIdentifier(child.id)}_source_fan_out`;
 }
 
 function delegationStateBase(child: DelegationChildDescriptor): string {
@@ -3525,6 +3685,7 @@ function bindWebNavigationGuardContextToStages(
   stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
   domain: Record<string, unknown>,
   purpose: string,
+  delegationChildren: readonly DelegationChildDescriptor[] = [],
 ): Stage[] {
   const guardConfig = webNavigationGuardConfigRecordForDomain(domain);
   if (!guardConfig) {
@@ -3542,6 +3703,11 @@ function bindWebNavigationGuardContextToStages(
   const sources = webNavigationSourcesForDomain(domain);
   const guardContext = webNavigationGuardContextFromConfig(guardConfig, sources);
   const extractionSchema = webNavigationExtractionSchemaForDomain(domain, stages);
+  const sourceFanOutStages = new Set(
+    delegationChildren
+      .filter((child) => sourceConfigFanOutDescriptor(child) !== undefined)
+      .map((child) => child.stage),
+  );
 
   return stages.map((stage) => webNavigationSlugs.has(stage.slug)
     ? {
@@ -3551,6 +3717,7 @@ function bindWebNavigationGuardContextToStages(
           purpose,
           extractionSchema,
           guardContext,
+          sourceFanOut: sourceFanOutStages.has(stage.slug),
         }),
       }
     : stage);
@@ -3563,6 +3730,7 @@ function webNavigationGuardBoundDomainSpec(
     purpose: string;
     extractionSchema: Record<string, string>;
     guardContext: WebNavigationGuardContext;
+    sourceFanOut?: boolean;
   },
 ): StageDomainSpec {
   const base = stage.domain_spec ?? {
@@ -3573,7 +3741,21 @@ function webNavigationGuardBoundDomainSpec(
   };
   return {
     ...base,
-    reads: unique([...base.reads, 'source', 'purpose', 'extraction_schema', 'GuardContext']),
+    reads: unique([
+      ...base.reads,
+      ...(input.sourceFanOut
+        ? [
+            LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH,
+            LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH,
+            `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.url`,
+            `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.allowed_domains`,
+          ]
+        : []),
+      'source',
+      'purpose',
+      'extraction_schema',
+      'GuardContext',
+    ]),
     produces: {
       ...base.produces,
       result_json: {
@@ -3594,6 +3776,13 @@ function webNavigationGuardBoundDomainSpec(
     ]),
     input_domain: {
       source: input.sources[0]?.url ?? '',
+      ...(input.sourceFanOut ? {
+        current_source: input.sources[0] ?? {},
+        work: {
+          config: { sources: input.sources },
+          current_source: input.sources[0] ?? {},
+        },
+      } : {}),
       sources: input.sources,
       purpose: input.purpose,
       extraction_schema: input.extractionSchema,
@@ -5360,6 +5549,29 @@ function renderDelegationReactionEntries(children: DelegationChildDescriptor[], 
       );
     }]`;
     }
+    const sourceFanOut = sourceConfigFanOutDescriptor(child);
+    if (sourceFanOut) {
+      return `,
+  [${tsString(sourceConfigFanOutAdvanceReactionName(child))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return advanceSourceDelegationFanOut(
+      snapshot,
+      {
+        sourcesPath: ${tsString(sourceFanOut.source)},
+        currentSourcePath: ${tsString(sourceFanOut.current_document)},
+        resultPath: ${tsString(child.result_path)},
+        requestedPath: ${tsString(`${base}.requested`)},
+        settledPath: ${tsString(`${base}.settled`)},
+        degradedPath: ${tsString(`${base}.degraded`)},
+        degradeReasonPath: ${tsString(`${base}.degrade_reason`)},
+        indexPath: ${tsString(sourceFanOut.index_path ?? `${child.stage}.fan_out.index`)},
+        completePath: ${tsString(sourceFanOut.completion_guard)},
+        resultsPath: ${tsString(sourceFanOut.result_path)},
+      },
+      );
+    }]`;
+    }
     if (documents && isDocumentIngestUploadDelegationChild(child, documents)) {
       return `,
   [${tsString(delegationSettleReactionName(child))}, (snapshot, trigger, mode) => {
@@ -5397,6 +5609,19 @@ interface DocumentDelegationFanOutConfig {
   documentsPath: string;
   currentDocumentPath: string;
   readyPath: string;
+  resultPath: string;
+  requestedPath: string;
+  settledPath: string;
+  degradedPath: string;
+  degradeReasonPath: string;
+  indexPath: string;
+  completePath: string;
+  resultsPath: string;
+}
+
+interface SourceConfigDelegationFanOutConfig {
+  sourcesPath: string;
+  currentSourcePath: string;
   resultPath: string;
   requestedPath: string;
   settledPath: string;
@@ -5676,6 +5901,103 @@ function advanceDocumentDelegationFanOut(
   return { mutations };
 }
 
+function advanceSourceDelegationFanOut(
+  snapshot: ReadonlyMap<string, unknown>,
+  config: SourceConfigDelegationFanOutConfig,
+): ReactionResult | undefined {
+  if (snapshot.get(config.completePath) === true) {
+    return undefined;
+  }
+  const sources = sourceCollection(snapshot, config.sourcesPath);
+  const index = fanOutIndex(snapshot.get(config.indexPath));
+  if (sources.length === 0 || index >= sources.length) {
+    return { mutations: [{ op: 'MSet' as const, path: config.completePath, value: true }] };
+  }
+  if (snapshot.get(config.requestedPath) !== true) {
+    const nextSource = sourceAt(sources, index) ?? {};
+    const current = snapshotRecord(snapshot, config.currentSourcePath);
+    if (!current || numberField(current, 'source_index') !== index || stringField(current, 'url') !== stringField(nextSource, 'url')) {
+      return {
+        mutations: sourceSliceMutations(config.currentSourcePath, nextSource, index),
+      };
+    }
+    return undefined;
+  }
+  const result = snapshotRecord(snapshot, config.resultPath);
+  const status = typeof result?.status === 'string'
+    ? result.status
+    : snapshot.get(\`\${config.resultPath}.status\`);
+  if (status !== 'complete' && status !== 'failed' && status !== 'declined') {
+    return undefined;
+  }
+  const source = snapshotRecord(snapshot, config.currentSourcePath) ?? sourceAt(sources, index) ?? {};
+  const sourceUrl = stringField(source, 'url') || \`source-\${String(index + 1)}\`;
+  const nextIndex = index + 1;
+  const nextSource = sourceAt(sources, nextIndex);
+  const degraded = status === 'failed' || status === 'declined';
+  const reason = typeof result?.reason === 'string' && result.reason.length > 0 ? result.reason : String(status);
+  const resultRecord = parsedRecord(result?.result);
+  const stored = {
+    source: sourceUrl,
+    source_index: index,
+    status,
+    items: arrayField(resultRecord, 'items', result, 'items'),
+    pages_visited: numberField(resultRecord, 'pages_visited') || numberField(result ?? {}, 'pages_visited'),
+    audit: arrayField(resultRecord, 'audit', result, 'audit'),
+    degraded,
+    reason: degraded ? reason : '',
+  };
+  const mutations: ReactionResult['mutations'] = [
+    { op: 'MSet' as const, path: \`\${config.resultsPath}.\${String(index)}\`, value: stored },
+    { op: 'MSet' as const, path: config.indexPath, value: nextIndex },
+    { op: 'MSet' as const, path: config.requestedPath, value: false },
+    { op: 'MSet' as const, path: config.settledPath, value: nextSource === undefined },
+    { op: 'MSet' as const, path: config.degradedPath, value: degraded },
+    { op: 'MSet' as const, path: config.degradeReasonPath, value: degraded ? reason : '' },
+  ];
+  if (nextSource === undefined) {
+    mutations.push({ op: 'MSet' as const, path: config.completePath, value: true });
+  } else {
+    mutations.push(
+      ...sourceSliceMutations(config.currentSourcePath, nextSource, nextIndex),
+      { op: 'MSet' as const, path: config.completePath, value: false },
+    );
+  }
+  return { mutations };
+}
+
+function sourceCollection(snapshot: ReadonlyMap<string, unknown>, path: string): unknown[] {
+  const direct = snapshot.get(path);
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+  try {
+    return reconstructArray(Object.fromEntries(snapshot), path);
+  } catch {
+    return [];
+  }
+}
+
+function sourceAt(sources: unknown[], index: number): Record<string, unknown> | undefined {
+  const source = sources[index];
+  if (typeof source === 'string') {
+    return { url: source, source_index: index };
+  }
+  if (source && typeof source === 'object' && !Array.isArray(source)) {
+    const record = source as Record<string, unknown>;
+    return { ...record, source_index: index };
+  }
+  return undefined;
+}
+
+function sourceSliceMutations(path: string, source: Record<string, unknown>, index: number): ReactionResult['mutations'] {
+  return [
+    { op: 'MSet' as const, path, value: { ...source, source_index: index } },
+    { op: 'MSet' as const, path: \`\${path}.url\`, value: stringField(source, 'url') },
+    { op: 'MSet' as const, path: \`\${path}.source_index\`, value: index },
+  ];
+}
+
 function documentSliceMutations(path: string, document: Record<string, unknown>): ReactionResult['mutations'] {
   const provenance = snapshotLikeRecord(document.provenance);
   return [
@@ -5731,6 +6053,23 @@ function stringField(record: Record<string, unknown>, field: string): string {
 function numberField(record: Record<string, unknown>, field: string): number {
   const value = record[field];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function arrayField(
+  primary: Record<string, unknown>,
+  primaryField: string,
+  fallback: Record<string, unknown> | undefined,
+  fallbackField: string,
+): unknown[] {
+  const primaryValue = primary[primaryField];
+  if (Array.isArray(primaryValue)) {
+    return primaryValue;
+  }
+  const fallbackValue = fallback?.[fallbackField];
+  if (Array.isArray(fallbackValue)) {
+    return fallbackValue;
+  }
+  return [];
 }
 
 function snapshotLikeRecord(value: unknown): Record<string, unknown> {
@@ -11631,7 +11970,7 @@ export function assertDelegationChildrenDescriptor(
 
   for (const [i, rawChild] of children.entries()) {
     const child = requiredRecord(rawChild, `delegation.children[${i}]`);
-    assertDelegationV1Scope(delegation, child, context.documents);
+    assertDelegationV1Scope(delegation, child, context);
     if (child.fan_out !== undefined) {
       documentFanOutChildren += 1;
       if (documentFanOutChildren > 1) {
@@ -11763,7 +12102,7 @@ export function assertDelegationChildrenDescriptor(
       throw new Error(`delegation.children[${i}].result_path must be unique across children; ${resultPath} is used by more than one child`);
     }
     seenResultPaths.add(resultPath);
-    assertDocumentFanOutDescriptor(child, context.documents, i, stage);
+    assertFanOutDescriptor(child, context, i, stage);
 
     const maxDelegatedRounds = child.max_delegated_rounds;
     if (
@@ -11787,7 +12126,7 @@ export function assertDelegationChildrenDescriptor(
 function assertDelegationV1Scope(
   delegation: Record<string, unknown>,
   child: Record<string, unknown>,
-  documents?: DocumentsDescriptor,
+  context: DelegationChildrenValidationContext,
 ): void {
   const refusals: Array<{ capability: string; evidence: string }> = [];
   const note = 'v1 delegation is N distinct static/synthesized children plus one sequential document fan_out child, degrade-only (optional:true); generic fan_out / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
@@ -11800,7 +12139,11 @@ function assertDelegationV1Scope(
   if (delegation.fan_out !== undefined) {
     add('delegation_research_agent', 'fan_out');
   }
-  if (child.fan_out !== undefined && !documentFanOutCandidateSupported(child, documents)) {
+  if (
+    child.fan_out !== undefined &&
+    !documentFanOutCandidateSupported(child, context.documents) &&
+    !leadResearchSourceFanOutCandidateSupported(child, context)
+  ) {
     add('delegation_research_agent', 'fan_out');
   }
   if (delegation.dynamic_target_arg !== undefined || child.dynamic_target_arg !== undefined) {
@@ -11820,6 +12163,22 @@ function assertDelegationV1Scope(
   if (refusals.length > 0) {
     throw new CapabilityRefusalError(refusals);
   }
+}
+
+function assertFanOutDescriptor(
+  child: Record<string, unknown>,
+  context: DelegationChildrenValidationContext,
+  childIndex: number,
+  stage: string,
+): void {
+  if (child.fan_out === undefined) {
+    return;
+  }
+  if (leadResearchSourceFanOutCandidateSupported(child, context)) {
+    assertSourceConfigFanOutDescriptor(child, childIndex, stage);
+    return;
+  }
+  assertDocumentFanOutDescriptor(child, context.documents, childIndex, stage);
 }
 
 function assertDocumentFanOutDescriptor(
@@ -11851,6 +12210,44 @@ function assertDocumentFanOutDescriptor(
   const resultPath = requiredString(fanOut.result_path, `delegation.children[${childIndex}].fan_out.result_path`);
   if (!resultPath.startsWith(`${stage}.`)) {
     throw new Error(`delegation.children[${childIndex}].fan_out.result_path must be under ${stage}.`);
+  }
+  const completionGuard = requiredString(fanOut.completion_guard, `delegation.children[${childIndex}].fan_out.completion_guard`);
+  if (!completionGuard.startsWith(`${stage}.`)) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.completion_guard must be under ${stage}.`);
+  }
+  if (fanOut.index_path !== undefined) {
+    const indexPath = requiredString(fanOut.index_path, `delegation.children[${childIndex}].fan_out.index_path`);
+    if (!indexPath.startsWith(`${stage}.`)) {
+      throw new Error(`delegation.children[${childIndex}].fan_out.index_path must be under ${stage}.`);
+    }
+  }
+}
+
+function leadResearchSourceFanOutCandidateSupported(
+  child: Record<string, unknown>,
+  context: DelegationChildrenValidationContext,
+): boolean {
+  return context.programSlug === 'lead-research-agent' &&
+    sourceConfigFanOutCandidateSupported(child);
+}
+
+function assertSourceConfigFanOutDescriptor(
+  child: Record<string, unknown>,
+  childIndex: number,
+  stage: string,
+): void {
+  const fanOut = requiredRecord(child.fan_out, `delegation.children[${childIndex}].fan_out`);
+  const source = requiredString(fanOut.source, `delegation.children[${childIndex}].fan_out.source`);
+  if (source !== LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.source must equal ${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}`);
+  }
+  const currentSource = requiredString(fanOut.current_document, `delegation.children[${childIndex}].fan_out.current_document`);
+  if (currentSource !== LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.current_document must equal ${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}`);
+  }
+  const resultPath = requiredString(fanOut.result_path, `delegation.children[${childIndex}].fan_out.result_path`);
+  if (resultPath !== LEAD_RESEARCH_SOURCE_FAN_OUT_RESULTS_PATH) {
+    throw new Error(`delegation.children[${childIndex}].fan_out.result_path must equal ${LEAD_RESEARCH_SOURCE_FAN_OUT_RESULTS_PATH}`);
   }
   const completionGuard = requiredString(fanOut.completion_guard, `delegation.children[${childIndex}].fan_out.completion_guard`);
   if (!completionGuard.startsWith(`${stage}.`)) {
