@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.26.0
+
+- Lead-research-agent foundry line: added `config_driven_extraction_schema` as a synthesizable capability, with `web_navigation_guarded`, `cross_session_persistence`, and `export_pdf_report` registered as host-backed `scaffolds_with_gap`.
+- Guarded web navigation: added deterministic anti-rogue guards G-1..G-7 for domain allowlists, bounded follow-on (`max_depth` / `max_pages` / `max_follow_links`), robots.txt, pacing (`min_delay_ms` / `max_concurrency`), no-spend, no-login, and immutable audit.
+- Config-driven lead research: added per-source fan-out with allowed follow-on domains, purpose-scored extraction against `extraction_schema`, aggregation, dedupe/upsert, and guard/audit reporting.
+- Graduation packaging: standalone scaffold generation now bundles typed host connector contracts, mocks, wiring, and report-data assembly for lead research, default-off and gap-gated until the curator implements real backends.
+
 ## v3.25.0
 
 - Engine alignment: generated scaffolds now target engine `3.26.0` (from `3.24.0`) with the matching scaffold adaptations for `inputs.domain_context` seeding, deterministic-drive paths, and live-provider skip mode.
