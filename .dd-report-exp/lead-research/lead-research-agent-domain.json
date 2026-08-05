@@ -1,0 +1,68 @@
+{
+  "_meta": {
+    "design_spec": "docs/superpowers/plans/2026-08-05-lead-research-agent.md",
+    "task": "Task 7: Domain-intake JSON + resynthesis script + full hermetic smoke",
+    "generated_shadow_root": ".dd-report-exp/lead-research/generated",
+    "audit_collection_path": "work.audit",
+    "no_host_io_without_connectors": true
+  },
+  "program.slug": "lead-research-agent",
+  "program.name": "Lead Research Agent",
+  "program.target_dir": ".dd-report-exp/lead-research/generated",
+  "program.design_path": ".dd-report-exp/lead-research/lead-research-agent-domain.json",
+  "intake.purpose": "Find purpose-relevant leads and contacts across configured public web sources. The program fans out over configured sources, performs guarded bounded navigation only through WebNavigationHostConnector, extracts leads against the configured extraction_schema, aggregates and dedupes records, persists them cross-session through PersistenceHostConnector, and renders a PDF report through PdfReportHostConnector.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true,\"domain_spec\":{\"reads\":[\"config.sources\",\"config.purpose\",\"config.extraction_schema\",\"guard_config\"],\"produces\":{\"result_json\":{\"started\":\"boolean\"}},\"rules\":[\"Bootstrap the configured lead-research run without host I/O.\"],\"invariants\":[\"sources, purpose, extraction_schema, and guard_config come from domain config.\"]}},{\"slug\":\"navigate_source\",\"archetype\":\"external-adapter\",\"integration\":\"web_navigation\",\"connector_slug\":\"web-navigation\",\"domain_spec\":{\"reads\":[\"work.config.sources\",\"work.current_source\",\"work.current_source.url\",\"work.current_source.allowed_domains\",\"purpose\",\"extraction_schema\",\"GuardContext\",\"guard_config\"],\"produces\":{\"result_json\":{\"items\":\"ExtractedItem[]\",\"pages_visited\":\"number\",\"audit\":\"NavAuditEntry[]\"}},\"rules\":[\"Fan out over work.config.sources and call WebNavigationHostConnector.navigate_and_extract for each current source.\",\"Bound every source by GuardContext max_depth, max_pages, max_follow_links, min_delay_ms, and max_concurrency.\"],\"invariants\":[\"Every fetch, follow, extract, skip, or refuse action is captured under audit.\",\"No login, payment, checkout, credential, or spend action is exposed.\"]}},{\"slug\":\"extract_leads\",\"archetype\":\"llm-reasoning\",\"domain_spec\":{\"reads\":[\"work.aggregate.per_source\",\"work.aggregate.per_source.*.items\",\"work.aggregate.per_source.*.audit\",\"config.extraction_schema\",\"intake.purpose\"],\"produces\":{\"result_json\":{\"leads\":[{\"name\":\"string\",\"role\":\"string\",\"company\":\"string\",\"email\":\"string\",\"profile_url\":\"string\",\"notes\":\"string\",\"relevance_score\":\"number\"}],\"lead_count\":\"number\",\"extraction_notes\":\"string\"},\"items_json\":[\"lead:<email>\"]},\"rules\":[\"Extract only entities relevant to intake.purpose and score each lead from 0 to 1.\"],\"invariants\":[\"Every emitted lead has every extraction_schema key.\",\"Do not fabricate leads absent from source items.\"]}},{\"slug\":\"aggregate\",\"archetype\":\"pure-compute\",\"domain_spec\":{\"reads\":[\"work.aggregate.per_source\",\"extract_leads.output\",\"extract_leads.result_json\"],\"produces\":{\"result_json\":{\"per_source\":\"array\",\"leads\":\"array\",\"audit\":\"array\"},\"items_json\":[\"lead:<email>\"]},\"rules\":[\"Combine per-source results with extracted leads and flatten audit entries for reporting.\"],\"invariants\":[\"Aggregate output preserves one per_source entry for every configured source.\"]}},{\"slug\":\"persist\",\"archetype\":\"external-adapter\",\"integration\":\"persistence\",\"connector_slug\":\"persistence\",\"domain_spec\":{\"reads\":[\"aggregate.output\",\"aggregate.result_json\",\"config.persistence.dedupe_key\",\"config.persistence.entity_type\"],\"produces\":{\"result_json\":{\"inserted\":\"number\",\"updated\":\"number\",\"new_vs_existing\":\"LeadRecord[]\"},\"items_json\":[\"lead_upsert:<email>\"]},\"rules\":[\"Dedupe and upsert extracted leads through PersistenceHostConnector only.\"],\"invariants\":[\"new_vs_existing identifies each record as new or existing before reporting.\"]}},{\"slug\":\"render_report\",\"kind\":\"export_pdf\",\"export_kind\":\"export_pdf\",\"domain_spec\":{\"reads\":[\"config\",\"work.aggregate.per_source\",\"aggregate.output\",\"persist.output\",\"work.persist.new_vs_existing\",\"work.audit\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"pdf_base64\":\"string\",\"pdf_bytes\":\"number\",\"sha256\":\"string\",\"section_count\":\"number\"},\"items_json\":[\"pdf_report:<sha256>\"]},\"rules\":[\"Assemble structured lead-report data and render PDF bytes through PdfReportHostConnector.\"],\"invariants\":[\"No LLM, browser, database, or filesystem work is required while rendering the PDF report stage.\"]}},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"navigate_source\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"navigate_source\",\"to\":\"extract_leads\",\"trigger\":\"navigated\",\"guard_field\":\"navigate_source.fan_out.complete\"},{\"from\":\"extract_leads\",\"to\":\"aggregate\",\"trigger\":\"extracted\",\"guard_field\":\"extract_leads.done\"},{\"from\":\"aggregate\",\"to\":\"persist\",\"trigger\":\"aggregated\",\"guard_field\":\"aggregate.ready\"},{\"from\":\"persist\",\"to\":\"render_report\",\"trigger\":\"persisted\",\"guard_field\":\"persist.ready\"},{\"from\":\"render_report\",\"to\":\"complete\",\"trigger\":\"rendered\",\"guard_field\":\"render_report.ready\"}]",
+  "intake.delegation_json": "{\"stages\":{\"navigate_source\":{\"kind\":\"external-adapter\",\"integration\":\"web_navigation\",\"connector_slug\":\"web-navigation\"},\"extract_leads\":{\"kind\":\"llm-reasoning\",\"reasoning_per_turn\":true},\"aggregate\":{\"kind\":\"pure-compute\"},\"persist\":{\"kind\":\"external-adapter\",\"integration\":\"persistence\",\"connector_slug\":\"persistence\"},\"render_report\":{\"kind\":\"pure-compute\",\"export_kind\":\"export_pdf\"}},\"children\":[{\"id\":\"source_navigation\",\"action_name\":\"request_source_navigation\",\"stage\":\"navigate_source\",\"synthesize_child\":{\"kind\":\"worker\",\"slug\":\"lead-research-source-navigation\",\"purpose\":\"Run the bounded navigation branch for the current configured source.\",\"result_fields\":{\"source\":\"string\",\"status\":\"string\",\"pages_visited\":\"number\",\"item_count\":\"number\",\"items\":\"array\",\"audit\":\"array\"}},\"fan_out\":{\"source\":\"work.config.sources\",\"current_document\":\"work.current_source\",\"result_path\":\"work.aggregate.per_source\",\"completion_guard\":\"navigate_source.fan_out.complete\",\"index_path\":\"navigate_source.fan_out.index\"},\"payload_map\":{\"request.source\":\"work.current_source.url\",\"request.allowed_domains\":\"work.current_source.allowed_domains\",\"domain_context.original_request\":\"inputs.initial_user_text\"},\"result_path\":\"navigate_source.delegation.source_navigation.result\",\"max_delegated_rounds\":8,\"optional\":true}]}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"render_report.ready\",\"outputs\":{\"pdf_report\":\"artifact\",\"persisted_leads\":\"array\",\"guard_audit\":\"array\"},\"audit_collection_path\":\"work.audit\"}",
+  "intake.audit_json": "{\"collection_path\":\"work.audit\",\"source_paths\":[\"work.aggregate.per_source.*.audit\",\"aggregate.output.audit\"],\"required_actions\":[\"fetch\",\"follow\",\"extract\",\"skip\",\"refuse\"]}",
+  "config": {
+    "title": "Lead Research Report",
+    "purpose": "Find purpose-relevant leads and contacts across configured public sources.",
+    "sources": [
+      {
+        "url": "https://example.com/team",
+        "allowed_domains": [
+          "example.com"
+        ]
+      },
+      {
+        "url": "https://example.com/many",
+        "allowed_domains": [
+          "example.com"
+        ]
+      },
+      {
+        "url": "https://example.com/hub",
+        "allowed_domains": [
+          "example.com"
+        ]
+      }
+    ],
+    "extraction_schema": {
+      "name": "string",
+      "role": "string",
+      "company": "string",
+      "email": "string",
+      "profile_url": "string",
+      "notes": "string",
+      "relevance_score": "number"
+    },
+    "persistence": {
+      "entity_type": "lead",
+      "dedupe_key": "email"
+    },
+    "audit_collection_path": "work.audit"
+  },
+  "guard_config": {
+    "allowed_domains": [
+      "example.com"
+    ],
+    "max_depth": 1,
+    "max_pages": 2,
+    "max_follow_links": 1,
+    "min_delay_ms": 10,
+    "max_concurrency": 1
+  }
+}
