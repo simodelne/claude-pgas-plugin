@@ -1,6 +1,19 @@
-import type { ProgramArtifactPolicy } from '@simodelne/pgas-server/plugin.js';
+import type { ProgramArtifactPolicy, ProgramArtifactRule } from '@simodelne/pgas-server/plugin.js';
 
 import { tsString } from './shared.js';
+
+export function pdfReportArtifactRule(input: {
+  title: string;
+  payloadRef: string;
+}): ProgramArtifactRule {
+  return {
+    artifactType: 'pdf_report',
+    title: input.title,
+    summary: 'Structured lead report rendered by host PdfReportHostConnector; PDF bytes are base64 in domain state.',
+    payloadRef: input.payloadRef,
+    whenAllPaths: [`${input.payloadRef}.pdf_base64`],
+  };
+}
 
 export function renderRegistrationSource(
   pascalName: string,

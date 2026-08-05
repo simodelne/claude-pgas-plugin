@@ -110,7 +110,7 @@ export function exportTransitionActions(actions: TransitionAction[]): Transition
 }
 
 export function isExportTransitionAction(action: TransitionAction): boolean {
-  return action.export_kind === 'export_docx' || action.export_kind === 'export_html';
+  return action.export_kind === 'export_docx' || action.export_kind === 'export_html' || action.export_kind === 'export_pdf';
 }
 
 export function isConversationalHubTransitionAction(action: TransitionAction): boolean {

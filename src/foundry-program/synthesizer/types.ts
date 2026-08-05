@@ -200,7 +200,7 @@ export interface TransitionAction {
   guardField?: string;
   archetype: StageArchetype;
   adapter_kind?: 'in_memory_mock' | 'repo_integration';
-  export_kind?: 'export_docx' | 'export_html';
+  export_kind?: 'export_docx' | 'export_html' | 'export_pdf';
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
