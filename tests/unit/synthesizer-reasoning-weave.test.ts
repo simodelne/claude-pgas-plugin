@@ -12,6 +12,7 @@ import {
   REASONING_CONTRACT_VERSION,
   type ReasoningStageContract,
 } from '../../src/foundry-program/reasoning-contract.js';
+import { leadResearchDomain } from '../fixtures/lead-research-domain.js';
 
 const branchDomain = {
   'program.slug': 'memo-review',
@@ -284,5 +285,22 @@ describe('no-contract byte identity', () => {
       { ...base, created_at: '2026-07-02T00:00:00.000Z', synthesis_context: undefined },
       { review: reviewContract() },
     )).toThrow(/requires artifact.synthesis_context/u);
+  });
+
+  it('preserves source fan-out config through reasoning contract resynthesis', () => {
+    const base = synthesizeProgramSpecFromDomain(leadResearchDomain());
+    const rewoven = resynthesizeWithReasoningContracts(
+      { ...base, created_at: '2026-08-05T00:00:00.000Z' },
+      {},
+    );
+    const parsed = load(rewoven.spec_yaml) as ParsedSpec;
+
+    expect(parsed.action_map.begin_work.mutations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ op: 'MSet', path: 'work.config.sources.0' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.current_source' }),
+      expect.objectContaining({ op: 'MSet', path: 'work.current_source.url', value: 'https://example.com/team' }),
+      expect.objectContaining({ op: 'MSet', path: 'navigate_source.fan_out.index', value: 0 }),
+      expect.objectContaining({ op: 'MSet', path: 'navigate_source.fan_out.complete', value: false }),
+    ]));
   });
 });

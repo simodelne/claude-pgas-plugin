@@ -78,6 +78,8 @@ export interface SynthesisContext {
   program_name: string;
   purpose: string;
   entry_channel: string;
+  config?: Record<string, unknown>;
+  guard_config?: Record<string, unknown>;
   stages: Array<{
     slug: string;
     is_bootstrap?: boolean;
@@ -98,6 +100,7 @@ export interface SynthesisContext {
       produces: Record<string, unknown>;
       rules: string[];
       invariants: string[];
+      input_domain?: Record<string, unknown>;
     };
   }>;
   transitions: Array<{

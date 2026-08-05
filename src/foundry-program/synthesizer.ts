@@ -233,6 +233,8 @@ export function synthesizeProgramSpecFromDomain(
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = normalizePgasChannelId(stringDomainField(domain, 'intake.entry_channel'));
   const initialEntryPath = initialInputPath(entryChannel);
+  const domainConfig = optionalRecordDomainValue(domain, 'config');
+  const guardConfig = optionalRecordDomainValue(domain, 'guard_config');
   let stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const rawDelegationInput = parseOptionalJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json') ?? {};
@@ -287,7 +289,7 @@ export function synthesizeProgramSpecFromDomain(
   const requestedCapabilities = detectRequestedCapabilities(capabilityInput);
   assertSynthesizableCapabilities(capabilityInput);
   const exportDescriptors = exportDescriptorsFor(stages, requestedCapabilities, name);
-  stages = normalizeExportStageContracts(stages, exportDescriptors);
+  stages = normalizeExportStageContracts(stages, exportDescriptors, domain);
   const stageArtifactDescriptors = stageArtifactDescriptorsFor(stages);
   const exportSurfaces = exportSurfacesFor(exportDescriptors, requestedCapabilities);
   const documentExtractionSurfaces = documentExtractionSurfacesFor(documents);
@@ -316,6 +318,7 @@ export function synthesizeProgramSpecFromDomain(
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
   const hasConversationalHub = stageClassification.some((stage) => stage.archetype === 'conversational-hub');
+  stages = bindPersistenceConfigToStages(stages, stageClassificationBySlug, domain);
   stages = bindWebNavigationGuardContextToStages(stages, stageClassificationBySlug, domain, purpose, delegationChildren);
   if (confirmationLoops.length > 0) {
     assertConfirmationLoopDescriptors(confirmationLoops, collectionLifecycle, stages, stageClassificationBySlug);
@@ -566,6 +569,7 @@ export function synthesizeProgramSpecFromDomain(
   applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
   applyDocumentsReactions(recordField(spec, 'reactions'), documents);
   applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren, documents);
+  applyLeadResearchHostOutputMirrorReactions(recordField(spec, 'reactions'), delegationChildren);
   applyExportDecisionOnlyReactions(recordField(spec, 'reactions'), exportActions);
   applyConversationalHubGuardResetReactions(recordField(spec, 'reactions'), transitionActions);
 
@@ -753,6 +757,8 @@ export function synthesizeProgramSpecFromDomain(
       program_name: name,
       purpose,
       entry_channel: entryChannel,
+      ...(domainConfig ? { config: domainConfig } : {}),
+      ...(guardConfig ? { guard_config: guardConfig } : {}),
       stages,
       transitions,
       delegation,
@@ -838,6 +844,8 @@ export function resynthesizeWithReasoningContracts(
     'program.name': context.program_name,
     'intake.purpose': context.purpose,
     'intake.entry_channel': context.entry_channel,
+    ...(context.config ? { config: context.config } : {}),
+    ...(context.guard_config ? { guard_config: context.guard_config } : {}),
     'intake.stages_json': JSON.stringify(context.stages),
     'intake.transitions_json': JSON.stringify(context.transitions),
     'intake.delegation_json': JSON.stringify(context.delegation),
@@ -1351,6 +1359,10 @@ function applyDelegationSchema(
       schema[`${sourceFanOut.result_path}.*.audit`] = 'array';
       schema[`${sourceFanOut.result_path}.*.degraded`] = 'boolean';
       schema[`${sourceFanOut.result_path}.*.reason`] = 'string';
+      schema['work.persist.new_vs_existing'] = 'array';
+      schema['work.persist.new_vs_existing.*'] = 'object';
+      schema['work.audit'] = 'array';
+      schema['work.audit.*'] = 'object';
     }
   }
   // Base paths for the `system_query_result` continuation payload. The skeleton
@@ -1439,10 +1451,33 @@ function applySourceConfigFanOutInitialization(
     ...source,
     source_index: index,
   }));
+  const firstSource = sources[0];
   for (const [index, source] of sources.entries()) {
     const path = `${LEAD_RESEARCH_SOURCE_FAN_OUT_SOURCE_PATH}.${String(index)}`;
     if (!mutations.some((mutation) => mutation.path === path)) {
       mutations.push({ op: 'MSet', path, value: source });
+    }
+  }
+  if (firstSource && !mutations.some((mutation) => mutation.path === LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH)) {
+    mutations.push({ op: 'MSet', path: LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH, value: firstSource });
+  }
+  if (firstSource && !mutations.some((mutation) => mutation.path === `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.url`)) {
+    mutations.push({ op: 'MSet', path: `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.url`, value: firstSource.url });
+  }
+  if (firstSource && !mutations.some((mutation) => mutation.path === `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.source_index`)) {
+    mutations.push({ op: 'MSet', path: `${LEAD_RESEARCH_SOURCE_FAN_OUT_CURRENT_PATH}.source_index`, value: 0 });
+  }
+  for (const child of children.filter(childHasSourceConfigFanOut)) {
+    const fanOut = sourceConfigFanOutDescriptor(child);
+    if (!fanOut) {
+      continue;
+    }
+    const indexPath = fanOut.index_path ?? `${child.stage}.fan_out.index`;
+    if (!mutations.some((mutation) => mutation.path === indexPath)) {
+      mutations.push({ op: 'MSet', path: indexPath, value: 0 });
+    }
+    if (!mutations.some((mutation) => mutation.path === fanOut.completion_guard)) {
+      mutations.push({ op: 'MSet', path: fanOut.completion_guard, value: false });
     }
   }
   beginWorkAction.mutations = mutations;
@@ -1568,6 +1603,23 @@ function applyDelegationReactions(
       ],
     };
   }
+}
+
+function applyLeadResearchHostOutputMirrorReactions(
+  reactions: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  if (!children.some(childHasSourceConfigFanOut)) {
+    return;
+  }
+  reactions.mirror_lead_research_host_outputs = {
+    event: 'AfterRound',
+    watch: [],
+    write_scope: [
+      'work.persist.new_vs_existing.*',
+      'work.audit.*',
+    ],
+  };
 }
 
 function documentIngestHarvestWriteScope(documents: DocumentsDescriptor): string[] {
@@ -3563,24 +3615,88 @@ function exportSurfacesFor(
 function normalizeExportStageContracts(
   stages: Stage[],
   descriptors: readonly ExportStageDescriptor[],
+  domain: Record<string, unknown>,
 ): Stage[] {
   if (descriptors.length === 0) {
     return stages;
   }
   const descriptorsByStage = new Map(descriptors.map((descriptor) => [descriptor.stage, descriptor]));
+  const exportInputDomain = staticInputDomainForDomain(domain);
   return stages.map((stage) => {
     const descriptor = descriptorsByStage.get(stage.slug);
     if (!descriptor || !stage.domain_spec) {
+      return stage;
+    }
+    const inputDomain = descriptor.kind === 'export_pdf' && Object.keys(exportInputDomain).length > 0
+      ? { input_domain: mergeInputDomain(stage.domain_spec.input_domain, exportInputDomain) }
+      : {};
+    return {
+      ...stage,
+      domain_spec: {
+        ...stage.domain_spec,
+        produces: exportStageProducesContract(descriptor.kind),
+        ...inputDomain,
+      },
+    };
+  });
+}
+
+function bindPersistenceConfigToStages(
+  stages: Stage[],
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+  domain: Record<string, unknown>,
+): Stage[] {
+  const inputDomain = staticInputDomainForDomain(domain);
+  if (Object.keys(inputDomain).length === 0) {
+    return stages;
+  }
+  return stages.map((stage) => {
+    const classification = stageClassificationBySlug.get(stage.slug);
+    if (
+      !stage.domain_spec ||
+      (classification?.integration_name !== 'persistence' && classification?.connector_slug !== 'persistence')
+    ) {
       return stage;
     }
     return {
       ...stage,
       domain_spec: {
         ...stage.domain_spec,
-        produces: exportStageProducesContract(descriptor.kind),
+        input_domain: mergeInputDomain(stage.domain_spec.input_domain, inputDomain),
       },
     };
   });
+}
+
+function staticInputDomainForDomain(domain: Record<string, unknown>): Record<string, unknown> {
+  const config = optionalRecordDomainValue(domain, 'config');
+  const guardConfig = optionalRecordDomainValue(domain, 'guard_config');
+  const purpose = config && typeof config.purpose === 'string' && config.purpose.length > 0
+    ? config.purpose
+    : undefined;
+  return {
+    ...(config ? { config } : {}),
+    ...(purpose ? { purpose } : {}),
+    ...(guardConfig ? { guard_config: guardConfig } : {}),
+  };
+}
+
+function mergeInputDomain(
+  existing: Record<string, unknown> | undefined,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  return mergeRecords(existing ?? {}, next);
+}
+
+function mergeRecords(left: Record<string, unknown>, right: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    const previous = merged[key];
+    merged[key] = isRecord(previous) && isRecord(value)
+      ? mergeRecords(previous, value)
+      : value;
+  }
+  return merged;
 }
 
 function exportStageProducesContract(kind: ExportStageDescriptor['kind']): Record<string, unknown> {
@@ -4439,10 +4555,16 @@ ${fieldResolvers}
   const conversationalHubResetReactionEntries = options.includeReactionHandlers
     ? renderConversationalHubGuardResetReactionEntries(transitionActions)
     : '';
+  const usesLeadResearchHostOutputMirrorHandlers = options.includeReactionHandlers &&
+    options.delegationChildren.some(childHasSourceConfigFanOut);
   const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
     ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
+    : '';
+  const leadResearchHostOutputMirrorReactionEntries = usesLeadResearchHostOutputMirrorHandlers
+    ? `,
+  ['mirror_lead_research_host_outputs', (snapshot) => mirrorLeadResearchHostOutputs(snapshot)]`
     : '';
   const reasoningFieldMirrorReactionEntries = options.includeReactionHandlers
     ? [...contractActionSources].map((stage) => {
@@ -4457,6 +4579,7 @@ ${fieldResolvers}
     : '';
   const hasReactionEntries = Boolean(
     stageOutputMirrorReactionEntries ||
+    leadResearchHostOutputMirrorReactionEntries ||
     reasoningFieldMirrorReactionEntries ||
     exportRenderPendingReactionEntries ||
     conversationalHubResetReactionEntries ||
@@ -4508,7 +4631,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -4743,7 +4866,7 @@ function renderExportHookAdapter(exportActions: TransitionAction[]): string {
         resolveStageInput(payload, ${tsString(stage)}),
         createStageRuntime(payload),
       );
-      return normalizeStageOutput(output, ${tsString(stage)}, 'pure-compute', undefined);
+      return attachExportPayloadFields(normalizeStageOutput(output, ${tsString(stage)}, 'pure-compute', undefined));
     }`)
     .join('\n');
 
@@ -4794,6 +4917,24 @@ function hookDomainRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function attachExportPayloadFields(output: unknown): unknown {
+  const record = hookDomainRecord(output);
+  const resultJson = record.result_json;
+  if (typeof resultJson !== 'string') {
+    return output;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(resultJson) as unknown;
+  } catch {
+    return output;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return output;
+  }
+  return { ...record, ...(parsed as Record<string, unknown>) };
 }`;
 }
 
@@ -5227,6 +5368,48 @@ function mirrorStageOutput(
     mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
   }
   return mutations.length > 0 ? { mutations } : undefined;
+}`;
+}
+
+function leadResearchHostOutputMirrorReactionHelper(): string {
+  return `
+
+function mirrorLeadResearchHostOutputs(snapshot: ReadonlyMap<string, unknown>): ReactionResult | undefined {
+  const mutations: ReactionResult['mutations'] = [];
+
+  const persistOutput = snapshotRecord(snapshot, 'persist.output');
+  const persistResult = parsedRecord(persistOutput?.result_json);
+  const newVsExisting = arrayField(persistResult, 'new_vs_existing', persistOutput, 'new_vs_existing');
+  for (const [index, record] of newVsExisting.entries()) {
+    pushChangedMutation(mutations, snapshot, \`work.persist.new_vs_existing.\${String(index)}\`, record);
+  }
+
+  const aggregateOutput = snapshotRecord(snapshot, 'aggregate.output');
+  const aggregateResult = parsedRecord(aggregateOutput?.result_json);
+  const aggregateAudit = arrayField(aggregateResult, 'audit', aggregateOutput, 'audit');
+  const audit = aggregateAudit.length > 0
+    ? aggregateAudit
+    : sourceCollection(snapshot, 'work.aggregate.per_source')
+        .flatMap((entry) => {
+          const record = snapshotLikeRecord(entry);
+          return Array.isArray(record.audit) ? record.audit : [];
+        });
+  for (const [index, record] of audit.entries()) {
+    pushChangedMutation(mutations, snapshot, \`work.audit.\${String(index)}\`, record);
+  }
+
+  return mutations.length > 0 ? { mutations } : undefined;
+}
+
+function pushChangedMutation(
+  mutations: NonNullable<ReactionResult['mutations']>,
+  snapshot: ReadonlyMap<string, unknown>,
+  path: string,
+  value: unknown,
+): void {
+  if (JSON.stringify(snapshot.get(path)) !== JSON.stringify(value)) {
+    mutations.push({ op: 'MSet' as const, path, value });
+  }
 }`;
 }
 
@@ -5769,7 +5952,7 @@ function settleDocumentIngestDelegationResult(
         { op: 'MSet' as const, path: settledPath, value: true },
         { op: 'MSet' as const, path: degradedPath, value: false },
         { op: 'MSet' as const, path: degradeReasonPath, value: '' },
-        ...documentArtifactMutations(documentPath, documentArtifactsFromIngestResult(result)),
+        ...(documentArtifactMutations(documentPath, documentArtifactsFromIngestResult(result)) ?? []),
       ],
     };
   }
@@ -6028,7 +6211,7 @@ function advanceSourceDelegationFanOut(
     mutations.push({ op: 'MSet' as const, path: config.completePath, value: true });
   } else {
     mutations.push(
-      ...sourceSliceMutations(config.currentSourcePath, nextSource, nextIndex),
+      ...(sourceSliceMutations(config.currentSourcePath, nextSource, nextIndex) ?? []),
       { op: 'MSet' as const, path: config.completePath, value: false },
     );
   }
@@ -6905,7 +7088,12 @@ function renderContractsSource(
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
   const classified = JSON.stringify(stageClassification, null, 2);
-  const domainSpecs = JSON.stringify(domainSpecsByStage(stages), null, 2);
+  const domainSpecsRecord = domainSpecsByStage(stages);
+  const domainSpecs = JSON.stringify(domainSpecsRecord, null, 2);
+  const stageDomainSpecInputDomainField = Object.values(domainSpecsRecord).some((spec) =>
+    !!spec.input_domain && typeof spec.input_domain === 'object' && !Array.isArray(spec.input_domain))
+    ? '\n  input_domain?: Record<string, unknown>;'
+    : '';
   const reasoningContractsBlock = reasoningContractsBySlug.size === 0
     ? ''
     : `
@@ -6975,7 +7163,7 @@ export interface StageDomainSpec {
   reads: readonly string[];
   produces: Record<string, unknown>;
   rules: readonly string[];
-  invariants: readonly string[];
+  invariants: readonly string[];${stageDomainSpecInputDomainField}
 }
 
 export interface StageInput {

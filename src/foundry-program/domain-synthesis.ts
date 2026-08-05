@@ -77,6 +77,7 @@ interface StageDomainSpec {
   produces: Record<string, unknown>;
   rules: string[];
   invariants: string[];
+  input_domain?: Record<string, unknown>;
 }
 
 interface CacheRecord {
@@ -566,6 +567,7 @@ function typecheckStageBody(
   produces: Record<string, unknown>;
   rules: readonly string[];
   invariants: readonly string[];
+  input_domain?: Record<string, unknown>;
 }
 
 export interface StageInput {
@@ -749,6 +751,9 @@ function pdfReportDeclarationSource(): string {
 export interface PdfReportHostConnector {
   render_report(report: StructuredReport): Promise<Uint8Array>;
 }
+export class MockPdfReportConnector implements PdfReportHostConnector {
+  render_report(report: StructuredReport): Promise<Uint8Array>;
+}
 `;
 }
 
@@ -781,6 +786,14 @@ export interface WebNavigationHostConnector {
     guard: GuardContext,
   ): Promise<NavigateAndExtractResult>;
 }
+export class MockWebNavigationConnector implements WebNavigationHostConnector {
+  navigate_and_extract(
+    source: string,
+    purpose: string,
+    extraction_schema: Record<string, string>,
+    guard: GuardContext,
+  ): Promise<NavigateAndExtractResult>;
+}
 `;
 }
 
@@ -788,6 +801,12 @@ function persistenceDeclarationSource(): string {
   return `export interface LeadRecord { readonly [key: string]: unknown }
 export interface UpsertResult { readonly inserted: number; readonly updated: number; readonly ids: readonly string[] }
 export interface PersistenceHostConnector {
+  upsert_lead(records: readonly LeadRecord[], dedupe_key: string): Promise<UpsertResult>;
+  upsert_contact(records: readonly LeadRecord[], dedupe_key: string): Promise<UpsertResult>;
+  query(filter: Record<string, unknown>): Promise<readonly LeadRecord[]>;
+  dedupe(records: readonly LeadRecord[], dedupe_key: string): Promise<readonly LeadRecord[]>;
+}
+export class MockPersistenceConnector implements PersistenceHostConnector {
   upsert_lead(records: readonly LeadRecord[], dedupe_key: string): Promise<UpsertResult>;
   upsert_contact(records: readonly LeadRecord[], dedupe_key: string): Promise<UpsertResult>;
   query(filter: Record<string, unknown>): Promise<readonly LeadRecord[]>;
@@ -1678,6 +1697,13 @@ async function runPdfReportBehavioralGate(
     const runStage = loadRunStageForBehavior(body, {
       modules: {
         [REPORT_DATA_IMPORT]: loadReportDataTemplateModule(),
+        [PDF_REPORT_CONNECTOR_IMPORT]: {
+          MockPdfReportConnector: class {
+            async render_report(report: Record<string, unknown>): Promise<Uint8Array> {
+              return new TextEncoder().encode(JSON.stringify(report));
+            }
+          },
+        },
       },
     });
     const output = await withBehaviorTimeout(
@@ -1914,7 +1940,21 @@ async function runWebNavigationBehavioralGate(
   };
 
   try {
-    const runStage = loadRunStageForBehavior(body);
+    const runStage = loadRunStageForBehavior(body, {
+      modules: {
+        [WEB_NAVIGATION_IMPORT]: {
+          MockWebNavigationConnector: class {
+            async navigate_and_extract(connectorSource: string): Promise<Record<string, unknown>> {
+              return {
+                items: [{ source: connectorSource }],
+                pages_visited: 1,
+                audit: [{ action: 'fetch', url: connectorSource, at_depth: 0 }],
+              };
+            }
+          },
+        },
+      },
+    });
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `web navigation behavioral gate failed for stage ${options.stage}: runStage timed out`,
@@ -2089,7 +2129,22 @@ async function runPersistenceBehavioralGate(
   };
 
   try {
-    const runStage = loadRunStageForBehavior(body);
+    const runStage = loadRunStageForBehavior(body, {
+      modules: {
+        [PERSISTENCE_IMPORT]: {
+          MockPersistenceConnector: class {
+            async query(): Promise<readonly Record<string, unknown>[]> { return []; }
+            async dedupe(records: readonly Record<string, unknown>[]): Promise<readonly Record<string, unknown>[]> { return records; }
+            async upsert_lead(records: readonly Record<string, unknown>[]): Promise<Record<string, unknown>> {
+              return { inserted: records.length, updated: 0, ids: [] };
+            }
+            async upsert_contact(records: readonly Record<string, unknown>[]): Promise<Record<string, unknown>> {
+              return { inserted: records.length, updated: 0, ids: [] };
+            }
+          },
+        },
+      },
+    });
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `persistence behavioral gate failed for stage ${options.stage}: runStage timed out`,
@@ -3118,7 +3173,7 @@ ${callLines.join('\n')}
 
 function renderWebNavigationStageBody(stage: string, descriptor: WebNavigationStageDescriptor): string {
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
-import type { GuardContext, WebNavigationHostConnector } from '../connectors/web-navigation.js';
+import { MockWebNavigationConnector, type GuardContext, type WebNavigationHostConnector } from '../connectors/web-navigation.js';
 
 type RuntimeWithWebNavigation = StageRuntime & {
   web_navigation?: WebNavigationHostConnector;
@@ -3130,12 +3185,15 @@ interface CurrentSource {
   allowed_domains?: string[];
 }
 
+const defaultWebNavigationConnector = new MockWebNavigationConnector();
+
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = webNavigationConnector(input, runtime);
-  const currentSource = currentSourceFromDomain(input.domain);
-  const purpose = requiredString(input.domain.purpose, 'purpose');
-  const extractionSchema = requiredRecordOfStrings(input.domain.extraction_schema, 'extraction_schema');
-  const guard = guardContextForSource(guardContextFromDomain(input.domain), currentSource);
+  const domain = stageDomain(input);
+  const currentSource = currentSourceFromDomain(domain);
+  const purpose = requiredString(domain.purpose, 'purpose');
+  const extractionSchema = requiredRecordOfStrings(domain.extraction_schema, 'extraction_schema');
+  const guard = guardContextForSource(guardContextFromDomain(domain), currentSource);
   const result = await connector.navigate_and_extract(currentSource.url, purpose, extractionSchema, guard);
   return {
     result_json: JSON.stringify({
@@ -3162,7 +3220,11 @@ function webNavigationConnector(input: StageInput, runtime: StageRuntime): WebNa
   if (isWebNavigationConnector(payloadConnector)) {
     return payloadConnector;
   }
-  throw new Error(${tsString(`missing WebNavigationHostConnector runtime binding for ${descriptor.connector_slug}`)});
+  return defaultWebNavigationConnector;
+}
+
+function stageDomain(input: StageInput): Record<string, unknown> {
+  return mergeRecords(recordValue(input.domain_spec.input_domain), input.domain);
 }
 
 function currentSourceFromDomain(domain: Record<string, unknown>): CurrentSource {
@@ -3252,6 +3314,21 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function mergeRecords(defaults: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(overrides)) {
+    const previous = merged[key];
+    merged[key] = isPlainRecord(previous) && isPlainRecord(value)
+      ? mergeRecords(previous, value)
+      : value;
+  }
+  return merged;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function requiredStringArray(value: unknown, path: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.length > 0)) {
     throw new Error(path + ' must be a non-empty string array');
@@ -3281,7 +3358,7 @@ function isWebNavigationConnector(value: unknown): value is WebNavigationHostCon
 
 function renderPersistenceStageBody(stage: string, descriptor: PersistenceStageDescriptor): string {
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
-import type { LeadRecord, PersistenceHostConnector } from '../connectors/persistence.js';
+import { MockPersistenceConnector, type LeadRecord, type PersistenceHostConnector } from '../connectors/persistence.js';
 
 type RuntimeWithPersistence = StageRuntime & {
   persistence?: PersistenceHostConnector;
@@ -3290,14 +3367,17 @@ type RuntimeWithPersistence = StageRuntime & {
 
 type EntityType = 'lead' | 'contact';
 
+const defaultPersistenceConnector = new MockPersistenceConnector();
+
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = persistenceConnector(input, runtime);
-  const dedupeKey = dedupeKeyFromDomain(input.domain);
-  const records = recordsFromDomain(input.domain);
+  const domain = stageDomain(input);
+  const dedupeKey = dedupeKeyFromDomain(domain);
+  const records = recordsFromDomain(domain);
   const deduped = await connector.dedupe(records, dedupeKey);
   const existingRecords = await connector.query({});
   const existingIds = new Set(existingRecords.map((record) => safeRecordId(record, dedupeKey)).filter((value): value is string => value !== undefined));
-  const upsert = entityTypeFromDomain(input.domain) === 'contact'
+  const upsert = entityTypeFromDomain(domain) === 'contact'
     ? await connector.upsert_contact(deduped, dedupeKey)
     : await connector.upsert_lead(deduped, dedupeKey);
   const newVsExisting = deduped.map((record) => ({
@@ -3329,7 +3409,11 @@ function persistenceConnector(input: StageInput, runtime: StageRuntime): Persist
   if (isPersistenceConnector(payloadConnector)) {
     return payloadConnector;
   }
-  throw new Error(${tsString(`missing PersistenceHostConnector runtime binding for ${descriptor.connector_slug}`)});
+  return defaultPersistenceConnector;
+}
+
+function stageDomain(input: StageInput): Record<string, unknown> {
+  return mergeRecords(recordValue(input.domain_spec.input_domain), input.domain);
 }
 
 function dedupeKeyFromDomain(domain: Record<string, unknown>): string {
@@ -3413,6 +3497,21 @@ function leadRecordArray(value: unknown): LeadRecord[] {
     return [];
   }
   return value.filter((item): item is LeadRecord => !!item && typeof item === 'object' && !Array.isArray(item));
+}
+
+function mergeRecords(defaults: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(overrides)) {
+    const previous = merged[key];
+    merged[key] = isPlainRecord(previous) && isPlainRecord(value)
+      ? mergeRecords(previous, value)
+      : value;
+  }
+  return merged;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function recordId(record: LeadRecord, dedupeKey: string): string {
@@ -3599,7 +3698,7 @@ function renderPdfReportStageBody(stage: string, descriptor: ExportStageDescript
   void descriptor;
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 import { assembleStructuredReport } from '../report-data.js';
-import type { PdfReportHostConnector } from '../connectors/pdf-report.js';
+import { MockPdfReportConnector, type PdfReportHostConnector } from '../connectors/pdf-report.js';
 
 declare const Buffer: {
   from(data: Uint8Array): { toString(encoding: 'base64'): string };
@@ -3610,9 +3709,11 @@ type RuntimeWithPdfReport = StageRuntime & {
   connectors?: { pdf_report?: PdfReportHostConnector };
 };
 
+const defaultPdfReportConnector = new MockPdfReportConnector();
+
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = pdfReportConnector(input, runtime);
-  const report = assembleStructuredReport(input.domain);
+  const report = assembleStructuredReport(stageDomain(input));
   const bytes = await connector.render_report(report);
   const sha256 = await sha256Hex(bytes);
   const result = {
@@ -3642,11 +3743,30 @@ function pdfReportConnector(input: StageInput, runtime: StageRuntime): PdfReport
   if (isPdfReportConnector(payloadConnector)) {
     return payloadConnector;
   }
-  throw new Error('missing PdfReportHostConnector runtime binding for pdf-report');
+  return defaultPdfReportConnector;
+}
+
+function stageDomain(input: StageInput): Record<string, unknown> {
+  return mergeRecords(recordValue(input.domain_spec.input_domain), input.domain);
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function mergeRecords(defaults: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(overrides)) {
+    const previous = merged[key];
+    merged[key] = isPlainRecord(previous) && isPlainRecord(value)
+      ? mergeRecords(previous, value)
+      : value;
+  }
+  return merged;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isPdfReportConnector(value: unknown): value is PdfReportHostConnector {
@@ -3965,7 +4085,9 @@ function renderDeterministicFallbackStageBody(
   const itemTemplates = domainSpec?.produces.items_json;
   let itemsExpression: string;
   if (Array.isArray(itemTemplates) && itemTemplates.length > 0 && itemTemplates.every((item) => typeof item === 'string')) {
-    itemsExpression = `[${(itemTemplates as string[]).map((template) => tsString(fillItemTemplate(template))).join(', ')}]`;
+    itemsExpression = (itemTemplates as string[]).some((template) => template.includes('<email>'))
+      ? "leadItems((result as Record<string, unknown>).leads)"
+      : `[${(itemTemplates as string[]).map((template) => tsString(fillItemTemplate(template))).join(', ')}]`;
   } else {
     itemsExpression = `[input.stage + ':complete']`;
   }
@@ -3989,6 +4111,154 @@ ${resultEntries.map((entry) => `    ${entry},`).join('\n')}
     digest: '',${archetype === 'external-adapter' ? "\n    adapter_kind: 'in_memory_mock'," : ''}
   };
 }
+
+function perSourceEntries(domain: Record<string, unknown>): Record<string, unknown>[] {
+  return firstNonEmptyArray(
+    arrayAt(domain, 'work.aggregate.per_source'),
+    arrayAt(domain, 'aggregate.per_source'),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'aggregate.output')).per_source),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'work.aggregate.output')).per_source),
+  ).map((item) => {
+    const record = recordValue(item);
+    const items = arrayValue(record.items);
+    return {
+      ...record,
+      source: stringValue(record.source) || stringValue(record.url) || '',
+      found: numberValue(record.found) ?? numberValue(record.item_count) ?? items.length,
+      pages_visited: numberValue(record.pages_visited) ?? 0,
+    };
+  });
+}
+
+function leadEntries(domain: Record<string, unknown>): Record<string, unknown>[] {
+  return firstNonEmptyArray(
+    arrayAt(domain, 'extract_leads.result.leads'),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'extract_leads.output')).leads),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'extract_leads.result_json')).leads),
+    arrayAt(domain, 'leads'),
+    arrayAt(domain, 'records'),
+  ).filter(isPlainRecord).map((record) => ({ ...record }));
+}
+
+function auditEntries(domain: Record<string, unknown>): Record<string, unknown>[] {
+  const direct = firstNonEmptyArray(
+    arrayAt(domain, 'work.audit'),
+    arrayAt(domain, 'aggregate.audit'),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'aggregate.output')).audit),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'work.aggregate.output')).audit),
+    arrayValue(resultJsonRecord(valueAtPath(domain, 'navigate_source.output')).audit),
+  );
+  if (direct.length > 0) {
+    return direct.filter(isPlainRecord).map((record) => ({ ...record }));
+  }
+  return perSourceEntries(domain)
+    .flatMap((source) => arrayValue(source.audit))
+    .filter(isPlainRecord)
+    .map((record) => ({ ...record }));
+}
+
+function leadItems(value: unknown): string[] {
+  const leads = arrayValue(value).filter(isPlainRecord);
+  if (leads.length === 0) {
+    return ['lead:value'];
+  }
+  return leads.map((lead, index) => 'lead:' + (stringValue(lead.email) || stringValue(lead.name) || String(index + 1)));
+}
+
+function arrayAt(domain: Record<string, unknown>, path: string): unknown[] {
+  const directArray = arrayValue(valueAtPath(domain, path));
+  if (directArray.length > 0) {
+    return directArray;
+  }
+  const prefix = path + '.';
+  const grouped = new Map<number, Record<string, unknown>>();
+  for (const [key, value] of Object.entries(domain)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const [indexText, ...fieldParts] = key.slice(prefix.length).split('.');
+    const index = Number(indexText);
+    if (!Number.isInteger(index) || index < 0) {
+      continue;
+    }
+    if (fieldParts.length === 0) {
+      grouped.set(index, isPlainRecord(value) ? { ...value } : { value });
+      continue;
+    }
+    const record = grouped.get(index) ?? {};
+    record[fieldParts.join('.')] = value;
+    grouped.set(index, record);
+  }
+  return [...grouped.entries()].sort(([left], [right]) => left - right).map(([, value]) => value);
+}
+
+function valueAtPath(domain: Record<string, unknown>, path: string): unknown {
+  if (Object.hasOwn(domain, path)) {
+    return domain[path];
+  }
+  let cursor: unknown = domain;
+  for (const part of path.split('.')) {
+    if (!isPlainRecord(cursor) || !Object.hasOwn(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function resultJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return recordValue(JSON.parse(value) as unknown);
+    } catch {
+      return {};
+    }
+  }
+  const record = recordValue(value);
+  if (typeof record.result_json === 'string') {
+    try {
+      return recordValue(JSON.parse(record.result_json) as unknown);
+    } catch {
+      return {};
+    }
+  }
+  return recordValue(record.result_json);
+}
+
+function firstNonEmptyArray(...values: unknown[][]): unknown[] {
+  return values.find((value) => value.length > 0) ?? [];
+}
+
+function arrayValue(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (isPlainRecord(value)) {
+    const numericKeys = Object.keys(value)
+      .filter((key) => /^\\d+$/u.test(key))
+      .sort((left, right) => Number(left) - Number(right));
+    if (numericKeys.length > 0) {
+      return numericKeys.map((key) => value[key]);
+    }
+  }
+  return [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return isPlainRecord(value) ? value : {};
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 ? value : '';
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
 `;
 }
 
@@ -4002,6 +4272,17 @@ function fallbackResultFieldExpression(
   }
   if (key === 'adapter_kind' && archetype === 'external-adapter') {
     return "'in_memory_mock'";
+  }
+  if (isArraySchemaValue(schemaValue)) {
+    if (key === 'per_source') {
+      return 'perSourceEntries(input.domain)';
+    }
+    if (key === 'leads' || key === 'records' || key === 'contacts') {
+      return 'leadEntries(input.domain)';
+    }
+    if (key === 'audit') {
+      return 'auditEntries(input.domain)';
+    }
   }
   return fallbackFieldExpression(schemaValue);
 }
@@ -4040,6 +4321,14 @@ function fallbackFieldExpression(schemaValue: unknown): string {
 
 function isRepeatedRecordSchema(value: unknown): value is [Record<string, unknown>] {
   return Array.isArray(value) && value.length === 1 && isRecord(value[0]);
+}
+
+function isArraySchemaValue(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return true;
+  }
+  const declared = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return declared.startsWith('array') || declared.startsWith('[') || declared.endsWith('[]');
 }
 
 function repeatedRecordFallbackExpression(schema: Record<string, unknown>): string {

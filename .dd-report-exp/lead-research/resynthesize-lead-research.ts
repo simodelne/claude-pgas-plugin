@@ -116,6 +116,7 @@ function runGeneratedTypecheck(targetRoot: string): string {
   if (!existsSync(tscBin)) {
     throw new Error(`missing TypeScript compiler at ${tscBin}`);
   }
+  installGeneratedDependencies(targetRoot);
   try {
     return execFileSync(process.execPath, [tscBin, '--noEmit'], {
       cwd: targetRoot,
@@ -126,6 +127,23 @@ function runGeneratedTypecheck(targetRoot: string): string {
   } catch (error) {
     throw new Error(`generated lead-research scaffold typecheck failed:\n${commandOutput(error)}`);
   }
+}
+
+function installGeneratedDependencies(targetRoot: string): void {
+  try {
+    execFileSync(npmCommand(), ['install', '--no-audit', '--no-fund', '--ignore-scripts', '--package-lock=false'], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      env: { ...process.env, CI: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    throw new Error(`generated lead-research scaffold dependency install failed:\n${commandOutput(error)}`);
+  }
+}
+
+function npmCommand(): string {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 function writeJson(path: string, value: unknown): void {

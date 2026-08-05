@@ -72,6 +72,7 @@ describe('PR-E2 export stage synthesis', () => {
     expect(artifact.handlers_ts).toContain('createExportHookAdapter');
     expect(artifact.handlers_ts).toContain('runExportDocument');
     expect(artifact.handlers_ts).toContain('render_export_document_export');
+    expect(artifact.handlers_ts).toContain('attachExportPayloadFields(normalizeStageOutput');
     expect(artifact.handlers_ts).not.toContain('async complete_export_document');
 
     const plan = createStandaloneArtifactPlan(

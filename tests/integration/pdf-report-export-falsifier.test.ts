@@ -189,7 +189,7 @@ function loadGeneratedPdfReportStage(body: string): (input: Record<string, unkno
         return { assembleStructuredReport };
       }
       if (id === '../connectors/pdf-report.js') {
-        return {};
+        return { MockPdfReportConnector };
       }
       throw new Error(`unexpected generated PDF report import ${id}`);
     },
