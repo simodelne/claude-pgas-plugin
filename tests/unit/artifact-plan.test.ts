@@ -70,6 +70,45 @@ describe('artifact planner', () => {
     ]);
   });
 
+  it('plans mock-backed standalone host connector artifacts only when capability gaps require them', () => {
+    const defaultPaths = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }).artifacts.map((artifact) => artifact.path);
+
+    expect(defaultPaths).not.toContain('src/programs/pgas-new/connectors/web-navigation.ts');
+    expect(defaultPaths).not.toContain('src/programs/pgas-new/connectors/persistence.ts');
+    expect(defaultPaths).not.toContain('src/programs/pgas-new/connectors/pdf-report.ts');
+    expect(defaultPaths).not.toContain('src/programs/pgas-new/report-data.ts');
+
+    const gapPaths = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }, {
+      capabilityGaps: [
+        {
+          capability: 'web_navigation_guarded',
+          stage: 'navigate_source',
+          connector_slug: 'web-navigation',
+          message: 'guarded browser navigation is host-side',
+        },
+        {
+          capability: 'cross_session_persistence',
+          stage: 'persist',
+          connector_slug: 'persistence',
+          message: 'cross-session store is host-side',
+        },
+        {
+          capability: 'export_pdf_report',
+          stage: 'render_report',
+          connector_slug: 'pdf-report',
+          message: 'SOTA PDF rendering is host-side',
+        },
+      ],
+    }).artifacts.map((artifact) => artifact.path);
+
+    expect(gapPaths).toEqual(expect.arrayContaining([
+      'src/programs/pgas-new/connectors/web-navigation.ts',
+      'src/programs/pgas-new/connectors/persistence.ts',
+      'src/programs/pgas-new/connectors/pdf-report.ts',
+      'src/programs/pgas-new/report-data.ts',
+    ]));
+  });
+
   it('plans existing-repo artifacts from the binding manifest paths', () => {
     const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST);
 
@@ -265,7 +304,7 @@ describe('artifact planner', () => {
     });
 
     for (const artifact of plan.artifacts) {
-      expect(artifact.kind).toMatch(/^(manifest|dossier|metadata|package|config|server|repl|spec|registration|contract|handler|stage|tool|test|audit)$/);
+      expect(artifact.kind).toMatch(/^(manifest|dossier|metadata|package|config|server|repl|spec|registration|contract|connector|handler|stage|tool|test|audit)$/);
       expect(artifact.owner).toBe('pgas-new');
       expect(artifact.mode_introduced).toMatch(/^(repo_targeting|scaffold_plan|domain_synthesis|branch_write|static_verify|smoke_verify|live_verify|pr_graduation)$/);
       expect(artifact.purpose.length).toBeGreaterThan(0);

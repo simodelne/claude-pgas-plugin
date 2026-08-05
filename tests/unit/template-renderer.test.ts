@@ -1178,6 +1178,63 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     }
   });
 
+  it('renders capability-gap host connectors as combined contract plus mock modules', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-host-connectors-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'lead-research-agent',
+        name: 'Lead Research Agent',
+        synthesizedCapabilityGaps: [
+          {
+            capability: 'web_navigation_guarded',
+            stage: 'navigate_source',
+            connector_slug: 'web-navigation',
+            message: 'guarded browser navigation is host-side',
+          },
+          {
+            capability: 'cross_session_persistence',
+            stage: 'persist',
+            connector_slug: 'persistence',
+            message: 'cross-session store is host-side',
+          },
+          {
+            capability: 'export_pdf_report',
+            stage: 'render_report',
+            connector_slug: 'pdf-report',
+            message: 'SOTA PDF rendering is host-side',
+          },
+        ],
+      });
+
+      expect(result.written).toEqual(expect.arrayContaining([
+        'src/programs/lead-research-agent/connectors/web-navigation.ts',
+        'src/programs/lead-research-agent/connectors/persistence.ts',
+        'src/programs/lead-research-agent/connectors/pdf-report.ts',
+        'src/programs/lead-research-agent/report-data.ts',
+      ]));
+
+      const webNavigation = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/web-navigation.ts'), 'utf8');
+      const persistence = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/persistence.ts'), 'utf8');
+      const pdfReport = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'), 'utf8');
+      const reportData = readFileSync(join(outDir, 'src/programs/lead-research-agent/report-data.ts'), 'utf8');
+
+      expect(webNavigation).toContain('export interface WebNavigationHostConnector');
+      expect(webNavigation).toContain('export class MockWebNavigationConnector');
+      expect(webNavigation).not.toContain("from './web-navigation-connector.js'");
+      expect(persistence).toContain('export interface PersistenceHostConnector');
+      expect(persistence).toContain('export class MockPersistenceConnector');
+      expect(persistence).not.toContain("from './persistence-connector.js'");
+      expect(pdfReport).toContain('export interface PdfReportHostConnector');
+      expect(pdfReport).toContain('export class MockPdfReportConnector');
+      expect(pdfReport).not.toContain("from './pdf-report-connector.js'");
+      expect(reportData).toContain("from './connectors/pdf-report.js'");
+      expect(reportData).not.toContain("from './pdf-report-connector.js'");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders REPL startup with friendly auth and notification-open failures', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-auth-'));
     try {

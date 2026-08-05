@@ -14,6 +14,7 @@ export type ArtifactKind =
   | 'spec'
   | 'registration'
   | 'contract'
+  | 'connector'
   | 'handler'
   | 'projection'
   | 'frontend'
@@ -80,6 +81,11 @@ export interface GeneratedArtifactPlanOptions {
     html?: boolean;
     diff?: boolean;
   };
+  hostConnectorSurfaces?: {
+    webNavigation?: boolean;
+    persistence?: boolean;
+    pdfReport?: boolean;
+  };
   documentExtractionSurfaces?: {
     docx?: boolean;
   };
@@ -92,6 +98,7 @@ export function createStandaloneArtifactPlan(
   const safeProgram = validateProgramIdentity(program);
   const slug = safeProgram.slug;
   const stageSlugs = safeStageSlugs(options.stageSlugs ?? []);
+  const hostConnectorSurfaces = options.hostConnectorSurfaces ?? hostConnectorSurfacesForCapabilityGaps(options.capabilityGaps ?? []);
   return {
     target: 'standalone_repo',
     program: safeProgram,
@@ -150,6 +157,7 @@ export function createStandaloneArtifactPlan(
       artifact('tool', `src/programs/${slug}/tools.ts`, 'Declare semantic repo, git, verification, research, and session tool metadata.', 'branch_write', [
         'typecheck',
       ]),
+      ...standaloneHostConnectorArtifacts(slug, hostConnectorSurfaces),
       ...standaloneExportArtifacts(slug, options.exportSurfaces),
       ...standaloneDocumentExtractionArtifacts(slug, options.documentExtractionSurfaces),
       artifact('test', 'tests/spec-load.test.ts', 'Verify generated specs load through pgas-server testing surfaces.', 'static_verify', [
@@ -335,6 +343,51 @@ export function createExistingRepoArtifactPlan(
       ...coreArtifacts,
       ...requestedArtifacts(options.requestedArtifactPaths ?? [], coreArtifacts, programPath),
     ]),
+  };
+}
+
+function standaloneHostConnectorArtifacts(
+  slug: string,
+  surfaces: NonNullable<GeneratedArtifactPlanOptions['hostConnectorSurfaces']>,
+): PlannedArtifact[] {
+  return [
+    ...(surfaces.webNavigation
+      ? [artifact('connector', `src/programs/${slug}/connectors/web-navigation.ts`, 'Provide WebNavigationHostConnector contract and deterministic mock implementation.', 'branch_write', [
+          'typecheck',
+          'program-deterministic',
+        ])]
+      : []),
+    ...(surfaces.persistence
+      ? [artifact('connector', `src/programs/${slug}/connectors/persistence.ts`, 'Provide PersistenceHostConnector contract and deterministic in-memory mock implementation.', 'branch_write', [
+          'typecheck',
+          'program-deterministic',
+        ])]
+      : []),
+    ...(surfaces.pdfReport
+      ? [
+          artifact('connector', `src/programs/${slug}/connectors/pdf-report.ts`, 'Provide PdfReportHostConnector contract and deterministic PDF mock implementation.', 'branch_write', [
+            'typecheck',
+            'program-deterministic',
+          ]),
+          artifact('export', `src/programs/${slug}/report-data.ts`, 'Provide pure structured report-data assembly for PDF report rendering.', 'branch_write', [
+            'typecheck',
+            'program-deterministic',
+          ]),
+        ]
+      : []),
+  ];
+}
+
+function hostConnectorSurfacesForCapabilityGaps(
+  gaps: readonly CapabilityGap[],
+): NonNullable<GeneratedArtifactPlanOptions['hostConnectorSurfaces']> {
+  return {
+    webNavigation: gaps.some((gap) =>
+      gap.capability === 'web_navigation_guarded' || gap.connector_slug === 'web-navigation'),
+    persistence: gaps.some((gap) =>
+      gap.capability === 'cross_session_persistence' || gap.connector_slug === 'persistence'),
+    pdfReport: gaps.some((gap) =>
+      gap.capability === 'export_pdf_report' || gap.connector_slug === 'pdf-report'),
   };
 }
 

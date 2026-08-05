@@ -592,6 +592,30 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   if (path === `src/programs/${slug}/tools.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/tools.ts'];
   }
+  if (path === `src/programs/${slug}/connectors/web-navigation.ts`) {
+    return inlineTemplate(renderCombinedConsumerTemplate(
+      'web-navigation-connector.ts.tmpl',
+      'web-navigation-mock.ts.tmpl',
+      './web-navigation-connector.js',
+    ));
+  }
+  if (path === `src/programs/${slug}/connectors/persistence.ts`) {
+    return inlineTemplate(renderCombinedConsumerTemplate(
+      'persistence-connector.ts.tmpl',
+      'persistence-mock.ts.tmpl',
+      './persistence-connector.js',
+    ));
+  }
+  if (path === `src/programs/${slug}/connectors/pdf-report.ts`) {
+    return inlineTemplate(renderCombinedConsumerTemplate(
+      'pdf-report-connector.ts.tmpl',
+      'pdf-report-mock.ts.tmpl',
+      './pdf-report-connector.js',
+    ));
+  }
+  if (path === `src/programs/${slug}/report-data.ts`) {
+    return inlineTemplate(renderReportDataStandaloneSource());
+  }
   if (path === `src/programs/${slug}/export/html.ts`) {
     return spec('consumer/export-html.ts.tmpl', ['NAME']);
   }
@@ -614,6 +638,37 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
 
 function inlineTemplate(content: string): TemplateSpec {
   return { file: '', tokens: [], content, substitute: false };
+}
+
+function renderCombinedConsumerTemplate(
+  contractTemplate: string,
+  mockTemplate: string,
+  mockTypeImport: string,
+): string {
+  const contractSource = readConsumerTemplate(contractTemplate).trimEnd();
+  const mockSource = removeLeadingTypeImport(readConsumerTemplate(mockTemplate), mockTypeImport).trimStart();
+  return ensureTrailingNewline(`${contractSource}\n\n${mockSource}`);
+}
+
+function renderReportDataStandaloneSource(): string {
+  return ensureTrailingNewline(
+    readConsumerTemplate('report-data.ts.tmpl')
+      .replace("from './pdf-report-connector.js'", "from './connectors/pdf-report.js'")
+      .trimEnd(),
+  );
+}
+
+function readConsumerTemplate(template: string): string {
+  return readFileSync(join(TEMPLATE_ROOT, 'consumer', template), 'utf8');
+}
+
+function removeLeadingTypeImport(source: string, importSpecifier: string): string {
+  const escapedSpecifier = importSpecifier.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const importPattern = new RegExp(`^import type [\\s\\S]+? from '${escapedSpecifier}';\\n\\n?`, 'u');
+  if (!importPattern.test(source)) {
+    throw new Error(`mock connector template missing leading type import from ${importSpecifier}`);
+  }
+  return source.replace(importPattern, '');
 }
 
 function renderArtifactWriteContent(options: {

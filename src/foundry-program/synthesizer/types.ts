@@ -32,6 +32,7 @@ export interface StageDomainSpec {
   produces: Record<string, unknown>;
   rules: string[];
   invariants: string[];
+  input_domain?: Record<string, unknown>;
 }
 
 export interface StageArtifactDescriptorInput {
