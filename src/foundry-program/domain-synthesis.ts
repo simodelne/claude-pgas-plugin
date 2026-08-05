@@ -947,6 +947,7 @@ function promptForStage(stage: string, classification: StageClassification, arti
         'Author-provided domain spec for this stage is normative.',
         'Implement these rules exactly; do not infer alternate business logic.',
         'Treat domain_spec.produces.result_json as the exact result_json object schema and insertion order; emit those top-level keys only.',
+        'When a domain_spec.produces.result_json field is an array containing one object, treat it as a repeated-record schema: return an array of records and preserve every key inside that object.',
         'When domain_spec.produces.items_json is an array, treat it as the exact ordered item template list; emit that many strings and no extras.',
         'If request data is missing for a required read, surface that gap in result_json rather than fabricating values.',
         'Stage domain spec:',
@@ -2753,6 +2754,9 @@ function tsPropertyKey(key: string): string {
  * computation will simply fail re-verification and are left to error.
  */
 function fallbackFieldExpression(schemaValue: unknown): string {
+  if (isRepeatedRecordSchema(schemaValue)) {
+    return repeatedRecordFallbackExpression(schemaValue[0]);
+  }
   const declared = typeof schemaValue === 'string' ? schemaValue.trim().toLowerCase() : '';
   if (declared === 'number' || declared === 'integer' || declared === 'float') {
     return '1';
@@ -2768,6 +2772,16 @@ function fallbackFieldExpression(schemaValue: unknown): string {
   }
   // Default to a deterministic non-empty string, echoing the stage for traceability.
   return "input.stage + '-pending'";
+}
+
+function isRepeatedRecordSchema(value: unknown): value is [Record<string, unknown>] {
+  return Array.isArray(value) && value.length === 1 && isRecord(value[0]);
+}
+
+function repeatedRecordFallbackExpression(schema: Record<string, unknown>): string {
+  const entries = Object.keys(schema).map((key) =>
+    `${tsPropertyKey(key)}: ${fallbackFieldExpression(schema[key])}`);
+  return `[{ ${entries.join(', ')} }]`;
 }
 
 /**

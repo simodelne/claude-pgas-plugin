@@ -58,6 +58,15 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     since_version: '3.10.0',
   },
   {
+    capability: 'config_driven_extraction_schema',
+    status: 'synthesizes',
+    evidence: capabilityEvidence([
+      'extract stage output contract is generated from intake extraction_schema config, not hardwired',
+      'proven by extraction-schema-parameterization.test.ts (two distinct schemas → two distinct contracts)',
+    ]),
+    since_version: '3.26.0',
+  },
+  {
     capability: 'collection_lifecycle_aggregate',
     status: 'synthesizes',
     evidence: 'collection_lifecycle synthesis emits per-status transitions + an all-terminal aggregate gate (Gap 2).',
@@ -387,6 +396,33 @@ function detectDelegationCapabilities(delegation: Record<string, unknown> | unde
   return demands;
 }
 
+function detectConfigDrivenExtractionSchemaCapabilities(stages: ReadonlyArray<object> | undefined): CapabilityDemand[] {
+  if (!Array.isArray(stages)) return [];
+  const demands: CapabilityDemand[] = [];
+  for (const stage of stages) {
+    if (!isRecord(stage)) continue;
+    const domainSpec = stage.domain_spec;
+    if (!isRecord(domainSpec) || !isRecord(domainSpec.produces)) continue;
+    if (!containsArrayOfObjectSchema(domainSpec.produces)) continue;
+    const slug = typeof stage.slug === 'string' && stage.slug.length > 0 ? stage.slug : '<unknown>';
+    demands.push({
+      capability: 'config_driven_extraction_schema',
+      evidence: `stage ${slug} domain_spec.produces declares an array-of-object output schema`,
+    });
+  }
+  return demands;
+}
+
+function containsArrayOfObjectSchema(value: unknown, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (Array.isArray(value)) {
+    return (value.length === 1 && isRecord(value[0])) ||
+      value.some((item) => containsArrayOfObjectSchema(item, depth + 1));
+  }
+  if (!isRecord(value)) return false;
+  return Object.values(value).some((item) => containsArrayOfObjectSchema(item, depth + 1));
+}
+
 function detectDocumentsCapabilities(documents: unknown): CapabilityDemand[] {
   if (documents === undefined) return [];
   if (documents && typeof documents === 'object' && !Array.isArray(documents)) {
@@ -471,6 +507,7 @@ export function detectRequestedCapabilities(input: CapabilityDetectionInput): Ca
     const match = detector.pattern.exec(haystack);
     if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
+  for (const demand of detectConfigDrivenExtractionSchemaCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectDocumentsCapabilities(input.documents)) add(demand.capability, demand.evidence);
   for (const demand of detectDelegationCapabilities(input.delegation)) add(demand.capability, demand.evidence);
   return [...found.values()];
