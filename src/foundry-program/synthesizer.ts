@@ -198,9 +198,10 @@ export function synthesizeProgramSpecFromDomain(
   const initialEntryPath = initialInputPath(entryChannel);
   let stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
+  const rawDelegationInput = parseOptionalJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json') ?? {};
   const rawDelegation = normalizeDelegationChildInternalIdentifiers(
     resolveDelegationChildrenAgainstManifest(
-      parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json'),
+      rawDelegationInput,
       options.availablePrograms ?? [],
     ),
   );
