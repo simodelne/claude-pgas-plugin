@@ -5,7 +5,7 @@ export interface ClassifiedStage {
   archetype: StageArchetype;
   rationale: string;
   adapter_kind?: 'in_memory_mock' | 'repo_integration';
-  export_kind?: 'export_docx' | 'export_html';
+  export_kind?: 'export_docx' | 'export_html' | 'export_pdf';
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
@@ -228,12 +228,13 @@ function explicitStageArchetypeFromStage(stage: StageInput): StageArchetype | un
   return normalizeExplicitArchetype(explicit);
 }
 
-function explicitExportKind(stage: StageInput): 'export_docx' | 'export_html' | undefined {
+function explicitExportKind(stage: StageInput): 'export_docx' | 'export_html' | 'export_pdf' | undefined {
   const raw = [stage.kind, stage.export_kind]
     .find((candidate): candidate is string => typeof candidate === 'string')
     ?.toLowerCase();
   if (raw === 'export_docx' || raw === 'docx_export') return 'export_docx';
   if (raw === 'export_html' || raw === 'html_export') return 'export_html';
+  if (raw === 'export_pdf' || raw === 'pdf_export' || raw === 'export_pdf_report' || raw === 'pdf_report') return 'export_pdf';
   return undefined;
 }
 

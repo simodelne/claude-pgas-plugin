@@ -73,7 +73,7 @@ import {
   planTransitionActions,
   transitionActionChannel,
 } from './synthesizer/topology.js';
-import { renderRegistrationSource } from './synthesizer/registration-artifacts.js';
+import { pdfReportArtifactRule, renderRegistrationSource } from './synthesizer/registration-artifacts.js';
 import { validateSynthesizedSpec } from './synthesizer/validation.js';
 export type {
   DelegationChildrenValidationContext,
@@ -397,6 +397,7 @@ export function synthesizeProgramSpecFromDomain(
     ...documentExtractionGaps,
     ...capabilityGapsForWebNavigationStages(stageClassification),
     ...capabilityGapsForPersistenceStages(stageClassification),
+    ...capabilityGapsForPdfReportExportDescriptors(exportDescriptors),
   ];
   const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors, stageArtifactDescriptors);
   const registrationPolicies = {
@@ -3488,12 +3489,11 @@ function exportDescriptorsFor(
       return;
     }
     usedStages.add(stage);
-    const docx = kind === 'export_docx';
     descriptors.push({
       stage,
       kind,
-      title: docx ? `${programName} DOCX Export` : `${programName} HTML Export`,
-      artifactType: docx ? 'docx_export' : 'html_export',
+      title: exportTitle(programName, kind),
+      artifactType: artifactTypeForExportKind(kind),
       payloadRef: `${stage}.output`,
     });
   };
@@ -3512,6 +3512,9 @@ function exportDescriptorsFor(
   if (demands.some((demand) => demand.capability === 'export_html')) {
     demandedKinds.add('export_html');
   }
+  if (demands.some((demand) => demand.capability === 'export_pdf_report')) {
+    demandedKinds.add('export_pdf');
+  }
 
   for (const kind of demandedKinds) {
     if (descriptors.some((descriptor) => descriptor.kind === kind)) {
@@ -3527,6 +3530,18 @@ function exportDescriptorsFor(
   return descriptors.sort((left, right) => (stageOrder.get(left.stage) ?? 0) - (stageOrder.get(right.stage) ?? 0));
 }
 
+function exportTitle(programName: string, kind: ExportStageDescriptor['kind']): string {
+  if (kind === 'export_docx') return `${programName} DOCX Export`;
+  if (kind === 'export_html') return `${programName} HTML Export`;
+  return `${programName} PDF Report`;
+}
+
+function artifactTypeForExportKind(kind: ExportStageDescriptor['kind']): ExportStageDescriptor['artifactType'] {
+  if (kind === 'export_docx') return 'docx_export';
+  if (kind === 'export_html') return 'html_export';
+  return 'pdf_report';
+}
+
 function exportSurfacesFor(
   descriptors: readonly ExportStageDescriptor[],
   demands: ReadonlyArray<{ capability: string }>,
@@ -3537,6 +3552,9 @@ function exportSurfacesFor(
       : {}),
     ...(descriptors.some((descriptor) => descriptor.kind === 'export_html') || demands.some((demand) => demand.capability === 'export_html')
       ? { html: true }
+      : {}),
+    ...(descriptors.some((descriptor) => descriptor.kind === 'export_pdf') || demands.some((demand) => demand.capability === 'export_pdf_report')
+      ? { pdf: true }
       : {}),
   };
   return surfaces;
@@ -3576,6 +3594,18 @@ function exportStageProducesContract(kind: ExportStageDescriptor['kind']): Recor
         section_count: 'number',
       },
       items_json: ['docx_export:<sha256>'],
+    };
+  }
+  if (kind === 'export_pdf') {
+    return {
+      result_json: {
+        stage: 'string',
+        pdf_base64: 'string',
+        pdf_bytes: 'number',
+        sha256: 'string',
+        section_count: 'number',
+      },
+      items_json: ['pdf_report:<sha256>'],
     };
   }
   return {
@@ -3622,7 +3652,7 @@ function normalizeStageArtifactDescriptor(
 }
 
 function hasExportSurfaces(surfaces: ExportSurfaces): boolean {
-  return surfaces.docx === true || surfaces.html === true || surfaces.diff === true;
+  return surfaces.docx === true || surfaces.html === true || surfaces.pdf === true || surfaces.diff === true;
 }
 
 function documentExtractionSurfacesFor(documents: DocumentsDescriptor | undefined): DocumentExtractionSurfaces {
@@ -3689,6 +3719,17 @@ function capabilityGapsForPersistenceStages(stages: ClassifiedStage[]): Capabili
       stage: stage.slug,
       connector_slug: 'persistence',
       message: 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)',
+    }));
+}
+
+function capabilityGapsForPdfReportExportDescriptors(descriptors: readonly ExportStageDescriptor[]): CapabilityGap[] {
+  return descriptors
+    .filter((descriptor) => descriptor.kind === 'export_pdf')
+    .map((descriptor) => ({
+      capability: 'export_pdf_report',
+      stage: descriptor.stage,
+      connector_slug: 'pdf-report',
+      message: 'SOTA PDF rendering is host-side; foundry ships report-data assembler + PdfReportHostConnector contract + mock',
     }));
 }
 
@@ -4081,6 +4122,7 @@ function explicitStageExportKind(stage: Stage): ExportStageDescriptor['kind'] | 
     .toLowerCase();
   if (raw === 'export_docx' || raw === 'docx_export') return 'export_docx';
   if (raw === 'export_html' || raw === 'html_export') return 'export_html';
+  if (raw === 'export_pdf' || raw === 'pdf_export' || raw === 'export_pdf_report' || raw === 'pdf_report') return 'export_pdf';
   return undefined;
 }
 
@@ -4090,7 +4132,11 @@ function chooseExportStageForDemand(
   usedStages: ReadonlySet<string>,
 ): Stage | undefined {
   const candidates = stages.filter((stage) => !stage.is_bootstrap && !stage.is_terminal && !usedStages.has(stage.slug));
-  const wanted = kind === 'export_docx' ? /(?:docx|word|export|render|assemble|format)/u : /(?:html|export|render|assemble|format)/u;
+  const wanted = kind === 'export_docx'
+    ? /(?:docx|word|export|render|assemble|format)/u
+    : kind === 'export_html'
+      ? /(?:html|export|render|assemble|format)/u
+      : /(?:pdf|report|export|render|assemble|format)/u;
   return candidates.find((stage) => wanted.test(exportStageHaystack(stage)));
 }
 
@@ -9258,13 +9304,20 @@ function artifactPolicyForExportDescriptors(
   return {
     rules: [
       ...descriptors.map((descriptor) => ({
-        artifactType: descriptor.artifactType,
-        title: descriptor.title,
-        summary: descriptor.kind === 'export_docx'
-          ? 'Deterministically rendered DOCX artifact; payload bytes are base64 in domain state.'
-          : 'Deterministically rendered HTML artifact; payload is in domain state.',
-        payloadRef: descriptor.payloadRef,
-        whenAllPaths: [`${descriptor.payloadRef}.result_json`],
+        ...(descriptor.kind === 'export_pdf'
+          ? pdfReportArtifactRule({
+            title: descriptor.title,
+            payloadRef: descriptor.payloadRef,
+          })
+          : {
+            artifactType: descriptor.artifactType,
+            title: descriptor.title,
+            summary: descriptor.kind === 'export_docx'
+              ? 'Deterministically rendered DOCX artifact; payload bytes are base64 in domain state.'
+              : 'Deterministically rendered HTML artifact; payload is in domain state.',
+            payloadRef: descriptor.payloadRef,
+            whenAllPaths: [`${descriptor.payloadRef}.result_json`],
+          }),
       })),
       ...stageArtifacts.map((descriptor) => ({
         artifactType: descriptor.artifactType,

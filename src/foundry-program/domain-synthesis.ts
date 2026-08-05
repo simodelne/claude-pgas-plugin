@@ -20,6 +20,8 @@ const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
 const EXPORT_DOCX_IMPORT = '../export/docx.js';
 const EXPORT_HTML_IMPORT = '../export/html.js';
+const REPORT_DATA_IMPORT = '../report-data.js';
+const PDF_REPORT_CONNECTOR_IMPORT = '../connectors/pdf-report.js';
 const WEB_NAVIGATION_IMPORT = '../connectors/web-navigation.js';
 const PERSISTENCE_IMPORT = '../connectors/persistence.js';
 const EXPORT_TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new/consumer');
@@ -201,7 +203,8 @@ export async function synthesizeDomainLogic(
     const verificationOptions = {
       stage,
       ...(exportDescriptor ? {
-        allowedIntegrationImport: exportImportForDescriptor(exportDescriptor),
+        allowedIntegrationImport: exportPrimaryImportForDescriptor(exportDescriptor),
+        allowedIntegrationImports: exportImportsForDescriptor(exportDescriptor),
         exportKind: exportDescriptor.kind,
       } : {}),
       ...(repoIntegration ? {
@@ -257,9 +260,7 @@ export async function synthesizeDomainLogic(
     let escalationAttemptsUsed = 0;
     if (exportDescriptor) {
       attemptsUsed = 1;
-      const body = exportDescriptor.kind === 'export_docx'
-        ? renderDocxExportStageBody(stage, exportDescriptor)
-        : renderHtmlExportStageBody(stage, exportDescriptor);
+      const body = renderExportStageBody(stage, exportDescriptor);
       const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
       if (verification.ok) {
         accepted = {
@@ -452,6 +453,7 @@ function verifyStageBody(
   options: {
     stage: string;
     allowedIntegrationImport?: string;
+    allowedIntegrationImports?: readonly string[];
     integrationName?: string;
     integrationMethod?: string;
     integration?: WiringIntegration;
@@ -473,6 +475,7 @@ function verifyStageBody(
   const source = ts.createSourceFile('stage.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const safetyError = scanSafety(source, {
     allowedIntegrationImport: options.allowedIntegrationImport,
+    allowedIntegrationImports: options.allowedIntegrationImports,
     allowFetch: options.integration?.kind === 'http_api',
     allowedProcessEnv: options.integration?.kind === 'http_api' ? options.integration.config_env : [],
   });
@@ -524,13 +527,20 @@ function verifyStageBody(
 
 function typecheckStageBody(
   body: string,
-  options: { allowedIntegrationImport?: string },
+  options: { allowedIntegrationImport?: string; allowedIntegrationImports?: readonly string[] },
 ): string | undefined {
+  const allowedIntegrationImports = [
+    ...(options.allowedIntegrationImport ? [options.allowedIntegrationImport] : []),
+    ...(options.allowedIntegrationImports ?? []),
+  ];
   if (
-    options.allowedIntegrationImport &&
-    !isExportImport(options.allowedIntegrationImport) &&
-    options.allowedIntegrationImport !== WEB_NAVIGATION_IMPORT &&
-    options.allowedIntegrationImport !== PERSISTENCE_IMPORT
+    allowedIntegrationImports.length > 0 &&
+    !allowedIntegrationImports.every((allowedImport) =>
+      isExportImport(allowedImport) ||
+      allowedImport === REPORT_DATA_IMPORT ||
+      allowedImport === PDF_REPORT_CONNECTOR_IMPORT ||
+      allowedImport === WEB_NAVIGATION_IMPORT ||
+      allowedImport === PERSISTENCE_IMPORT)
   ) {
     return undefined;
   }
@@ -539,6 +549,8 @@ function typecheckStageBody(
   const contractsFile = '/virtual/pgas/contracts.ts';
   const docxFile = '/virtual/pgas/export/docx.ts';
   const htmlFile = '/virtual/pgas/export/html.ts';
+  const reportDataFile = '/virtual/pgas/report-data.ts';
+  const pdfReportConnectorFile = '/virtual/pgas/connectors/pdf-report.ts';
   const webNavigationFile = '/virtual/pgas/connectors/web-navigation.ts';
   const persistenceFile = '/virtual/pgas/connectors/persistence.ts';
   const compilerOptions: ts.CompilerOptions = {
@@ -589,6 +601,8 @@ declare const Buffer: {
       fileName === contractsFile ||
       fileName === docxFile ||
       fileName === htmlFile ||
+      fileName === reportDataFile ||
+      fileName === pdfReportConnectorFile ||
       fileName === webNavigationFile ||
       fileName === persistenceFile ||
       baseHost.fileExists(fileName),
@@ -597,6 +611,8 @@ declare const Buffer: {
       if (fileName === contractsFile) return contractsSource;
       if (fileName === docxFile) return docxDeclarationSource();
       if (fileName === htmlFile) return htmlDeclarationSource();
+      if (fileName === reportDataFile) return reportDataDeclarationSource();
+      if (fileName === pdfReportConnectorFile) return pdfReportDeclarationSource();
       if (fileName === webNavigationFile) return webNavigationDeclarationSource();
       if (fileName === persistenceFile) return persistenceDeclarationSource();
       return baseHost.readFile(fileName);
@@ -613,6 +629,12 @@ declare const Buffer: {
       }
       if (fileName === htmlFile) {
         return ts.createSourceFile(fileName, htmlDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === reportDataFile) {
+        return ts.createSourceFile(fileName, reportDataDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === pdfReportConnectorFile) {
+        return ts.createSourceFile(fileName, pdfReportDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
       }
       if (fileName === webNavigationFile) {
         return ts.createSourceFile(fileName, webNavigationDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
@@ -640,6 +662,20 @@ declare const Buffer: {
       if (moduleName === EXPORT_HTML_IMPORT) {
         return {
           resolvedFileName: htmlFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      if (moduleName === REPORT_DATA_IMPORT) {
+        return {
+          resolvedFileName: reportDataFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      if (moduleName === PDF_REPORT_CONNECTOR_IMPORT) {
+        return {
+          resolvedFileName: pdfReportConnectorFile,
           extension: ts.Extension.Ts,
           isExternalLibraryImport: false,
         };
@@ -685,6 +721,34 @@ export function renderStructuredDocxDocument(input: ProgramDocxInput): Uint8Arra
 
 function htmlDeclarationSource(): string {
   return `export function renderHtmlDocument(body: string): string;
+`;
+}
+
+function reportDataDeclarationSource(): string {
+  return `export interface StructuredReport {
+  readonly title: string;
+  readonly purpose: string;
+  readonly executive_summary: string;
+  readonly per_source: ReadonlyArray<{ source: string; found: number; pages_visited: number }>;
+  readonly leads: readonly Record<string, unknown>[];
+  readonly guard_audit_summary: ReadonlyArray<{ action: string; url: string; reason?: string }>;
+}
+export function assembleStructuredReport(domain: Record<string, unknown>): StructuredReport;
+`;
+}
+
+function pdfReportDeclarationSource(): string {
+  return `export interface StructuredReport {
+  readonly title: string;
+  readonly purpose: string;
+  readonly executive_summary: string;
+  readonly per_source: ReadonlyArray<{ source: string; found: number; pages_visited: number }>;
+  readonly leads: readonly Record<string, unknown>[];
+  readonly guard_audit_summary: ReadonlyArray<{ action: string; url: string; reason?: string }>;
+}
+export interface PdfReportHostConnector {
+  render_report(report: StructuredReport): Promise<Uint8Array>;
+}
 `;
 }
 
@@ -793,6 +857,7 @@ function scanSafety(
   source: ts.SourceFile,
   options: {
     allowedIntegrationImport?: string;
+    allowedIntegrationImports?: readonly string[];
     allowFetch?: boolean;
     allowedProcessEnv?: readonly string[];
   },
@@ -801,6 +866,9 @@ function scanSafety(
   const allowedImports = new Set(['../contracts.js']);
   if (options.allowedIntegrationImport) {
     allowedImports.add(options.allowedIntegrationImport);
+  }
+  for (const allowedImport of options.allowedIntegrationImports ?? []) {
+    allowedImports.add(allowedImport);
   }
   const allowedProcessEnv = new Set(options.allowedProcessEnv ?? []);
   const processAliases = new Set(['process']);
@@ -1247,7 +1315,7 @@ function classificationFor(artifact: SynthesizedArtifact, stage: string): StageC
     ...(typeof record.connector_slug === 'string' ? { connector_slug: record.connector_slug } : {}),
     ...(record.integration_gap === true ? { integration_gap: true } : {}),
     ...(typeof record.audit_note === 'string' ? { audit_note: record.audit_note } : {}),
-    ...(record.export_kind === 'export_docx' || record.export_kind === 'export_html' ? { export_kind: record.export_kind } : {}),
+    ...(record.export_kind === 'export_docx' || record.export_kind === 'export_html' || record.export_kind === 'export_pdf' ? { export_kind: record.export_kind } : {}),
   };
 }
 
@@ -1334,27 +1402,43 @@ function exportDescriptorForStage(
   if (descriptor) {
     return descriptor;
   }
-  if (classification.export_kind === 'export_docx' || classification.export_kind === 'export_html') {
+  if (classification.export_kind === 'export_docx' || classification.export_kind === 'export_html' || classification.export_kind === 'export_pdf') {
     return {
       stage,
       kind: classification.export_kind,
       title: `${stage} export`,
-      artifactType: classification.export_kind === 'export_docx' ? 'docx_export' : 'html_export',
+      artifactType: artifactTypeForExportKind(classification.export_kind),
       payloadRef: `${stage}.output`,
     };
   }
   return undefined;
 }
 
-function exportImportForDescriptor(descriptor: ExportStageDescriptor): string {
-  return descriptor.kind === 'export_docx' ? EXPORT_DOCX_IMPORT : EXPORT_HTML_IMPORT;
+function artifactTypeForExportKind(kind: ExportStageDescriptor['kind']): ExportStageDescriptor['artifactType'] {
+  if (kind === 'export_docx') return 'docx_export';
+  if (kind === 'export_html') return 'html_export';
+  return 'pdf_report';
+}
+
+function exportPrimaryImportForDescriptor(descriptor: ExportStageDescriptor): string {
+  if (descriptor.kind === 'export_docx') return EXPORT_DOCX_IMPORT;
+  if (descriptor.kind === 'export_html') return EXPORT_HTML_IMPORT;
+  return REPORT_DATA_IMPORT;
+}
+
+function exportImportsForDescriptor(descriptor: ExportStageDescriptor): string[] {
+  if (descriptor.kind === 'export_pdf') {
+    return [REPORT_DATA_IMPORT, PDF_REPORT_CONNECTOR_IMPORT];
+  }
+  return [exportPrimaryImportForDescriptor(descriptor)];
 }
 
 function isExportImport(value: string): boolean {
-  return value === EXPORT_DOCX_IMPORT || value === EXPORT_HTML_IMPORT;
+  return value === EXPORT_DOCX_IMPORT || value === EXPORT_HTML_IMPORT || value === REPORT_DATA_IMPORT;
 }
 
 function exportKindForImport(value: string): ExportStageDescriptor['kind'] {
+  if (value === REPORT_DATA_IMPORT) return 'export_pdf';
   return value === EXPORT_HTML_IMPORT ? 'export_html' : 'export_docx';
 }
 
@@ -1413,6 +1497,7 @@ async function runBehavioralGate(
   options: {
     stage: string;
     allowedIntegrationImport?: string;
+    allowedIntegrationImports?: readonly string[];
     integrationName?: string;
     integrationMethod?: string;
     integration?: WiringIntegration;
@@ -1478,6 +1563,9 @@ async function runExportBehavioralGate(
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
   | { ok: false; error: string }
 > {
+  if (options.exportKind === 'export_pdf') {
+    return runPdfReportBehavioralGate(body, archetype, options);
+  }
   try {
     const importPath = options.exportKind === 'export_docx' ? EXPORT_DOCX_IMPORT : EXPORT_HTML_IMPORT;
     const runStage = loadRunStageForBehavior(body, {
@@ -1513,6 +1601,138 @@ async function runExportBehavioralGate(
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: `export behavioral gate failed for stage ${options.stage}: ${message}` };
   }
+}
+
+async function runPdfReportBehavioralGate(
+  body: string,
+  archetype: 'pure-compute' | 'external-adapter',
+  options: {
+    stage: string;
+    exportKind: ExportStageDescriptor['kind'];
+    domainSpec?: StageDomainSpec;
+    reasoningContracts?: Record<string, ReasoningStageContract>;
+  },
+): Promise<
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
+  | { ok: false; error: string }
+> {
+  const calls: Array<{ report: Record<string, unknown> }> = [];
+  const connector = {
+    async render_report(report: Record<string, unknown>): Promise<Uint8Array> {
+      calls.push({ report });
+      return new TextEncoder().encode([
+        'PDF_REPORT_BEHAVIOR',
+        String(report.title),
+        'EXECUTIVE SUMMARY',
+        String(report.executive_summary),
+        'PER SOURCE',
+        JSON.stringify(report.per_source),
+        'LEADS',
+        JSON.stringify(report.leads),
+        'GUARD AUDIT SUMMARY',
+        JSON.stringify(report.guard_audit_summary),
+      ].join('\n'));
+    },
+  };
+  const fixture = {
+    input: {
+      stage: options.stage,
+      payload: {
+        __stage_runtime: {
+          pdf_report: connector,
+        },
+      },
+      domain: {
+        config: { purpose: 'find AI engineers', title: 'Behavior PDF Report' },
+        aggregate: { per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }] },
+        persist: { new_vs_existing: [{ email: 'a@x.com', status: 'new' }] },
+        audit: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+      },
+      domain_spec: options.domainSpec ?? {
+        reads: ['aggregate.per_source', 'persist.new_vs_existing', 'audit', 'config'],
+        produces: {},
+        rules: [],
+        invariants: [],
+      },
+    },
+    runtime: {
+      now: () => '2026-08-05T00:00:00.000Z',
+      random: () => 0.25,
+      llm: async () => {
+        throw new Error('StageRuntime.llm is not available in PDF report behavioral verification');
+      },
+      pdf_report: connector,
+      connectors: { pdf_report: connector },
+    },
+    audit: {
+      input_stage: options.stage,
+      expected_result_stage: options.stage,
+      expected_items_non_empty: true as const,
+      expected_items_templates: ['pdf_report:<sha256>'],
+      available_domain_paths: ['aggregate.per_source', 'audit', 'config', 'persist.new_vs_existing'],
+      domain_spec_reads: ['aggregate.per_source', 'persist.new_vs_existing', 'audit', 'config'],
+    },
+  };
+
+  try {
+    const runStage = loadRunStageForBehavior(body, {
+      modules: {
+        [REPORT_DATA_IMPORT]: loadReportDataTemplateModule(),
+      },
+    });
+    const output = await withBehaviorTimeout(
+      Promise.resolve(runStage(fixture.input, fixture.runtime)),
+      `PDF report behavioral gate failed for stage ${options.stage}: runStage timed out`,
+    );
+    const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec);
+    if (behaviorError) {
+      return {
+        ok: false,
+        error: formatBehavioralGateFailure(options.stage, behaviorError, fixture.audit),
+      };
+    }
+    const exportError = assertExportBehavioralOutput(output, 'export_pdf');
+    if (exportError) {
+      return { ok: false, error: `PDF report behavioral gate failed for stage ${options.stage}: ${exportError}` };
+    }
+    const reportError = assertPdfReportConnectorCall(calls);
+    if (reportError) {
+      return { ok: false, error: `PDF report behavioral gate failed for stage ${options.stage}: ${reportError}` };
+    }
+    return {
+      ok: true,
+      behavioral_gate: 'pdf_report_render',
+      behavioral_fixture: fixture.audit,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `PDF report behavioral gate failed for stage ${options.stage}: ${message}` };
+  }
+}
+
+function assertPdfReportConnectorCall(calls: Array<{ report: Record<string, unknown> }>): string | undefined {
+  if (calls.length !== 1) {
+    return `expected one PdfReportHostConnector.render_report call; got ${String(calls.length)}`;
+  }
+  const report = calls[0]!.report;
+  if (report.title !== 'Behavior PDF Report' || report.purpose !== 'find AI engineers') {
+    return 'connector report did not include title and purpose from input.domain.config';
+  }
+  if (typeof report.executive_summary !== 'string' || report.executive_summary.length === 0) {
+    return 'connector report did not include executive_summary';
+  }
+  if (!Array.isArray(report.per_source) || report.per_source.length !== 1) {
+    return 'connector report did not include per_source findings';
+  }
+  if (!Array.isArray(report.leads) || report.leads.length !== 1) {
+    return 'connector report did not include leads';
+  }
+  const audit = report.guard_audit_summary;
+  if (!Array.isArray(audit) || !audit.some((entry) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry) && (entry as Record<string, unknown>).action === 'refuse')) {
+    return 'connector report did not include guard_audit_summary refusal entries';
+  }
+  return undefined;
 }
 
 async function runRepoIntegrationLoopbackGate(
@@ -2052,6 +2272,20 @@ function assertExportBehavioralOutput(output: unknown, exportKind: ExportStageDe
     const expected = createHash('sha256').update(bytes).digest('hex');
     return sha256Value === expected ? undefined : 'result_json.sha256 must hash decoded docx bytes';
   }
+  if (exportKind === 'export_pdf') {
+    if (typeof result.pdf_base64 !== 'string' || result.pdf_base64.length === 0) {
+      return 'result_json.pdf_base64 must be a non-empty string';
+    }
+    const bytes = Buffer.from(result.pdf_base64, 'base64');
+    if (bytes.length === 0) {
+      return 'decoded pdf_base64 must be non-empty';
+    }
+    if (result.pdf_bytes !== bytes.length) {
+      return 'result_json.pdf_bytes must equal decoded byte length';
+    }
+    const expected = createHash('sha256').update(bytes).digest('hex');
+    return sha256Value === expected ? undefined : 'result_json.sha256 must hash decoded PDF report bytes';
+  }
   if (typeof result.html !== 'string' || !result.html.startsWith('<!doctype html>')) {
     return 'result_json.html must contain a rendered HTML document';
   }
@@ -2082,6 +2316,33 @@ function loadExportTemplateModule(importPath: string): Record<string, unknown> {
     Uint8Array,
   });
   new Script(transpiled.outputText, { filename: `${template}.behavior.cjs` }).runInContext(context, {
+    timeout: 1_000,
+  });
+  return moduleObject.exports as Record<string, unknown>;
+}
+
+function loadReportDataTemplateModule(): Record<string, unknown> {
+  const source = readFileSync(join(EXPORT_TEMPLATE_ROOT, 'report-data.ts.tmpl'), 'utf8');
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      strict: true,
+    },
+  });
+  const exportsObject: Record<string, unknown> = {};
+  const moduleObject = { exports: exportsObject };
+  const context = createContext({
+    exports: exportsObject,
+    module: moduleObject,
+    require: (specifier: string) => {
+      if (specifier === './pdf-report-connector.js') {
+        return {};
+      }
+      throw new Error(`report-data behavioral module not available: ${specifier}`);
+    },
+  });
+  new Script(transpiled.outputText, { filename: 'report-data.ts.tmpl.behavior.cjs' }).runInContext(context, {
     timeout: 1_000,
   });
   return moduleObject.exports as Record<string, unknown>;
@@ -3245,6 +3506,16 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 `;
 }
 
+function renderExportStageBody(stage: string, descriptor: ExportStageDescriptor): string {
+  if (descriptor.kind === 'export_docx') {
+    return renderDocxExportStageBody(stage, descriptor);
+  }
+  if (descriptor.kind === 'export_html') {
+    return renderHtmlExportStageBody(stage, descriptor);
+  }
+  return renderPdfReportStageBody(stage, descriptor);
+}
+
 function renderDocxExportStageBody(stage: string, descriptor: ExportStageDescriptor): string {
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 import { renderStructuredDocxDocument } from '../export/docx.js';
@@ -3318,6 +3589,71 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+${sha256Helper()}
+`;
+}
+
+function renderPdfReportStageBody(stage: string, descriptor: ExportStageDescriptor): string {
+  void stage;
+  void descriptor;
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+import { assembleStructuredReport } from '../report-data.js';
+import type { PdfReportHostConnector } from '../connectors/pdf-report.js';
+
+declare const Buffer: {
+  from(data: Uint8Array): { toString(encoding: 'base64'): string };
+};
+
+type RuntimeWithPdfReport = StageRuntime & {
+  pdf_report?: PdfReportHostConnector;
+  connectors?: { pdf_report?: PdfReportHostConnector };
+};
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  const connector = pdfReportConnector(input, runtime);
+  const report = assembleStructuredReport(input.domain);
+  const bytes = await connector.render_report(report);
+  const sha256 = await sha256Hex(bytes);
+  const result = {
+    stage: input.stage,
+    pdf_base64: Buffer.from(bytes).toString('base64'),
+    pdf_bytes: bytes.length,
+    sha256,
+    section_count: 4,
+  };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify(['pdf_report:' + result.sha256]),
+    digest: '',
+  };
+}
+
+function pdfReportConnector(input: StageInput, runtime: StageRuntime): PdfReportHostConnector {
+  const runtimeRecord = runtime as RuntimeWithPdfReport;
+  const runtimeConnector = runtimeRecord.pdf_report ?? runtimeRecord.connectors?.pdf_report;
+  if (isPdfReportConnector(runtimeConnector)) {
+    return runtimeConnector;
+  }
+  const payload = input.payload as Record<string, unknown>;
+  const payloadRuntime = recordValue(payload.__stage_runtime);
+  const payloadConnectors = recordValue(payloadRuntime.connectors);
+  const payloadConnector = payloadRuntime.pdf_report ?? payloadConnectors.pdf_report;
+  if (isPdfReportConnector(payloadConnector)) {
+    return payloadConnector;
+  }
+  throw new Error('missing PdfReportHostConnector runtime binding for pdf-report');
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function isPdfReportConnector(value: unknown): value is PdfReportHostConnector {
+  return !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof (value as { render_report?: unknown }).render_report === 'function';
 }
 ${sha256Helper()}
 `;

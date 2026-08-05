@@ -81,6 +81,16 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     gap_note: 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)',
   },
   {
+    capability: 'export_pdf_report',
+    status: 'scaffolds_with_gap',
+    evidence: capabilityEvidence([
+      'structured report-data assembler + PdfReportHostConnector contract + deterministic mock are scaffolded',
+      'rendered PDF report bytes are harvested as first-class artifacts from pdf_base64 in domain state',
+    ]),
+    since_version: '3.26.0',
+    gap_note: 'SOTA PDF rendering is host-side; foundry ships report-data assembler + PdfReportHostConnector contract + mock',
+  },
+  {
     capability: 'collection_lifecycle_aggregate',
     status: 'synthesizes',
     evidence: 'collection_lifecycle synthesis emits per-status transitions + an all-terminal aggregate gate (Gap 2).',
@@ -304,6 +314,11 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
     label: 'cross-session persistence',
   },
   {
+    capability: 'export_pdf_report',
+    pattern: /\b(?:pdf[- ]?reports?|reports?[^.]{0,35}\bpdf\b|pdf\b[^.]{0,35}\b(?:reports?|export|render|generate|produce|download))\b/i,
+    label: 'PDF report export',
+  },
+  {
     capability: 'delegation_child_session',
     pattern: /\b(?:child session|sub[- ]?agents?|delegate\w*[^.]{0,25}(?:child|sub[- ]?session)|spawn\w*[^.]{0,25}(?:child|session))\b/i,
     label: 'child-session delegation',
@@ -437,6 +452,27 @@ function detectConfigDrivenExtractionSchemaCapabilities(stages: ReadonlyArray<ob
   return demands;
 }
 
+function detectPdfReportExportCapabilities(stages: ReadonlyArray<object> | undefined): CapabilityDemand[] {
+  if (!Array.isArray(stages)) return [];
+  const demands: CapabilityDemand[] = [];
+  for (const stage of stages) {
+    if (!isRecord(stage)) continue;
+    const raw = [stage.kind, stage.export_kind]
+      .find((candidate): candidate is string => typeof candidate === 'string')
+      ?.trim()
+      .toLowerCase();
+    if (raw !== 'export_pdf' && raw !== 'pdf_export' && raw !== 'export_pdf_report' && raw !== 'pdf_report') {
+      continue;
+    }
+    const slug = typeof stage.slug === 'string' && stage.slug.length > 0 ? stage.slug : '<unknown>';
+    demands.push({
+      capability: 'export_pdf_report',
+      evidence: `stage ${slug} is explicitly marked as a PDF report export (${raw})`,
+    });
+  }
+  return demands;
+}
+
 function containsArrayOfObjectSchema(value: unknown, depth = 0): boolean {
   if (depth > 8) return false;
   if (Array.isArray(value)) {
@@ -532,6 +568,7 @@ export function detectRequestedCapabilities(input: CapabilityDetectionInput): Ca
     if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
   for (const demand of detectConfigDrivenExtractionSchemaCapabilities(input.stages)) add(demand.capability, demand.evidence);
+  for (const demand of detectPdfReportExportCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectDocumentsCapabilities(input.documents)) add(demand.capability, demand.evidence);
   for (const demand of detectDelegationCapabilities(input.delegation)) add(demand.capability, demand.evidence);
   return [...found.values()];

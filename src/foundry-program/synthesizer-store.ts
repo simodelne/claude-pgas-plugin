@@ -57,6 +57,7 @@ export interface DocumentsDescriptor {
 export interface ExportSurfaces {
   docx?: boolean;
   html?: boolean;
+  pdf?: boolean;
   diff?: boolean;
 }
 
@@ -66,9 +67,9 @@ export interface DocumentExtractionSurfaces {
 
 export interface ExportStageDescriptor {
   stage: string;
-  kind: 'export_docx' | 'export_html';
+  kind: 'export_docx' | 'export_html' | 'export_pdf';
   title: string;
-  artifactType: 'docx_export' | 'html_export';
+  artifactType: 'docx_export' | 'html_export' | 'pdf_report';
   payloadRef: string;
 }
 
