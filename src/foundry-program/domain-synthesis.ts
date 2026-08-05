@@ -20,6 +20,7 @@ const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
 const EXPORT_DOCX_IMPORT = '../export/docx.js';
 const EXPORT_HTML_IMPORT = '../export/html.js';
+const WEB_NAVIGATION_IMPORT = '../connectors/web-navigation.js';
 const EXPORT_TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new/consumer');
 const STAGE_BODY_SYSTEM_PREAMBLE = [
   'Return only TypeScript source code. Do not use markdown fences.',
@@ -63,6 +64,7 @@ interface StageClassification {
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
+  connector_slug?: string;
   integration_gap?: boolean;
   audit_note?: string;
 }
@@ -98,6 +100,13 @@ interface StageBehaviorFixture {
   expected_items_templates?: string[];
   expected_positive_fields?: string[];
   expected_parameter_fields?: string[];
+  expected_connector_slug?: string;
+}
+
+interface WebNavigationStageDescriptor {
+  integration_name: 'web_navigation';
+  connector_slug: 'web-navigation';
+  audit_note?: string;
 }
 
 export async function synthesizeDomainLogic(
@@ -179,6 +188,7 @@ export async function synthesizeDomainLogic(
     const cachePath = join(cacheDir, `${cacheKey}.json`);
     const repoIntegration = integrationForClassification(classification, integrations);
     const exportDescriptor = exportDescriptorForStage(workingArtifact, stage, classification);
+    const webNavigationDescriptor = webNavigationDescriptorForStage(classification);
     const domainSpec = domainSpecForStage(workingArtifact, stage);
     const verificationOptions = {
       stage,
@@ -192,10 +202,14 @@ export async function synthesizeDomainLogic(
         integrationMethod: repoIntegration.methods[0],
         integration: repoIntegration,
       } : {}),
+      ...(webNavigationDescriptor ? {
+        allowedIntegrationImport: WEB_NAVIGATION_IMPORT,
+        webNavigationDescriptor,
+      } : {}),
       ...(domainSpec ? { domainSpec } : {}),
       reasoningContracts,
     };
-    const cached = exportDescriptor ? undefined : readCache(cachePath);
+    const cached = exportDescriptor || webNavigationDescriptor ? undefined : readCache(cachePath);
     if (cached) {
       let behaviorFields = behaviorAuditFields(cached);
       if (classification.adapter_kind === 'repo_integration' && repoIntegration?.kind === 'http_api') {
@@ -249,6 +263,21 @@ export async function synthesizeDomainLogic(
     } else if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
+      const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
+      if (verification.ok) {
+        accepted = {
+          body,
+          body_hash: sha256(body),
+          behavioral_gate: verification.behavioral_gate,
+          behavioral_fixture: verification.behavioral_fixture,
+          real_call_verified: verification.real_call_verified,
+        };
+      } else {
+        lastError = verification.error;
+      }
+    } else if (webNavigationDescriptor) {
+      attemptsUsed = 1;
+      const body = renderWebNavigationStageBody(stage, webNavigationDescriptor);
       const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
       if (verification.ok) {
         accepted = {
@@ -400,6 +429,7 @@ function verifyStageBody(
     integrationMethod?: string;
     integration?: WiringIntegration;
     exportKind?: ExportStageDescriptor['kind'];
+    webNavigationDescriptor?: WebNavigationStageDescriptor;
     domainSpec?: StageDomainSpec;
     reasoningContracts?: Record<string, ReasoningStageContract>;
   },
@@ -447,6 +477,13 @@ function verifyStageBody(
     return Promise.resolve({ ok: false, error: typecheckError });
   }
 
+  if (options.webNavigationDescriptor) {
+    return runWebNavigationBehavioralGate(body, archetype, {
+      ...options,
+      descriptor: options.webNavigationDescriptor,
+    });
+  }
+
   return runBehavioralGate(body, archetype, options);
 }
 
@@ -454,7 +491,7 @@ function typecheckStageBody(
   body: string,
   options: { allowedIntegrationImport?: string },
 ): string | undefined {
-  if (options.allowedIntegrationImport && !isExportImport(options.allowedIntegrationImport)) {
+  if (options.allowedIntegrationImport && !isExportImport(options.allowedIntegrationImport) && options.allowedIntegrationImport !== WEB_NAVIGATION_IMPORT) {
     return undefined;
   }
 
@@ -462,6 +499,7 @@ function typecheckStageBody(
   const contractsFile = '/virtual/pgas/contracts.ts';
   const docxFile = '/virtual/pgas/export/docx.ts';
   const htmlFile = '/virtual/pgas/export/html.ts';
+  const webNavigationFile = '/virtual/pgas/connectors/web-navigation.ts';
   const compilerOptions: ts.CompilerOptions = {
     noEmit: true,
     strict: true,
@@ -510,12 +548,14 @@ declare const Buffer: {
       fileName === contractsFile ||
       fileName === docxFile ||
       fileName === htmlFile ||
+      fileName === webNavigationFile ||
       baseHost.fileExists(fileName),
     readFile: (fileName) => {
       if (fileName === stageFile) return body;
       if (fileName === contractsFile) return contractsSource;
       if (fileName === docxFile) return docxDeclarationSource();
       if (fileName === htmlFile) return htmlDeclarationSource();
+      if (fileName === webNavigationFile) return webNavigationDeclarationSource();
       return baseHost.readFile(fileName);
     },
     getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
@@ -530,6 +570,9 @@ declare const Buffer: {
       }
       if (fileName === htmlFile) {
         return ts.createSourceFile(fileName, htmlDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === webNavigationFile) {
+        return ts.createSourceFile(fileName, webNavigationDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
       }
       return baseHost.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
     },
@@ -551,6 +594,13 @@ declare const Buffer: {
       if (moduleName === EXPORT_HTML_IMPORT) {
         return {
           resolvedFileName: htmlFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      if (moduleName === WEB_NAVIGATION_IMPORT) {
+        return {
+          resolvedFileName: webNavigationFile,
           extension: ts.Extension.Ts,
           isExternalLibraryImport: false,
         };
@@ -582,6 +632,38 @@ export function renderStructuredDocxDocument(input: ProgramDocxInput): Uint8Arra
 
 function htmlDeclarationSource(): string {
   return `export function renderHtmlDocument(body: string): string;
+`;
+}
+
+function webNavigationDeclarationSource(): string {
+  return `export interface GuardContext {
+  readonly allowed_domains: readonly string[];
+  readonly max_depth: number;
+  readonly max_pages: number;
+  readonly max_follow_links: number;
+  readonly min_delay_ms: number;
+  readonly max_concurrency: number;
+}
+export interface NavAuditEntry {
+  readonly action: 'fetch' | 'follow' | 'extract' | 'skip' | 'refuse';
+  readonly url: string;
+  readonly reason?: string;
+  readonly at_depth: number;
+}
+export interface ExtractedItem { readonly [key: string]: unknown }
+export interface NavigateAndExtractResult {
+  readonly items: readonly ExtractedItem[];
+  readonly pages_visited: number;
+  readonly audit: readonly NavAuditEntry[];
+}
+export interface WebNavigationHostConnector {
+  navigate_and_extract(
+    source: string,
+    purpose: string,
+    extraction_schema: Record<string, string>,
+    guard: GuardContext,
+  ): Promise<NavigateAndExtractResult>;
+}
 `;
 }
 
@@ -1097,6 +1179,7 @@ function classificationFor(artifact: SynthesizedArtifact, stage: string): StageC
     ...(typeof record.integration_name === 'string' ? { integration_name: record.integration_name } : {}),
     ...(typeof record.integration_import === 'string' ? { integration_import: record.integration_import } : {}),
     ...(typeof record.integration_method === 'string' ? { integration_method: record.integration_method } : {}),
+    ...(typeof record.connector_slug === 'string' ? { connector_slug: record.connector_slug } : {}),
     ...(record.integration_gap === true ? { integration_gap: true } : {}),
     ...(typeof record.audit_note === 'string' ? { audit_note: record.audit_note } : {}),
     ...(record.export_kind === 'export_docx' || record.export_kind === 'export_html' ? { export_kind: record.export_kind } : {}),
@@ -1110,6 +1193,17 @@ function resolveIntegrationBinding(
 ): StageClassification {
   if (classification.archetype !== 'external-adapter' || targetKind !== 'existing_repo') {
     return classification;
+  }
+
+  if (webNavigationDescriptorForStage(classification)) {
+    return {
+      ...classification,
+      adapter_kind: 'in_memory_mock',
+      integration_gap: true,
+      integration_name: 'web_navigation',
+      connector_slug: 'web-navigation',
+      audit_note: classification.audit_note ?? 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)',
+    };
   }
 
   if (classification.adapter_kind === 'repo_integration' && classification.integration_name) {
@@ -1195,7 +1289,19 @@ function auditFieldsFor(classification: StageClassification): Record<string, unk
     ...(classification.integration_name ? { integration_name: classification.integration_name } : {}),
     ...(classification.integration_import ? { integration_import: classification.integration_import } : {}),
     ...(classification.integration_method ? { integration_method: classification.integration_method } : {}),
+    ...(classification.connector_slug ? { connector_slug: classification.connector_slug } : {}),
     ...(classification.integration_gap ? { integration_gap: true } : {}),
+    ...(classification.audit_note ? { audit_note: classification.audit_note } : {}),
+  };
+}
+
+function webNavigationDescriptorForStage(classification: StageClassification): WebNavigationStageDescriptor | undefined {
+  if (classification.integration_name !== 'web_navigation' && classification.connector_slug !== 'web-navigation') {
+    return undefined;
+  }
+  return {
+    integration_name: 'web_navigation',
+    connector_slug: 'web-navigation',
     ...(classification.audit_note ? { audit_note: classification.audit_note } : {}),
   };
 }
@@ -1393,6 +1499,205 @@ async function runRepoIntegrationLoopbackGate(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: `repo integration loopback gate failed for stage ${options.stage}: ${message}` };
+  }
+}
+
+async function runWebNavigationBehavioralGate(
+  body: string,
+  archetype: 'pure-compute' | 'external-adapter',
+  options: {
+    stage: string;
+    descriptor: WebNavigationStageDescriptor;
+  },
+): Promise<
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
+  | { ok: false; error: string }
+> {
+  if (archetype !== 'external-adapter') {
+    return { ok: false, error: `web navigation stage ${options.stage} must be an external-adapter; got ${archetype}` };
+  }
+  const source = 'https://example.com/team';
+  const purpose = 'find engineers';
+  const extractionSchema = { name: 'string', email: 'string', relevance_score: 'number' };
+  const guard = {
+    allowed_domains: ['example.com'],
+    max_depth: 1,
+    max_pages: 3,
+    max_follow_links: 2,
+    min_delay_ms: 0,
+    max_concurrency: 1,
+  };
+  const connectorCalls: Array<{
+    source: string;
+    purpose: string;
+    extraction_schema: Record<string, string>;
+    guard: Record<string, unknown>;
+  }> = [];
+  const connector = {
+    async navigate_and_extract(
+      connectorSource: string,
+      connectorPurpose: string,
+      connectorSchema: Record<string, string>,
+      connectorGuard: Record<string, unknown>,
+    ) {
+      connectorCalls.push({
+        source: connectorSource,
+        purpose: connectorPurpose,
+        extraction_schema: connectorSchema,
+        guard: connectorGuard,
+      });
+      return {
+        items: [{ name: 'Alex Example', email: 'alex@example.com', relevance_score: 0.91 }],
+        pages_visited: 1,
+        audit: [
+          { action: 'fetch' as const, url: connectorSource, at_depth: 0 },
+          { action: 'extract' as const, url: connectorSource, at_depth: 0 },
+        ],
+      };
+    },
+  };
+  const fixture = {
+    input: {
+      stage: options.stage,
+      payload: {
+        __stage_runtime: {
+          web_navigation: connector,
+        },
+      },
+      domain: {
+        source,
+        purpose,
+        extraction_schema: extractionSchema,
+        GuardContext: guard,
+      },
+      domain_spec: {
+        reads: ['source', 'purpose', 'extraction_schema', 'GuardContext'],
+        produces: {
+          result_json: {
+            items: 'ExtractedItem[]',
+            pages_visited: 'number',
+            audit: 'NavAuditEntry[]',
+          },
+        },
+        rules: [],
+        invariants: [],
+      },
+    },
+    runtime: {
+      now: () => '2026-06-28T00:00:00.000Z',
+      random: () => 0.25,
+      llm: async () => {
+        throw new Error('StageRuntime.llm is not available in behavioral verification');
+      },
+      web_navigation: connector,
+      connectors: { web_navigation: connector },
+    },
+    audit: {
+      input_stage: options.stage,
+      expected_result_stage: options.stage,
+      expected_items_non_empty: true as const,
+      expected_adapter_kind: 'in_memory_mock' as const,
+      expected_connector_slug: options.descriptor.connector_slug,
+      available_domain_paths: ['GuardContext', 'extraction_schema', 'purpose', 'source'],
+      domain_spec_reads: ['source', 'purpose', 'extraction_schema', 'GuardContext'],
+    },
+  };
+
+  try {
+    const runStage = loadRunStageForBehavior(body);
+    const output = await withBehaviorTimeout(
+      Promise.resolve(runStage(fixture.input, fixture.runtime)),
+      `web navigation behavioral gate failed for stage ${options.stage}: runStage timed out`,
+    );
+    const error = assertWebNavigationStageOutput(output, {
+      source,
+      purpose,
+      extractionSchema,
+      guard,
+      connectorCalls,
+    });
+    if (error) {
+      return { ok: false, error: `web navigation behavioral gate failed for stage ${options.stage}: ${error}` };
+    }
+    return {
+      ok: true,
+      behavioral_gate: 'web_navigation_connector_call',
+      behavioral_fixture: fixture.audit,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `web navigation behavioral gate failed for stage ${options.stage}: ${message}` };
+  }
+}
+
+function assertWebNavigationStageOutput(
+  output: unknown,
+  expected: {
+    source: string;
+    purpose: string;
+    extractionSchema: Record<string, string>;
+    guard: Record<string, unknown>;
+    connectorCalls: Array<{
+      source: string;
+      purpose: string;
+      extraction_schema: Record<string, string>;
+      guard: Record<string, unknown>;
+    }>;
+  },
+): string | undefined {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return 'runStage returned a non-object output';
+  }
+  const candidate = output as { result_json?: unknown; items_json?: unknown; adapter_kind?: unknown };
+  if (candidate.adapter_kind !== 'in_memory_mock') {
+    return `expected adapter_kind to equal in_memory_mock; got ${String(candidate.adapter_kind)}`;
+  }
+  if (typeof candidate.result_json !== 'string') {
+    return 'result_json must be a JSON string';
+  }
+  if (typeof candidate.items_json !== 'string') {
+    return 'items_json must be a JSON string';
+  }
+  const result = parseRecordJson(candidate.result_json);
+  const keys = Object.keys(result);
+  if (keys.length !== 3 || keys[0] !== 'items' || keys[1] !== 'pages_visited' || keys[2] !== 'audit') {
+    return `result_json must encode exactly { items, pages_visited, audit }; got ${JSON.stringify(keys)}`;
+  }
+  if (!Array.isArray(result.items) || result.items.length === 0) {
+    return 'result_json.items must be a non-empty array';
+  }
+  if (typeof result.pages_visited !== 'number' || result.pages_visited > Number(expected.guard.max_pages)) {
+    return 'result_json.pages_visited must be numeric and no greater than GuardContext.max_pages';
+  }
+  if (!Array.isArray(result.audit) || result.audit.length === 0) {
+    return 'result_json.audit must be a non-empty array';
+  }
+  const items = parseJsonArray(candidate.items_json);
+  if (!items.ok || items.value.length === 0) {
+    return 'items_json must encode a non-empty array';
+  }
+  if (expected.connectorCalls.length !== 1) {
+    return `expected one connector call; got ${expected.connectorCalls.length}`;
+  }
+  const call = expected.connectorCalls[0]!;
+  if (call.source !== expected.source || call.purpose !== expected.purpose) {
+    return 'connector call did not use source and purpose from input.domain';
+  }
+  if (JSON.stringify(call.extraction_schema) !== JSON.stringify(expected.extractionSchema)) {
+    return 'connector call did not use extraction_schema from input.domain';
+  }
+  if (JSON.stringify(call.guard) !== JSON.stringify(expected.guard)) {
+    return 'connector call did not use GuardContext from input.domain';
+  }
+  return undefined;
+}
+
+function parseJsonArray(value: string): { ok: true; value: unknown[] } | { ok: false } {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? { ok: true, value: parsed } : { ok: false };
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -2263,6 +2568,117 @@ ${callLines.join('\n')}
     digest: '',
     adapter_kind: 'repo_integration',
   };
+}
+`;
+}
+
+function renderWebNavigationStageBody(stage: string, descriptor: WebNavigationStageDescriptor): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+import type { GuardContext, WebNavigationHostConnector } from '../connectors/web-navigation.js';
+
+type RuntimeWithWebNavigation = StageRuntime & {
+  web_navigation?: WebNavigationHostConnector;
+  connectors?: { web_navigation?: WebNavigationHostConnector };
+};
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  const connector = webNavigationConnector(input, runtime);
+  const source = requiredString(input.domain.source, 'source');
+  const purpose = requiredString(input.domain.purpose, 'purpose');
+  const extractionSchema = requiredRecordOfStrings(input.domain.extraction_schema, 'extraction_schema');
+  const guard = guardContextFromDomain(input.domain);
+  const result = await connector.navigate_and_extract(source, purpose, extractionSchema, guard);
+  return {
+    result_json: JSON.stringify({
+      items: result.items,
+      pages_visited: result.pages_visited,
+      audit: result.audit,
+    }),
+    items_json: JSON.stringify(result.items),
+    digest: '',
+    adapter_kind: 'in_memory_mock',
+  };
+}
+
+function webNavigationConnector(input: StageInput, runtime: StageRuntime): WebNavigationHostConnector {
+  const runtimeRecord = runtime as RuntimeWithWebNavigation;
+  const runtimeConnector = runtimeRecord.web_navigation ?? runtimeRecord.connectors?.web_navigation;
+  if (isWebNavigationConnector(runtimeConnector)) {
+    return runtimeConnector;
+  }
+  const payload = input.payload as Record<string, unknown>;
+  const payloadRuntime = recordValue(payload.__stage_runtime);
+  const payloadConnectors = recordValue(payloadRuntime.connectors);
+  const payloadConnector = payloadRuntime.web_navigation ?? payloadConnectors.web_navigation;
+  if (isWebNavigationConnector(payloadConnector)) {
+    return payloadConnector;
+  }
+  throw new Error(${tsString(`missing WebNavigationHostConnector runtime binding for ${descriptor.connector_slug}`)});
+}
+
+function guardContextFromDomain(domain: Record<string, unknown>): GuardContext {
+  const raw = domain.GuardContext ?? domain.guard_context ?? domain.guard;
+  const record = requiredRecord(raw, 'GuardContext');
+  return {
+    allowed_domains: requiredStringArray(record.allowed_domains, 'GuardContext.allowed_domains'),
+    max_depth: requiredNumber(record.max_depth, 'GuardContext.max_depth'),
+    max_pages: requiredNumber(record.max_pages, 'GuardContext.max_pages'),
+    max_follow_links: requiredNumber(record.max_follow_links, 'GuardContext.max_follow_links'),
+    min_delay_ms: requiredNumber(record.min_delay_ms, 'GuardContext.min_delay_ms'),
+    max_concurrency: requiredNumber(record.max_concurrency, 'GuardContext.max_concurrency'),
+  };
+}
+
+function requiredString(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(path + ' must be a non-empty string in input.domain');
+  }
+  return value;
+}
+
+function requiredRecordOfStrings(value: unknown, path: string): Record<string, string> {
+  const record = requiredRecord(value, path);
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (typeof item !== 'string' || item.length === 0) {
+      throw new Error(path + '.' + key + ' must be a non-empty string');
+    }
+    out[key] = item;
+  }
+  return out;
+}
+
+function requiredRecord(value: unknown, path: string): Record<string, unknown> {
+  const record = recordValue(value);
+  if (Object.keys(record).length === 0) {
+    throw new Error(path + ' must be an object in input.domain');
+  }
+  return record;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function requiredStringArray(value: unknown, path: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.length > 0)) {
+    throw new Error(path + ' must be a non-empty string array');
+  }
+  return [...value];
+}
+
+function requiredNumber(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(path + ' must be a finite number');
+  }
+  return value;
+}
+
+function isWebNavigationConnector(value: unknown): value is WebNavigationHostConnector {
+  return !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof (value as { navigate_and_extract?: unknown }).navigate_and_extract === 'function';
 }
 `;
 }

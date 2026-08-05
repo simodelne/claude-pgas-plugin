@@ -67,6 +67,13 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     since_version: '3.26.0',
   },
   {
+    capability: 'web_navigation_guarded',
+    status: 'scaffolds_with_gap',
+    evidence: capabilityEvidence(['typed WebNavigationHostConnector + guard-enforcing mock; real driver is host-side (pgas-web)']),
+    since_version: '3.26.0',
+    gap_note: 'browser navigation permanently host-side; foundry ships contract + mock + spec/connector guards only',
+  },
+  {
     capability: 'collection_lifecycle_aggregate',
     status: 'synthesizes',
     evidence: 'collection_lifecycle synthesis emits per-status transitions + an all-terminal aggregate gate (Gap 2).',
@@ -278,6 +285,11 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
     capability: 'delegation_research_agent',
     pattern: /\b(?:research agent|spawn\w*[^.]{0,25}research|research (?:fan[- ]?out|children|axes)|delegate\w*[^.]{0,25}research)\b/i,
     label: 'research-agent delegation / fan-out',
+  },
+  {
+    capability: 'web_navigation_guarded',
+    pattern: /\b(?:web[_ -]?navigation|guarded browser navigation|navigat\w*|crawl\w*|scrap\w*|brows\w*|websites?|social (?:profiles?|pages?|sources?))\b/i,
+    label: 'guarded web navigation',
   },
   {
     capability: 'delegation_child_session',
