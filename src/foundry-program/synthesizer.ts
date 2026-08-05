@@ -396,6 +396,7 @@ export function synthesizeProgramSpecFromDomain(
     ...capabilityGapsForDelegationChildren(delegationChildren),
     ...documentExtractionGaps,
     ...capabilityGapsForWebNavigationStages(stageClassification),
+    ...capabilityGapsForPersistenceStages(stageClassification),
   ];
   const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors, stageArtifactDescriptors);
   const registrationPolicies = {
@@ -3680,6 +3681,17 @@ function capabilityGapsForWebNavigationStages(stages: ClassifiedStage[]): Capabi
     }));
 }
 
+function capabilityGapsForPersistenceStages(stages: ClassifiedStage[]): CapabilityGap[] {
+  return stages
+    .filter((stage) => stage.integration_gap === true && (stage.integration_name === 'persistence' || stage.connector_slug === 'persistence'))
+    .map((stage) => ({
+      capability: 'cross_session_persistence',
+      stage: stage.slug,
+      connector_slug: 'persistence',
+      message: 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)',
+    }));
+}
+
 function bindWebNavigationGuardContextToStages(
   stages: Stage[],
   stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
@@ -4110,6 +4122,17 @@ function bindRepoIntegrations(
         connector_slug: 'web-navigation',
         audit_note: stage.audit_note ?? 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)',
         rationale: `${stage.rationale} Guarded browser navigation remains a host connector gap.`,
+      };
+    }
+    if (stage.integration_name === 'persistence' || stage.connector_slug === 'persistence') {
+      return {
+        ...stage,
+        adapter_kind: 'in_memory_mock',
+        integration_gap: true,
+        integration_name: 'persistence',
+        connector_slug: 'persistence',
+        audit_note: stage.audit_note ?? 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)',
+        rationale: `${stage.rationale} Cross-session persistence remains a host connector gap.`,
       };
     }
     if (targetKind !== 'existing_repo') {

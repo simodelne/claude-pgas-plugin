@@ -138,6 +138,7 @@ function classifyStage(
   const purposeText = purpose.toLowerCase();
   const formulaicStage = hasAny(stageScopedText, COMPUTE_TERMS);
   const webNavigationGap = webNavigationIntegrationGap(stage, stageDelegation, stageScopedText);
+  const persistenceGap = persistenceIntegrationGap(stage, stageDelegation);
 
   if (webNavigationGap) {
     return {
@@ -149,6 +150,19 @@ function classifyStage(
       connector_slug: 'web-navigation',
       audit_note: webNavigationGap,
       rationale: `external adapter: ${slug} requires guarded web navigation. Host connector implementation is required outside foundry code.`,
+    };
+  }
+
+  if (persistenceGap) {
+    return {
+      slug,
+      archetype: 'external-adapter',
+      adapter_kind: 'in_memory_mock',
+      integration_gap: true,
+      integration_name: 'persistence',
+      connector_slug: 'persistence',
+      audit_note: persistenceGap,
+      rationale: `external adapter: ${slug} requires cross-session persistence. Host connector implementation is required outside foundry code.`,
     };
   }
 
@@ -282,6 +296,27 @@ function explicitWebNavigationIntegration(value: unknown): boolean {
 
 function hasWebNavigationTerms(value: string): boolean {
   return /\b(?:navigat\w*|crawl\w*|scrap\w*|brows\w*|websites?|social profiles?|social pages?|social sources?)\b/iu.test(value);
+}
+
+function persistenceIntegrationGap(stage: StageInput, stageDelegation: unknown): string | undefined {
+  const explicit = explicitPersistenceIntegration(stage) || explicitPersistenceIntegration(stageDelegation);
+  if (!explicit) {
+    return undefined;
+  }
+  return 'cross-session store is host-side; implement PersistenceHostConnector (the CRM store)';
+}
+
+function explicitPersistenceIntegration(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const candidates = [
+    record.integration,
+    record.integration_name,
+    record.connector_slug,
+  ];
+  return candidates.some((candidate) =>
+    typeof candidate === 'string' &&
+    /^(?:persistence|cross[_-]?session[_-]?persistence|crm[_-]?store|database[_-]?store|lead[_-]?persistence)$/iu.test(candidate.trim()));
 }
 
 function stageDelegationForSlug(delegation: Record<string, unknown>, slug: string): unknown {
