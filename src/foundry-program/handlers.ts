@@ -2351,11 +2351,19 @@ async function isReachable(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2_000);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(openAiModelsEndpoint(url), { signal: controller.signal });
     return response.ok;
   } catch {
     return false;
   } finally {
     clearTimeout(timer);
   }
+}
+
+function openAiModelsEndpoint(baseUrl: string): string {
+  const endpoint = new URL(baseUrl);
+  endpoint.pathname = `${endpoint.pathname.replace(/\/+$/u, '')}/models`;
+  endpoint.search = '';
+  endpoint.hash = '';
+  return endpoint.toString();
 }

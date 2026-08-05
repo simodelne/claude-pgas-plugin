@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
@@ -235,6 +235,48 @@ describe('template renderer', () => {
       expect(registrationImport).toBe('../packages/simone/programs/audit-trail/registration.js');
       expect(smokeTest).not.toContain('../src/programs/audit-trail/registration.js');
       expect(existsSync(join(repoRoot, 'tests', registrationImport!.replace(/\.js$/u, '.ts')))).toBe(true);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders existing-repo web_search imports relative to the target repo libraries directory', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-web-search-'));
+    try {
+      const searchDir = join(repoRoot, 'libraries/search');
+      mkdirSync(searchDir, { recursive: true });
+      writeFileSync(join(searchDir, 'index.ts'), 'export function createWebSearchProvider() { return { search: async () => ({ results: [] }) }; }\n');
+
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'legal-opinion',
+        name: 'Legal Opinion',
+        synthesizedSpecYaml: 'name: legal-opinion\n',
+        synthesizedToolsTs: [
+          "import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';",
+          "import { createWebSearchProvider } from '../../../libraries/search/index.js';",
+          '',
+          'export const stageActionTools = {} as const;',
+          '',
+          'export function registerLegalOpinionTools(registry: ToolRegistry): void {',
+          '  const webProvider = createWebSearchProvider();',
+          "  registry.register('web_search', {",
+          "    kind: 'local',",
+          '    fn: async () => webProvider.search("sentinel"),',
+          '  });',
+          '}',
+          '',
+        ].join('\n'),
+      });
+
+      const toolsPath = join(repoRoot, 'programs/legal-opinion/tools.ts');
+      const tools = readFileSync(toolsPath, 'utf8');
+      const searchImport = tools.match(/from '([^']+libraries\/search\/index\.js)'/)?.[1];
+
+      expect(searchImport).toBe('../../libraries/search/index.js');
+      expect(tools).not.toContain('../../../libraries/search/index.js');
+      expect(existsSync(join(dirname(toolsPath), searchImport!.replace(/\.js$/u, '.ts')))).toBe(true);
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

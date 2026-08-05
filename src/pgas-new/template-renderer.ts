@@ -292,6 +292,7 @@ function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sour
   // discovery (and the frontend catalog) locate the spec via ProgramEntry.frontendSpecPath,
   // so stamp the repo-relative program directory into the generated registration.
   const frontendSpecPath = `${trimRepoRelativePath(options.manifest.paths.programs_dir)}/${options.slug}`;
+  const programDir = frontendSpecPath;
   const registrationTs = sources.registrationTs
     ? options.targetProfile === 'simoneos-governed-attach'
       ? sources.registrationTs
@@ -301,6 +302,9 @@ function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sour
   return {
     ...sources,
     registrationTs,
+    toolsTs: sources.toolsTs
+      ? rewriteExistingRepoSearchImport(sources.toolsTs, programDir)
+      : sources.toolsTs,
     smokeTestTs: sources.smokeTestTs
       ? rewriteSmokeTestRegistrationImport(
           sources.smokeTestTs,
@@ -309,6 +313,16 @@ function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sour
         )
       : sources.smokeTestTs,
   };
+}
+
+function rewriteExistingRepoSearchImport(source: string, programDir: string): string {
+  const importPath = existingRepoSearchImport(programDir);
+  return source.replaceAll('../../../libraries/search/index.js', importPath);
+}
+
+function existingRepoSearchImport(programDir: string): string {
+  const importPath = posix.relative(programDir, 'libraries/search/index.js');
+  return importPath.startsWith('.') ? importPath : `./${importPath}`;
 }
 
 function injectFrontendSpecPath(registrationTs: string, frontendSpecPath: string): string {

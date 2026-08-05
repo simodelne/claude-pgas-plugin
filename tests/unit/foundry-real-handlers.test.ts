@@ -360,6 +360,46 @@ describe('verification handlers', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('runs generated live drive when the provider base is 404 but /models is reachable', async () => {
+    const previousBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_BASE_URL = 'http://provider.local/v1';
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => ({
+      ok: String(input) === 'http://provider.local/v1/models',
+    })));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce(successfulLiveDrive());
+
+    try {
+      await expect(
+        handlers.run_generated_live_drive_verification!(payload({
+          cwd: '/tmp/out',
+          slug: 'legal-opinion',
+          domain: {
+            'program.slug': 'legal-opinion',
+            'intake.purpose': 'draft a legal opinion',
+          },
+        })),
+      ).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'passed',
+        provider_hits: 1,
+      });
+
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        providerBaseUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        slug: 'legal-opinion',
+      }));
+      expect(fetch).toHaveBeenCalledWith('http://provider.local/v1/models', expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }));
+    } finally {
+      restoreEnv('PGAS_OPENAI_BASE_URL', previousBaseUrl);
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
+
   it('fails live provider verification when provider URL is unreachable and PGAS_REQUIRE_LIVE=1', async () => {
     const previousRequireLive = process.env.PGAS_REQUIRE_LIVE;
     process.env.PGAS_REQUIRE_LIVE = '1';
@@ -677,6 +717,49 @@ function payload(args: Record<string, unknown>) {
       'program.target_dir': '/tmp/out',
       ...domain,
     },
+  };
+}
+
+function successfulLiveDrive(): Record<string, unknown> {
+  return {
+    final_mode: 'complete',
+    terminal: true,
+    rounds: 1,
+    triggers: 1,
+    actions: ['complete'],
+    terminal_actions: ['complete'],
+    world: {},
+    parent_session_id: 'parent-session-1',
+    provider_hits: 1,
+    provider_exchanges: [],
+    author_driver: 'default',
+    status_history: [],
+    choreography: {
+      decision_table_respected: true,
+      one_proposed_invariant_held: true,
+      proposed_overlap_max: 0,
+      items_seen_max: 0,
+      decisions_applied: 0,
+      terminal_items_final: 0,
+      loop_engaged: true,
+      provider_hits_ok: true,
+      notes: ['confirmation_script_absent'],
+    },
+    delegation: null,
+    delegation_verdict: {
+      delegation_engaged: false,
+      result_complete: false,
+      child_session_distinct: false,
+      child_rounds_ok: false,
+      settled: false,
+      parent_complete: true,
+      provider_hits_ok: true,
+      no_stub_markers: true,
+      notes: ['delegation_script_absent'],
+    },
+    delegation_engaged: false,
+    runner_exit_code: 0,
+    runner_output_excerpt: '',
   };
 }
 
