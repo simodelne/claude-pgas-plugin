@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { resolve, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -78,4 +78,71 @@ describe('generated live-drive child environment', () => {
 
     expect(capturedEnv?.PGAS_OPENAI_API_KEY).toBe('caller-option-key');
   });
+
+  it('renders existing-repo attachments to import registration from programs/<slug>', async () => {
+    let runnerSource = '';
+    spawnMock.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
+      runnerSource = readFileSync(String(args.at(-1)), 'utf8');
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      const reportPath = options.env?.PGAS_LIVE_DRIVE_REPORT;
+      queueMicrotask(() => {
+        if (reportPath) {
+          writeFileSync(reportPath, JSON.stringify({
+            final_mode: 'complete',
+            terminal: true,
+            rounds: 0,
+            triggers: 0,
+            actions: [],
+            terminal_actions: [],
+            world: {},
+            author_driver: 'default',
+          }));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-live-existing-repo-'));
+    tempDirs.push(targetDir);
+    mkdirSync(join(targetDir, 'programs/document-finalization'), { recursive: true });
+    writeFileSync(join(targetDir, 'programs/document-finalization/registration.js'), 'export function createDocumentFinalizationProgramEntry() {}\n');
+
+    const options = {
+      targetDir,
+      slug: 'document-finalization',
+      providerBaseUrl: 'http://127.0.0.1:1/v1',
+      model: 'unit-model',
+      initialText: 'start',
+      targetKind: 'existing_repo',
+      programsDir: 'programs',
+      driveTimeoutMs: 60_000,
+    } as Parameters<typeof driveGeneratedProgramLive>[0] & {
+      targetKind: 'existing_repo';
+      programsDir: string;
+    };
+    await driveGeneratedProgramLive(options);
+
+    const importPath = registrationImportFrom(runnerSource, 'createDocumentFinalizationProgramEntry');
+    const resolvedImport = resolve(targetDir, '.pgas-new-live-drive', importPath);
+
+    expect(resolvedImport).toBe(join(targetDir, 'programs/document-finalization/registration.js'));
+    expect(existsSync(resolvedImport)).toBe(true);
+    expect(runnerSource).not.toContain('../src/programs/document-finalization/registration.js');
+  });
 });
+
+function registrationImportFrom(source: string, exportName: string): string {
+  const match = source.match(new RegExp(`import \\{ ${exportName} \\} from '([^']+)';`, 'u'));
+  if (!match) {
+    throw new Error(`runner source missing ${exportName} import`);
+  }
+  return match[1];
+}

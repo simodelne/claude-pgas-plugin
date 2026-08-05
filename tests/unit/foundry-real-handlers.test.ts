@@ -400,6 +400,54 @@ describe('verification handlers', () => {
     }
   });
 
+  it('surfaces generated live-drive runner stderr when boot fails before writing a report', async () => {
+    const previousBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_BASE_URL = 'http://provider.local/v1';
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => ({
+      ok: String(input) === 'http://provider.local/v1/models',
+    })));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce({
+      ...successfulLiveDrive(),
+      final_mode: null,
+      terminal: false,
+      rounds: 0,
+      triggers: 0,
+      actions: [],
+      provider_hits: 0,
+      runner_exit_code: 1,
+      runner_output_excerpt:
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/out/src/programs/document-finalization/registration.js'",
+    });
+
+    try {
+      const result = await handlers.run_generated_live_drive_verification!(payload({
+        cwd: '/tmp/out',
+        slug: 'document-finalization',
+        domain: {
+          'program.slug': 'document-finalization',
+          'repo.target_kind': 'existing_repo',
+          'repo.wiring_manifest_json': JSON.stringify(MANIFEST),
+        },
+      }));
+
+      expect(result).toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'failed',
+        reason: expect.stringContaining('ERR_MODULE_NOT_FOUND'),
+        runner_output_excerpt: expect.stringContaining('ERR_MODULE_NOT_FOUND'),
+      });
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        targetKind: 'existing_repo',
+        programsDir: 'programs',
+      }));
+    } finally {
+      restoreEnv('PGAS_OPENAI_BASE_URL', previousBaseUrl);
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
+
   it('fails live provider verification when provider URL is unreachable and PGAS_REQUIRE_LIVE=1', async () => {
     const previousRequireLive = process.env.PGAS_REQUIRE_LIVE;
     process.env.PGAS_REQUIRE_LIVE = '1';
