@@ -1517,16 +1517,18 @@ async function runWebNavigationBehavioralGate(
     return { ok: false, error: `web navigation stage ${options.stage} must be an external-adapter; got ${archetype}` };
   }
   const source = 'https://example.com/team';
+  const fallbackSource = 'https://example.com/fallback';
   const purpose = 'find engineers';
   const extractionSchema = { name: 'string', email: 'string', relevance_score: 'number' };
-  const guard = {
-    allowed_domains: ['example.com'],
+  const inputGuard = {
+    allowed_domains: ['fallback.test'],
     max_depth: 1,
     max_pages: 3,
     max_follow_links: 2,
     min_delay_ms: 0,
     max_concurrency: 1,
   };
+  const guard = { ...inputGuard, allowed_domains: ['example.com'] };
   const connectorCalls: Array<{
     source: string;
     purpose: string;
@@ -1565,10 +1567,11 @@ async function runWebNavigationBehavioralGate(
         },
       },
       domain: {
-        source,
+        source: fallbackSource,
+        current_source: { url: source, allowed_domains: ['example.com'] },
         purpose,
         extraction_schema: extractionSchema,
-        GuardContext: guard,
+        GuardContext: inputGuard,
       },
       domain_spec: {
         reads: ['source', 'purpose', 'extraction_schema', 'GuardContext'],
@@ -1598,8 +1601,8 @@ async function runWebNavigationBehavioralGate(
       expected_items_non_empty: true as const,
       expected_adapter_kind: 'in_memory_mock' as const,
       expected_connector_slug: options.descriptor.connector_slug,
-      available_domain_paths: ['GuardContext', 'extraction_schema', 'purpose', 'source'],
-      domain_spec_reads: ['source', 'purpose', 'extraction_schema', 'GuardContext'],
+      available_domain_paths: ['GuardContext', 'current_source', 'extraction_schema', 'purpose', 'source'],
+      domain_spec_reads: ['current_source', 'source', 'purpose', 'extraction_schema', 'GuardContext'],
     },
   };
 
@@ -2581,13 +2584,18 @@ type RuntimeWithWebNavigation = StageRuntime & {
   connectors?: { web_navigation?: WebNavigationHostConnector };
 };
 
+interface CurrentSource {
+  url: string;
+  allowed_domains?: string[];
+}
+
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = webNavigationConnector(input, runtime);
-  const source = requiredString(input.domain.source, 'source');
+  const currentSource = currentSourceFromDomain(input.domain);
   const purpose = requiredString(input.domain.purpose, 'purpose');
   const extractionSchema = requiredRecordOfStrings(input.domain.extraction_schema, 'extraction_schema');
-  const guard = guardContextFromDomain(input.domain);
-  const result = await connector.navigate_and_extract(source, purpose, extractionSchema, guard);
+  const guard = guardContextForSource(guardContextFromDomain(input.domain), currentSource);
+  const result = await connector.navigate_and_extract(currentSource.url, purpose, extractionSchema, guard);
   return {
     result_json: JSON.stringify({
       items: result.items,
@@ -2614,6 +2622,49 @@ function webNavigationConnector(input: StageInput, runtime: StageRuntime): WebNa
     return payloadConnector;
   }
   throw new Error(${tsString(`missing WebNavigationHostConnector runtime binding for ${descriptor.connector_slug}`)});
+}
+
+function currentSourceFromDomain(domain: Record<string, unknown>): CurrentSource {
+  const work = recordValue(domain.work);
+  const candidates = [
+    domain.current_source,
+    domain['work.current_source'],
+    work.current_source,
+    domain.source,
+  ];
+  for (const candidate of candidates) {
+    const source = sourceConfigFromValue(candidate);
+    if (source) {
+      return source;
+    }
+  }
+  throw new Error('current_source must provide a non-empty url in input.domain');
+}
+
+function sourceConfigFromValue(value: unknown): CurrentSource | undefined {
+  if (typeof value === 'string' && value.length > 0) {
+    return { url: value };
+  }
+  const record = recordValue(value);
+  const url = typeof record.url === 'string' && record.url.length > 0
+    ? record.url
+    : typeof record.source === 'string' && record.source.length > 0
+      ? record.source
+      : '';
+  if (!url) {
+    return undefined;
+  }
+  const allowedDomains = stringArrayValue(record.allowed_domains);
+  return {
+    url,
+    ...(allowedDomains.length > 0 ? { allowed_domains: allowedDomains } : {}),
+  };
+}
+
+function guardContextForSource(guard: GuardContext, source: CurrentSource): GuardContext {
+  return source.allowed_domains && source.allowed_domains.length > 0
+    ? { ...guard, allowed_domains: [...source.allowed_domains] }
+    : guard;
 }
 
 function guardContextFromDomain(domain: Record<string, unknown>): GuardContext {
@@ -2665,6 +2716,10 @@ function requiredStringArray(value: unknown, path: string): string[] {
     throw new Error(path + ' must be a non-empty string array');
   }
   return [...value];
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
 }
 
 function requiredNumber(value: unknown, path: string): number {

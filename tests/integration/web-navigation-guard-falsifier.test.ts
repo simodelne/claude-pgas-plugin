@@ -56,4 +56,41 @@ describe('web-navigation anti-rogue guards (kill tests)', () => {
       expect(wire).not.toContain(`"${forbidden}"`); // no action/tool NAMED for a forbidden capability
     }
   });
+
+  it('G-8 bounded follow-on composes across per-source fan-out aggregation', async () => {
+    const domain = leadResearchDomain();
+    const sources = sourceUrlsFromDomain(domain);
+    expect(sources.length).toBeGreaterThanOrEqual(2);
+
+    const c = new MockWebNavigationConnector();
+    const maxPages = 2;
+    const per_source = [];
+    for (const source of sources) {
+      per_source.push(await c.navigate_and_extract(source, 'p', SCHEMA, { ...base, max_pages: maxPages }));
+    }
+
+    const totalPagesVisited = per_source.reduce((sum, result) => sum + result.pages_visited, 0);
+    expect(totalPagesVisited).toBeLessThanOrEqual(sources.length * maxPages);
+  });
 });
+
+function sourceUrlsFromDomain(domain: Record<string, unknown>): string[] {
+  const config = domain.config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return [];
+  }
+  const sources = (config as { sources?: unknown }).sources;
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+  return sources.flatMap((source) => {
+    if (typeof source === 'string') {
+      return source;
+    }
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      const url = (source as { url?: unknown }).url;
+      return typeof url === 'string' ? url : [];
+    }
+    return [];
+  });
+}
