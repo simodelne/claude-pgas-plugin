@@ -88,7 +88,7 @@ describe('node command runner', () => {
     ]);
   });
 
-  it('runs the generated smoke test with a fixed npm argv', async () => {
+  it('runs generated smoke and deterministic Vitest files directly with a fixed argv', async () => {
     const { calls, spawn } = fakeSpawn([{ code: 0, stdout: 'smoke ok' }]);
     const runner = createNodeCommandRunner(spawn);
 
@@ -102,8 +102,8 @@ describe('node command runner', () => {
     });
     expect(calls).toEqual([
       {
-        command: 'npm',
-        args: ['test', '--', 'tests/generated-program-smoke.test.ts'],
+        command: 'npx',
+        args: ['--no-install', 'vitest', 'run', 'tests/generated-program-smoke.test.ts', 'tests/*-deterministic.test.ts', '--pool=threads', '--maxWorkers=1'],
         cwd: '/tmp/repo',
         shell: false,
       },

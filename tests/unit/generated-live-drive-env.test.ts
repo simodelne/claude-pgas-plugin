@@ -137,6 +137,71 @@ describe('generated live-drive child environment', () => {
     expect(existsSync(resolvedImport)).toBe(true);
     expect(runnerSource).not.toContain('../src/programs/document-finalization/registration.js');
   });
+
+  it('renders existing-repo delegated child imports from the slug-safe child program name', async () => {
+    let runnerSource = '';
+    spawnMock.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
+      runnerSource = readFileSync(String(args.at(-1)), 'utf8');
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      const reportPath = options.env?.PGAS_LIVE_DRIVE_REPORT;
+      queueMicrotask(() => {
+        if (reportPath) {
+          writeFileSync(reportPath, JSON.stringify({
+            final_mode: 'finalization_hub',
+            terminal: false,
+            rounds: 0,
+            triggers: 0,
+            actions: [],
+            terminal_actions: [],
+            world: {},
+            author_driver: 'default',
+          }));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-live-existing-repo-child-'));
+    tempDirs.push(targetDir);
+    mkdirSync(join(targetDir, 'programs/document-finalization'), { recursive: true });
+    mkdirSync(join(targetDir, 'programs/document-ingest'), { recursive: true });
+    writeFileSync(join(targetDir, 'programs/document-finalization/registration.js'), 'export function createDocumentFinalizationProgramEntry() {}\n');
+    writeFileSync(join(targetDir, 'programs/document-ingest/registration.js'), 'export function createDocumentIngestProgramEntry() {}\n');
+
+    await driveGeneratedProgramLive({
+      targetDir,
+      slug: 'document-finalization',
+      providerBaseUrl: 'http://127.0.0.1:1/v1',
+      model: 'unit-model',
+      initialText: 'start',
+      finalStage: 'finalization_hub',
+      targetKind: 'existing_repo',
+      programsDir: 'programs',
+      driveTimeoutMs: 60_000,
+      delegationScript: {
+        resultPath: 'ingest.delegation.document_ingest.result',
+        settledPath: 'ingest.delegation.document_ingest.settled',
+        degradedPath: 'ingest.delegation.document_ingest.degraded',
+        stage: 'ingest',
+        childProgram: 'document-ingest',
+      },
+    });
+
+    const childImportPath = registrationImportFrom(runnerSource, 'createDocumentIngestProgramEntry');
+    const resolvedChildImport = resolve(targetDir, '.pgas-new-live-drive', childImportPath);
+
+    expect(resolvedChildImport).toBe(join(targetDir, 'programs/document-ingest/registration.js'));
+    expect(existsSync(resolvedChildImport)).toBe(true);
+    expect(runnerSource).not.toContain('SimoneOS Document Ingest');
+  });
 });
 
 function registrationImportFrom(source: string, exportName: string): string {

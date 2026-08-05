@@ -66,6 +66,16 @@ const defaultTransitions = [
     guard_value: true,
   },
 ];
+const GENERATED_SMOKE_VITEST_COMMAND = 'npx --no-install vitest run tests/generated-program-smoke.test.ts tests/*-deterministic.test.ts --pool=threads --maxWorkers=1';
+const GENERATED_SMOKE_VITEST_ARGS = [
+  '--no-install',
+  'vitest',
+  'run',
+  'tests/generated-program-smoke.test.ts',
+  'tests/*-deterministic.test.ts',
+  '--pool=threads',
+  '--maxWorkers=1',
+];
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -1354,8 +1364,18 @@ export const handlers: Record<string, ToolHandler> = {
 
   async run_smoke_verification(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['test', '--', 'tests/generated-program-smoke.test.ts'], cwd, 180_000, { sanitizeEnv: true });
-    return { ...commandResult('npm test -- tests/generated-program-smoke.test.ts', result, 'smoke'), kind: 'smoke_verification' };
+    try {
+      const result = await runCommand('npx', GENERATED_SMOKE_VITEST_ARGS, cwd, 180_000, { sanitizeEnv: true });
+      return { ...commandResult(GENERATED_SMOKE_VITEST_COMMAND, result, 'smoke'), kind: 'smoke_verification' };
+    } catch (error) {
+      return {
+        kind: 'smoke_verification',
+        command: GENERATED_SMOKE_VITEST_COMMAND,
+        status: 'failed',
+        evidence_id: evidenceId('smoke'),
+        reason: tail(error instanceof Error ? error.message : String(error)),
+      };
+    }
   },
 
   /**
@@ -2242,8 +2262,10 @@ function generatedDelegationScript(domain: Record<string, unknown> | undefined):
   const resultPath = stringRecordField(child, 'result_path');
   if (!id || !stage || !resultPath) return undefined;
   const synthesizeChild = isRecord(child.synthesize_child) ? child.synthesize_child : undefined;
-  const childProgram = stringRecordField(child, 'target_spec')
+  const childProgram = stringRecordField(child, 'target_slug')
+    ?? stringRecordField(child, 'registered_name')
     ?? (synthesizeChild ? stringRecordField(synthesizeChild, 'slug') : undefined)
+    ?? stringRecordField(child, 'target_spec')
     ?? id;
   return {
     resultPath,
