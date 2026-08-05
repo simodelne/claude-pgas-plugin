@@ -9,6 +9,7 @@ export interface ClassifiedStage {
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
+  connector_slug?: string;
   integration_gap?: boolean;
   audit_note?: string;
 }
@@ -21,6 +22,8 @@ interface StageInput {
   kind?: unknown;
   type?: unknown;
   export_kind?: unknown;
+  integration?: unknown;
+  connector_slug?: unknown;
   domain_spec?: unknown;
 }
 
@@ -134,6 +137,20 @@ function classifyStage(
   ].join(' ').toLowerCase();
   const purposeText = purpose.toLowerCase();
   const formulaicStage = hasAny(stageScopedText, COMPUTE_TERMS);
+  const webNavigationGap = webNavigationIntegrationGap(stage, stageDelegation, stageScopedText);
+
+  if (webNavigationGap) {
+    return {
+      slug,
+      archetype: 'external-adapter',
+      adapter_kind: 'in_memory_mock',
+      integration_gap: true,
+      integration_name: 'web_navigation',
+      connector_slug: 'web-navigation',
+      audit_note: webNavigationGap,
+      rationale: `external adapter: ${slug} requires guarded web navigation. Host connector implementation is required outside foundry code.`,
+    };
+  }
 
   if (explicitArchetype === 'external-adapter' || (!explicitArchetype && (hasAny(externalStageText, EXTERNAL_TERMS) || hasExternalDelegation(stageDelegation)))) {
     const explicitGap = explicitDelegationIntegrationGap(stageDelegation);
@@ -240,6 +257,31 @@ function explicitDelegationIntegrationGap(value: unknown): string | undefined {
     return `research backend is host-required — implement the ${connector} connector`;
   }
   return undefined;
+}
+
+function webNavigationIntegrationGap(stage: StageInput, stageDelegation: unknown, stageScopedText: string): string | undefined {
+  const explicit = explicitWebNavigationIntegration(stage) || explicitWebNavigationIntegration(stageDelegation);
+  if (!explicit && !hasWebNavigationTerms(stageScopedText)) {
+    return undefined;
+  }
+  return 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)';
+}
+
+function explicitWebNavigationIntegration(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const candidates = [
+    record.integration,
+    record.integration_name,
+    record.connector_slug,
+  ];
+  return candidates.some((candidate) =>
+    typeof candidate === 'string' &&
+    /^(?:web[_-]?navigation|guarded[_-]?web[_-]?navigation|browser[_-]?navigation|web[_-]?navigation[_-]?guarded)$/iu.test(candidate.trim()));
+}
+
+function hasWebNavigationTerms(value: string): boolean {
+  return /\b(?:navigat\w*|crawl\w*|scrap\w*|brows\w*|websites?|social profiles?|social pages?|social sources?)\b/iu.test(value);
 }
 
 function stageDelegationForSlug(delegation: Record<string, unknown>, slug: string): unknown {

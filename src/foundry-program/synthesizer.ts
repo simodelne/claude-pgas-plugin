@@ -357,6 +357,7 @@ export function synthesizeProgramSpecFromDomain(
   const capabilityGaps = [
     ...capabilityGapsForDelegationChildren(delegationChildren),
     ...documentExtractionGaps,
+    ...capabilityGapsForWebNavigationStages(stageClassification),
   ];
   const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors, stageArtifactDescriptors);
   const registrationPolicies = {
@@ -3473,6 +3474,17 @@ function documentExtractionPdfConnectorSlug(documents: DocumentsDescriptor): str
   return slug && slug.length > 0 ? slug : 'pdf_text_extractor';
 }
 
+function capabilityGapsForWebNavigationStages(stages: ClassifiedStage[]): CapabilityGap[] {
+  return stages
+    .filter((stage) => stage.integration_gap === true && (stage.integration_name === 'web_navigation' || stage.connector_slug === 'web-navigation'))
+    .map((stage) => ({
+      capability: 'web_navigation_guarded',
+      stage: stage.slug,
+      connector_slug: 'web-navigation',
+      message: 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)',
+    }));
+}
+
 function applyExportDescriptorsToClassifications(
   stages: ClassifiedStage[],
   descriptors: readonly ExportStageDescriptor[],
@@ -3530,6 +3542,17 @@ function bindRepoIntegrations(
   return stages.map((stage) => {
     if (stage.archetype !== 'external-adapter') {
       return stage;
+    }
+    if (stage.integration_name === 'web_navigation' || stage.connector_slug === 'web-navigation') {
+      return {
+        ...stage,
+        adapter_kind: 'in_memory_mock',
+        integration_gap: true,
+        integration_name: 'web_navigation',
+        connector_slug: 'web-navigation',
+        audit_note: stage.audit_note ?? 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)',
+        rationale: `${stage.rationale} Guarded browser navigation remains a host connector gap.`,
+      };
     }
     if (targetKind !== 'existing_repo') {
       return { ...stage, adapter_kind: 'in_memory_mock' };
