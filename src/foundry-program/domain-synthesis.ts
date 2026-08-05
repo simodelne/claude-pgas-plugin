@@ -942,12 +942,18 @@ function promptForStage(stage: string, classification: StageClassification, arti
   const context = contextForStage(stage, classification, artifact);
   const entryPath = `inputs.${context.entry_channel}`;
   const initialEntryPath = context.initial_entry_path;
+  const resultJsonSchema = context.domain_spec?.produces.result_json;
+  const hasRepeatedRecord = isRecord(resultJsonSchema) && Object.values(resultJsonSchema).some(isRepeatedRecordSchema);
   const domainSpecLines = context.domain_spec
     ? [
         'Author-provided domain spec for this stage is normative.',
         'Implement these rules exactly; do not infer alternate business logic.',
         'Treat domain_spec.produces.result_json as the exact result_json object schema and insertion order; emit those top-level keys only.',
-        'When a domain_spec.produces.result_json field is an array containing one object, treat it as a repeated-record schema: return an array of records and preserve every key inside that object.',
+        ...(hasRepeatedRecord
+          ? [
+              'When a domain_spec.produces.result_json field is an array containing one object, treat it as a repeated-record schema: return an array of records and preserve every key inside that object.',
+            ]
+          : []),
         'When domain_spec.produces.items_json is an array, treat it as the exact ordered item template list; emit that many strings and no extras.',
         'If request data is missing for a required read, surface that gap in result_json rather than fabricating values.',
         'Stage domain spec:',
