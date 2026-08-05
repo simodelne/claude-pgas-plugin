@@ -174,6 +174,20 @@ interface SkillCatalogEntry {
   body: string;
 }
 
+interface WebNavigationSourceConfig {
+  url: string;
+  allowed_domains?: string[];
+}
+
+interface WebNavigationGuardContext {
+  allowed_domains: string[];
+  max_depth: number;
+  max_pages: number;
+  max_follow_links: number;
+  min_delay_ms: number;
+  max_concurrency: number;
+}
+
 interface HubSectionArtifactProjection {
   stage: string;
   summaryPath: string;
@@ -186,6 +200,25 @@ const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
 );
+
+const DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT = {
+  max_depth: 1,
+  max_pages: 3,
+  max_follow_links: 2,
+  min_delay_ms: 0,
+  max_concurrency: 1,
+} as const;
+
+const FORBIDDEN_LEAD_RESEARCH_WEB_IO_NAMES = [
+  'checkout',
+  'payment',
+  'purchase',
+  'add_to_cart',
+  'login',
+  'sign_in',
+  'credential',
+  'password',
+] as const;
 
 export function synthesizeProgramSpecFromDomain(
   domain: Record<string, unknown>,
@@ -279,6 +312,7 @@ export function synthesizeProgramSpecFromDomain(
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
   const hasConversationalHub = stageClassification.some((stage) => stage.archetype === 'conversational-hub');
+  stages = bindWebNavigationGuardContextToStages(stages, stageClassificationBySlug, domain, purpose);
   if (confirmationLoops.length > 0) {
     assertConfirmationLoopDescriptors(confirmationLoops, collectionLifecycle, stages, stageClassificationBySlug);
     completion = {
@@ -660,6 +694,7 @@ export function synthesizeProgramSpecFromDomain(
       },
     ]));
   }
+  assertNoForbiddenLeadResearchWebVocabulary(spec, slug, stageClassification, domain);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -3483,6 +3518,340 @@ function capabilityGapsForWebNavigationStages(stages: ClassifiedStage[]): Capabi
       connector_slug: 'web-navigation',
       message: 'guarded browser navigation is host-side; implement WebNavigationHostConnector (pgas-web driver)',
     }));
+}
+
+function bindWebNavigationGuardContextToStages(
+  stages: Stage[],
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+  domain: Record<string, unknown>,
+  purpose: string,
+): Stage[] {
+  const guardConfig = webNavigationGuardConfigRecordForDomain(domain);
+  if (!guardConfig) {
+    return stages;
+  }
+  const webNavigationSlugs = new Set(
+    stages
+      .filter((stage) => isWebNavigationClassifiedStage(stageClassificationBySlug.get(stage.slug)))
+      .map((stage) => stage.slug),
+  );
+  if (webNavigationSlugs.size === 0) {
+    return stages;
+  }
+
+  const sources = webNavigationSourcesForDomain(domain);
+  const guardContext = webNavigationGuardContextFromConfig(guardConfig, sources);
+  const extractionSchema = webNavigationExtractionSchemaForDomain(domain, stages);
+
+  return stages.map((stage) => webNavigationSlugs.has(stage.slug)
+    ? {
+        ...stage,
+        domain_spec: webNavigationGuardBoundDomainSpec(stage, {
+          sources,
+          purpose,
+          extractionSchema,
+          guardContext,
+        }),
+      }
+    : stage);
+}
+
+function webNavigationGuardBoundDomainSpec(
+  stage: Stage,
+  input: {
+    sources: WebNavigationSourceConfig[];
+    purpose: string;
+    extractionSchema: Record<string, string>;
+    guardContext: WebNavigationGuardContext;
+  },
+): StageDomainSpec {
+  const base = stage.domain_spec ?? {
+    reads: ['source', 'purpose', 'extraction_schema', 'GuardContext'],
+    produces: {},
+    rules: ['Call WebNavigationHostConnector.navigate_and_extract for configured public sources.'],
+    invariants: ['Every connector audit entry is persisted in result_json.audit.'],
+  };
+  return {
+    ...base,
+    reads: unique([...base.reads, 'source', 'purpose', 'extraction_schema', 'GuardContext']),
+    produces: {
+      ...base.produces,
+      result_json: {
+        items: 'ExtractedItem[]',
+        pages_visited: 'number',
+        audit: 'NavAuditEntry[]',
+      },
+    },
+    rules: unique([
+      ...base.rules,
+      'Call only WebNavigationHostConnector.navigate_and_extract for web I/O.',
+      'No spend or auth verbs are modeled as callable actions.',
+    ]),
+    invariants: unique([
+      ...base.invariants,
+      'GuardContext is assembled mechanically from guard_config before the navigation connector runs.',
+      'The navigation stage result persists audit[] through its deterministic result_path.',
+    ]),
+    input_domain: {
+      source: input.sources[0]?.url ?? '',
+      sources: input.sources,
+      purpose: input.purpose,
+      extraction_schema: input.extractionSchema,
+      GuardContext: input.guardContext,
+      guard_context: input.guardContext,
+    },
+  } as StageDomainSpec;
+}
+
+function webNavigationGuardConfigRecordForDomain(domain: Record<string, unknown>): Record<string, unknown> | undefined {
+  return optionalRecordDomainValue(domain, 'guard_config')
+    ?? optionalRecordDomainValue(domain, 'config.guard_config')
+    ?? optionalRecordDomainValue(domain, 'intake.guard_config_json');
+}
+
+function webNavigationSourcesForDomain(domain: Record<string, unknown>): WebNavigationSourceConfig[] {
+  const rawSources = optionalArrayDomainValue(domain, 'config.sources')
+    ?? optionalArrayDomainValue(domain, 'intake.sources_json')
+    ?? [];
+  return rawSources
+    .map((source) => webNavigationSourceConfigFromValue(source))
+    .filter((source): source is WebNavigationSourceConfig => source !== undefined);
+}
+
+function webNavigationSourceConfigFromValue(value: unknown): WebNavigationSourceConfig | undefined {
+  if (typeof value === 'string') {
+    const url = value.trim();
+    return url.length > 0 ? { url } : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const urlValue = typeof value.url === 'string'
+    ? value.url
+    : typeof value.source === 'string'
+      ? value.source
+      : '';
+  const url = urlValue.trim();
+  if (!url) {
+    return undefined;
+  }
+  const allowedDomains = stringListFromUnknown(value.allowed_domains);
+  return {
+    url,
+    ...(allowedDomains.length > 0 ? { allowed_domains: allowedDomains } : {}),
+  };
+}
+
+function webNavigationGuardContextFromConfig(
+  config: Record<string, unknown>,
+  sources: readonly WebNavigationSourceConfig[],
+): WebNavigationGuardContext {
+  const explicitAllowedDomains = stringListFromUnknown(config.allowed_domains);
+  const derivedAllowedDomains = unique(
+    sources.flatMap((source) => [
+      ...(source.allowed_domains ?? []),
+      ...(registrableDomainFromUrlLike(source.url) ? [registrableDomainFromUrlLike(source.url) as string] : []),
+    ]),
+  );
+  return {
+    allowed_domains: unique(explicitAllowedDomains.length > 0 ? explicitAllowedDomains : derivedAllowedDomains),
+    max_depth: nonNegativeIntegerFromConfig(config.max_depth, DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT.max_depth),
+    max_pages: nonNegativeIntegerFromConfig(config.max_pages, DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT.max_pages),
+    max_follow_links: nonNegativeIntegerFromConfig(config.max_follow_links, DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT.max_follow_links),
+    min_delay_ms: nonNegativeIntegerFromConfig(config.min_delay_ms, DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT.min_delay_ms),
+    max_concurrency: positiveIntegerFromConfig(config.max_concurrency, DEFAULT_WEB_NAVIGATION_GUARD_CONTEXT.max_concurrency),
+  };
+}
+
+function webNavigationExtractionSchemaForDomain(
+  domain: Record<string, unknown>,
+  stages: readonly Stage[],
+): Record<string, string> {
+  return recordOfStrings(domainValue(domain, 'config.extraction_schema'))
+    ?? recordOfStrings(jsonDomainValue(domain, 'intake.extraction_schema_json'))
+    ?? stages
+      .map((stage) => firstArrayObjectStringSchema(stage.domain_spec?.produces))
+      .find((schema): schema is Record<string, string> => schema !== undefined)
+    ?? {};
+}
+
+function optionalRecordDomainValue(domain: Record<string, unknown>, path: string): Record<string, unknown> | undefined {
+  const value = jsonDomainValue(domain, path);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object when present`);
+  }
+  return value;
+}
+
+function optionalArrayDomainValue(domain: Record<string, unknown>, path: string): unknown[] | undefined {
+  const value = jsonDomainValue(domain, path);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array when present`);
+  }
+  return value;
+}
+
+function jsonDomainValue(domain: Record<string, unknown>, path: string): unknown {
+  const value = domainValue(domain, path);
+  if (typeof value !== 'string') {
+    return value;
+  }
+  return JSON.parse(value) as unknown;
+}
+
+function firstArrayObjectStringSchema(value: unknown): Record<string, string> | undefined {
+  const direct = recordOfStringsFromArrayObject(value);
+  if (direct) {
+    return direct;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  for (const child of Object.values(value)) {
+    const nested = firstArrayObjectStringSchema(child);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function recordOfStringsFromArrayObject(value: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(value) || value.length !== 1) {
+    return undefined;
+  }
+  return recordOfStrings(value[0]);
+}
+
+function recordOfStrings(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0 || !entries.every(([, entryValue]) => typeof entryValue === 'string' && entryValue.trim().length > 0)) {
+    return undefined;
+  }
+  return Object.fromEntries(entries.map(([key, entryValue]) => [key, (entryValue as string).trim()]));
+}
+
+function stringListFromUnknown(value: unknown): string[] {
+  return Array.isArray(value)
+    ? unique(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))
+    : [];
+}
+
+function nonNegativeIntegerFromConfig(value: unknown, fallback: number): number {
+  const parsed = numberFromConfig(value);
+  return parsed === undefined ? fallback : Math.max(0, Math.floor(parsed));
+}
+
+function positiveIntegerFromConfig(value: unknown, fallback: number): number {
+  const parsed = numberFromConfig(value);
+  return parsed === undefined ? fallback : Math.max(1, Math.floor(parsed));
+}
+
+function numberFromConfig(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function registrableDomainFromUrlLike(value: string): string | undefined {
+  try {
+    return registrableDomainFromHostname(new URL(value).hostname);
+  } catch {
+    return registrableDomainFromHostname(value);
+  }
+}
+
+function registrableDomainFromHostname(value: string): string | undefined {
+  const hostname = value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//u, '')
+    .split('/')[0]
+    ?.replace(/\.$/u, '');
+  if (!hostname) {
+    return undefined;
+  }
+  const labels = hostname.split('.').filter(Boolean);
+  if (labels.length < 2) {
+    return hostname;
+  }
+  return labels.slice(-2).join('.');
+}
+
+function assertNoForbiddenLeadResearchWebVocabulary(
+  spec: MutableRecord,
+  slug: string,
+  stageClassification: readonly ClassifiedStage[],
+  domain: Record<string, unknown>,
+): void {
+  if (!isLeadResearchWebNavigationShape(slug, stageClassification, domain)) {
+    return;
+  }
+  const names = collectSpecActionToolVocabularyNames(spec);
+  for (const name of names) {
+    const forbidden = FORBIDDEN_LEAD_RESEARCH_WEB_IO_NAMES.find((candidate) =>
+      actionOrToolNameContainsCapability(name, candidate));
+    if (forbidden) {
+      throw new Error(`lead-research web-navigation vocabulary must not expose ${forbidden} action/tool name: ${name}`);
+    }
+  }
+}
+
+function isLeadResearchWebNavigationShape(
+  slug: string,
+  stageClassification: readonly ClassifiedStage[],
+  domain: Record<string, unknown>,
+): boolean {
+  const hasWebNavigationStage = stageClassification.some(isWebNavigationClassifiedStage);
+  if (!hasWebNavigationStage) {
+    return false;
+  }
+  return slug === 'lead-research-agent' || webNavigationGuardConfigRecordForDomain(domain) !== undefined;
+}
+
+function isWebNavigationClassifiedStage(stage: ClassifiedStage | undefined): boolean {
+  return stage?.integration_name === 'web_navigation' || stage?.connector_slug === 'web-navigation';
+}
+
+function collectSpecActionToolVocabularyNames(spec: MutableRecord): string[] {
+  const names: string[] = [];
+  if (isRecord(spec.action_map)) {
+    names.push(...Object.keys(spec.action_map));
+  }
+  if (isRecord(spec.tools)) {
+    names.push(...Object.keys(spec.tools));
+  }
+  if (isRecord(spec.proceed_to)) {
+    names.push(...Object.keys(spec.proceed_to));
+  }
+  if (isRecord(spec.modes)) {
+    for (const mode of Object.values(spec.modes)) {
+      if (!isRecord(mode) || !Array.isArray(mode.vocabulary)) {
+        continue;
+      }
+      names.push(...mode.vocabulary.filter((item): item is string => typeof item === 'string'));
+    }
+  }
+  return unique(names);
+}
+
+function actionOrToolNameContainsCapability(name: string, capability: string): boolean {
+  const escaped = capability.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'u').test(name.toLowerCase());
 }
 
 function applyExportDescriptorsToClassifications(
