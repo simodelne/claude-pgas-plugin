@@ -21,9 +21,10 @@ import { isRecord } from '../util/guards.js';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import { findExecutedPathStubMarkers } from './verify.js';
+import { isSafeRepoRelativePath } from './wiring-manifest.js';
 
 export interface ProviderExchange {
   path: string;
@@ -109,9 +110,13 @@ export async function startCountingProviderProxy(upstreamBaseUrl: string): Promi
 }
 
 export interface GeneratedLiveDriveOptions {
-  /** Rendered standalone scaffold root (node_modules present or symlinked). */
+  /** Rendered scaffold or existing-repo attachment root (node_modules present or symlinked). */
   targetDir: string;
   slug: string;
+  /** Program attachment layout on disk. Defaults to standalone scaffold layout. */
+  targetKind?: GeneratedLiveDriveTargetKind;
+  /** Existing-repo manifest paths.programs_dir; defaults to programs for existing-repo attachments. */
+  programsDir?: string;
   /** REAL provider base URL (OpenAI-compatible, e.g. http://host:8000/v1). */
   providerBaseUrl: string;
   model: string;
@@ -171,12 +176,56 @@ export interface GeneratedLiveDriveResult {
   runner_timeout_kind?: string;
 }
 
+export type GeneratedLiveDriveTargetKind = 'standalone_repo' | 'existing_repo';
+
+export interface GeneratedLiveDriveRunnerLayout {
+  targetKind?: GeneratedLiveDriveTargetKind;
+  programsDir?: string;
+}
+
+interface ResolvedGeneratedLiveDriveRunnerLayout {
+  targetKind: GeneratedLiveDriveTargetKind;
+  programsDir: string;
+}
+
 const DEFAULT_FINAL_STAGE = 'complete';
 const DEFAULT_MAX_TRIGGERS = 12;
 const DEFAULT_DRIVE_TIMEOUT_MS = 600_000;
+const LIVE_DRIVE_RUNNER_DIR = '.pgas-new-live-drive';
 
 type ConfirmationLoopDescriptorForScript = NonNullable<NonNullable<SynthesisContext['interaction']>['confirmation_loops']>[number];
 type CollectionLifecycleForScript = NonNullable<SynthesisContext['completion']['collection_lifecycle']>;
+
+function resolveRunnerLayout(
+  layout: GeneratedLiveDriveRunnerLayout = {},
+): ResolvedGeneratedLiveDriveRunnerLayout {
+  const targetKind = layout.targetKind ?? 'standalone_repo';
+  if (targetKind === 'standalone_repo') {
+    return { targetKind, programsDir: 'src/programs' };
+  }
+  const programsDir = trimRepoRelativePath(layout.programsDir ?? 'programs');
+  if (!isSafeRepoRelativePath(programsDir)) {
+    throw new Error(`generated live-drive existing-repo programsDir must be a safe repo-relative path: ${layout.programsDir ?? ''}`);
+  }
+  return { targetKind, programsDir };
+}
+
+function liveDriveProgramImportPath(
+  slug: string,
+  layout: GeneratedLiveDriveRunnerLayout | undefined,
+  ...segments: string[]
+): string {
+  const resolved = resolveRunnerLayout(layout);
+  const programPath = resolved.targetKind === 'existing_repo'
+    ? posix.join(resolved.programsDir, slug, ...segments)
+    : posix.join('src/programs', slug, ...segments);
+  const relativePath = posix.relative(LIVE_DRIVE_RUNNER_DIR, programPath);
+  return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+}
+
+function trimRepoRelativePath(path: string): string {
+  return path.replace(/^\/+|\/+$/gu, '');
+}
 
 export interface GeneratedLiveDriveScriptDecision {
   decision: string;
@@ -860,6 +909,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
   const runnerPath = join(workDir, 'runner.ts');
   const reportPath = join(workDir, 'report.json');
   const driveTimeoutMs = options.driveTimeoutMs ?? DEFAULT_DRIVE_TIMEOUT_MS;
+  const runnerLayout = resolveRunnerLayout(options);
 
   const proxy = await startCountingProviderProxy(options.providerBaseUrl);
   try {
@@ -870,6 +920,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       options.uploadScript,
       options.exportScript,
       options.extractionScript,
+      runnerLayout,
     ));
 
     const runner = await runNodeScript(runnerPath, {
@@ -919,6 +970,12 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     });
 
     const report = readDriveReport(reportPath);
+    const runnerOutputExcerpt = runner.output.slice(-4_000);
+    const runnerError = typeof report?.error === 'string'
+      ? report.error
+      : runner.exitCode !== 0 && runnerOutputExcerpt.trim().length > 0
+        ? runnerOutputExcerpt
+        : undefined;
     const providerHits = proxy.hits();
     const statusHistory = parseStatusHistory(report?.status_history);
     const finalMode = typeof report?.final_mode === 'string' ? report.final_mode : null;
@@ -999,8 +1056,8 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       extraction_verdict: extractionVerdict,
       extraction_engaged: extractionVerdict.extraction_engaged,
       runner_exit_code: runner.exitCode,
-      runner_output_excerpt: runner.output.slice(-4_000),
-      ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
+      runner_output_excerpt: runnerOutputExcerpt,
+      ...(runnerError ? { runner_error: runnerError } : {}),
       ...(typeof report?.timeout_kind === 'string' ? { runner_timeout_kind: report.timeout_kind } : {}),
     };
   } finally {
@@ -1024,6 +1081,7 @@ export function renderLiveDriveRunnerSource(
   uploadScript?: GeneratedLiveDriveUploadScript,
   exportScript?: GeneratedLiveDriveExportScript,
   extractionScript?: GeneratedLiveDriveExtractionScript,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const selectedScripts = [
     confirmationScript,
@@ -1040,24 +1098,25 @@ export function renderLiveDriveRunnerSource(
       Boolean(uploadScript),
       Boolean(exportScript),
       Boolean(extractionScript),
+      runnerLayout,
     );
   }
   if (extractionScript) {
-    return renderExtractionLiveDriveRunnerSource(slug);
+    return renderExtractionLiveDriveRunnerSource(slug, runnerLayout);
   }
   if (uploadScript) {
-    return renderUploadLiveDriveRunnerSource(slug);
+    return renderUploadLiveDriveRunnerSource(slug, runnerLayout);
   }
   if (exportScript) {
-    return renderExportLiveDriveRunnerSource(slug);
+    return renderExportLiveDriveRunnerSource(slug, runnerLayout);
   }
   if (delegationScript) {
-    return renderDelegationLiveDriveRunnerSource(slug, delegationScript.childProgram);
+    return renderDelegationLiveDriveRunnerSource(slug, delegationScript.childProgram, runnerLayout);
   }
   if (confirmationScript) {
-    return renderConfirmationLiveDriveRunnerSource(slug);
+    return renderConfirmationLiveDriveRunnerSource(slug, runnerLayout);
   }
-  return renderEntryOnlyLiveDriveRunnerSource(slug);
+  return renderEntryOnlyLiveDriveRunnerSource(slug, runnerLayout);
 }
 
 function renderCompositeLiveDriveRunnerSource(
@@ -1067,15 +1126,17 @@ function renderCompositeLiveDriveRunnerSource(
   hasUploadScript: boolean,
   hasExportScript: boolean,
   hasExtractionScript: boolean,
+  runnerLayout: GeneratedLiveDriveRunnerLayout,
 ): string {
   const pascal = toPascalCase(slug);
   const childPascal = childProgram ? toPascalCase(childProgram) : '';
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
   const childImport = childProgram
-    ? `import { create${childPascal}ProgramEntry } from '../src/programs/${childProgram}/registration.js';\n`
+    ? `import { create${childPascal}ProgramEntry } from '${liveDriveProgramImportPath(childProgram, runnerLayout, 'registration.js')}';\n`
     : '';
   const extractionImports = hasExtractionScript
     ? "import { deflateRawSync } from 'node:zlib';\n" +
-      `import { renderStructuredDocxDocument } from '../src/programs/${slug}/export/docx.js';\n`
+      `import { renderStructuredDocxDocument } from '${liveDriveProgramImportPath(slug, runnerLayout, 'export/docx.js')}';\n`
     : '';
   const programs = [
     `{ name: '${slug}', entry: create${pascal}ProgramEntry() }`,
@@ -1102,7 +1163,7 @@ function renderCompositeLiveDriveRunnerSource(
   return `import { writeFileSync } from 'node:fs';
 ${extractionImports}import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
 ${childImport}
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -2180,12 +2241,16 @@ main().catch((error: unknown) => {
 `;
 }
 
-function renderEntryOnlyLiveDriveRunnerSource(slug: string): string {
+function renderEntryOnlyLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -2329,14 +2394,20 @@ main().catch((error: unknown) => {
 `;
 }
 
-export function renderDelegationLiveDriveRunnerSource(slug: string, childProgram: string): string {
+export function renderDelegationLiveDriveRunnerSource(
+  slug: string,
+  childProgram: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
   const childPascal = toPascalCase(childProgram);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const childRegistrationImport = liveDriveProgramImportPath(childProgram, runnerLayout, 'registration.js');
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
-import { create${childPascal}ProgramEntry } from '../src/programs/${childProgram}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
+import { create${childPascal}ProgramEntry } from '${childRegistrationImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -2665,14 +2736,19 @@ main().catch((error: unknown) => {
 `;
 }
 
-export function renderExtractionLiveDriveRunnerSource(slug: string): string {
+export function renderExtractionLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const docxImport = liveDriveProgramImportPath(slug, runnerLayout, 'export/docx.js');
   return `import { writeFileSync } from 'node:fs';
 import { deflateRawSync } from 'node:zlib';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
-import { renderStructuredDocxDocument } from '../src/programs/${slug}/export/docx.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
+import { renderStructuredDocxDocument } from '${docxImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -3222,12 +3298,16 @@ main().catch((error: unknown) => {
 `;
 }
 
-export function renderUploadLiveDriveRunnerSource(slug: string): string {
+export function renderUploadLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -3640,12 +3720,16 @@ main().catch((error: unknown) => {
 `;
 }
 
-export function renderExportLiveDriveRunnerSource(slug: string): string {
+export function renderExportLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -4021,12 +4105,16 @@ main().catch((error: unknown) => {
 `;
 }
 
-function renderConfirmationLiveDriveRunnerSource(slug: string): string {
+function renderConfirmationLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
   const pascal = toPascalCase(slug);
+  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${pascal}ProgramEntry } from '${registrationImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';

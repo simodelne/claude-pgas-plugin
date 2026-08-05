@@ -15,6 +15,7 @@ import {
   driveGeneratedProgramLive,
   type GeneratedLiveDriveDelegationScript,
   type GeneratedLiveDriveScriptDecision,
+  type GeneratedLiveDriveTargetKind,
   type GeneratedLiveDriveUploadScript,
 } from '../pgas-new/generated-live-drive.js';
 import { findExecutedPathStubMarkers } from '../pgas-new/verify.js';
@@ -1420,6 +1421,10 @@ export const handlers: Record<string, ToolHandler> = {
       ?? 'the generated program workflow';
     const completion = parseGeneratedCompletion(domain);
     const entryChannel = generatedEntryChannel(domain);
+    const targetKind = generatedLiveDriveTargetKind(domain);
+    const programsDir = targetKind === 'existing_repo' && domain
+      ? parseWiringManifestDomainField(domain).paths.programs_dir
+      : undefined;
 
     const confirmationScript = generatedConfirmationScript(domain);
     const delegationScript = generatedDelegationScript(domain);
@@ -1432,6 +1437,8 @@ export const handlers: Record<string, ToolHandler> = {
       entryChannel,
       initialText: `Live graduation drive request. ${purpose}`,
       finalStage: completion,
+      ...(targetKind ? { targetKind } : {}),
+      ...(programsDir ? { programsDir } : {}),
       driveTimeoutMs: delegationScript ? generatedDelegationDriveTimeoutMs() : uploadScript ? 900_000 : 540_000,
       ...(confirmationScript ? { confirmationScript } : {}),
       ...(delegationScript ? { delegationScript } : {}),
@@ -1470,8 +1477,12 @@ export const handlers: Record<string, ToolHandler> = {
     if (gateStubFindings.length > 0) {
       failureReasons.push(`stage outputs contain stub markers: ${gateStubFindings.slice(0, 3).join('; ')}`);
     }
-    if (drive.runner_error) {
-      failureReasons.push(`drive runner error: ${tail(drive.runner_error)}`);
+    const runnerError = drive.runner_error
+      ?? (drive.runner_exit_code !== null && drive.runner_exit_code !== 0 && drive.runner_output_excerpt.trim().length > 0
+        ? drive.runner_output_excerpt
+        : undefined);
+    if (runnerError) {
+      failureReasons.push(`drive runner error: ${tail(runnerError)}`);
     }
     if (drive.runner_timeout_kind === 'trigger_in_flight') {
       failureReasons.push('drive timed out while parent trigger was still in flight');
@@ -1487,6 +1498,9 @@ export const handlers: Record<string, ToolHandler> = {
       provider_hits: drive.provider_hits,
       drive_actions: drive.actions.join(','),
       choreography: JSON.stringify(drive.choreography),
+      runner_exit_code: drive.runner_exit_code,
+      ...(drive.runner_output_excerpt.trim().length > 0 ? { runner_output_excerpt: tail(drive.runner_output_excerpt) } : {}),
+      ...(runnerError ? { runner_error: tail(runnerError) } : {}),
       ...(delegationScript
         ? {
             delegation: JSON.stringify(drive.delegation),
@@ -1650,6 +1664,17 @@ function stringDomainField(domain: Record<string, unknown>, path: string): strin
 function optionalStringDomainField(domain: Record<string, unknown>, path: string): string | undefined {
   const value = domainValue(domain, path);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function generatedLiveDriveTargetKind(
+  domain: Record<string, unknown> | undefined,
+): GeneratedLiveDriveTargetKind | undefined {
+  if (!domain) return undefined;
+  const targetKind = optionalStringDomainField(domain, 'repo.target_kind')
+    ?? optionalStringDomainField(domain, 'repo.kind');
+  return targetKind === 'existing_repo' || targetKind === 'standalone_repo'
+    ? targetKind
+    : undefined;
 }
 
 /**
