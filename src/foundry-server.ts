@@ -51,6 +51,7 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
       devMode: true,
       storage: { dbPath: resolvedConfig.dbPath },
       auth: resolvedConfig.auth,
+      roundTimeoutMs: process.env.PGAS_ROUND_TIMEOUT_MS ? Number(process.env.PGAS_ROUND_TIMEOUT_MS) : undefined,
     };
     if (shouldUseCodexCliDriver()) {
       // codex-cli unified driver (engine v2.14.0+). Selector precedence: codex-cli

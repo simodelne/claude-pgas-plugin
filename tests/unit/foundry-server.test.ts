@@ -39,6 +39,7 @@ describe('startFoundryServer', () => {
   const originalJwtSecret = process.env.PGAS_JWT_SECRET;
   const originalJwtIssuer = process.env.PGAS_JWT_ISSUER;
   const originalJwtExpiresIn = process.env.PGAS_JWT_EXPIRES_IN;
+  const originalRoundTimeoutMs = process.env.PGAS_ROUND_TIMEOUT_MS;
   const originalHome = process.env.HOME;
   let homeDir: string;
 
@@ -54,6 +55,7 @@ describe('startFoundryServer', () => {
     process.env.PGAS_JWT_SECRET = 'unit-jwt-secret';
     delete process.env.PGAS_JWT_ISSUER;
     delete process.env.PGAS_JWT_EXPIRES_IN;
+    delete process.env.PGAS_ROUND_TIMEOUT_MS;
   });
 
   afterEach(() => {
@@ -92,6 +94,11 @@ describe('startFoundryServer', () => {
       delete process.env.PGAS_JWT_EXPIRES_IN;
     } else {
       process.env.PGAS_JWT_EXPIRES_IN = originalJwtExpiresIn;
+    }
+    if (originalRoundTimeoutMs === undefined) {
+      delete process.env.PGAS_ROUND_TIMEOUT_MS;
+    } else {
+      process.env.PGAS_ROUND_TIMEOUT_MS = originalRoundTimeoutMs;
     }
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -188,6 +195,27 @@ describe('startFoundryServer', () => {
         expiresIn: '30m',
       },
     }));
+  });
+
+  it('passes roundTimeoutMs as undefined when PGAS_ROUND_TIMEOUT_MS is unset', async () => {
+    const engine = mockPgasServer({ boundPort: 4568 });
+    createPgasServerMock.mockResolvedValue(engine);
+
+    await startFoundryServer({ port: 4568, hostname: '127.0.0.1' });
+
+    const config = serverConfig();
+    expect(Object.prototype.hasOwnProperty.call(config, 'roundTimeoutMs')).toBe(true);
+    expect(config.roundTimeoutMs).toBeUndefined();
+  });
+
+  it('passes PGAS_ROUND_TIMEOUT_MS as a typed roundTimeoutMs number', async () => {
+    const engine = mockPgasServer({ boundPort: 4569 });
+    createPgasServerMock.mockResolvedValue(engine);
+    process.env.PGAS_ROUND_TIMEOUT_MS = '600000';
+
+    await startFoundryServer({ port: 4569, hostname: '127.0.0.1' });
+
+    expect(serverConfig().roundTimeoutMs).toBe(600000);
   });
 
   it('resolves default db path and JWT secret file when env overrides are absent', async () => {
