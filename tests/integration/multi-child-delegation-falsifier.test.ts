@@ -152,6 +152,23 @@ describe('multi-child delegation route-level engine falsifier (Slice B)', () => 
     expect(smoke).toContain("expect(new Set(childSessionIds).size).toBe(2)");
     expect(smoke).toContain("expect(final.mode).toBe('complete')");
   });
+
+  it('M-4: synthesized multi-distinct child inputEnrichment is scoped per target program', () => {
+    const artifact = synthesizeProgramSpecFromDomain(twoChildDomain());
+
+    expect(inputEnrichmentRules(artifact.registration_ts ?? '')).toEqual([
+      { source: 'intake.summary', target: 'request.topic', targetProgram: INGEST_PROGRAM },
+      { source: 'intake.summary', target: 'request.topic', targetProgram: REVIEW_PROGRAM },
+    ]);
+  });
+
+  it('M-5: synthesized single-child inputEnrichment stays all-target without targetProgram', () => {
+    const artifact = synthesizeProgramSpecFromDomain(singleChildDomain());
+
+    expect(inputEnrichmentRules(artifact.registration_ts ?? '')).toEqual([
+      { source: 'intake.summary', target: 'request.topic' },
+    ]);
+  });
 });
 
 interface TwoChildEvidence {
@@ -650,6 +667,40 @@ function twoChildDomain(): Record<string, unknown> {
       ],
     }),
   };
+}
+
+function singleChildDomain(): Record<string, unknown> {
+  const domain = twoChildDomain();
+  const delegation = JSON.parse(String(domain['intake.delegation_json'])) as {
+    children: unknown[];
+  };
+  domain['program.slug'] = 'single-child-parent';
+  domain['program.name'] = 'Single Child Parent';
+  domain['program.target_dir'] = '/tmp/single-child-parent';
+  domain['intake.delegation_json'] = JSON.stringify({
+    ...delegation,
+    children: delegation.children.slice(0, 1),
+  });
+  return domain;
+}
+
+interface InputEnrichmentRule {
+  source: string;
+  target: string;
+  targetProgram?: string;
+}
+
+function inputEnrichmentRules(registrationSource: string): InputEnrichmentRule[] {
+  return Array.from(
+    registrationSource.matchAll(
+      /\{\s*source:\s*'([^']+)',\s*target:\s*'([^']+)'(?:,\s*targetProgram:\s*'([^']+)')?\s*\}/gu,
+    ),
+    (match) => ({
+      source: match[1] as string,
+      target: match[2] as string,
+      ...(match[3] ? { targetProgram: match[3] as string } : {}),
+    }),
+  );
 }
 
 function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output'): Record<string, unknown> {

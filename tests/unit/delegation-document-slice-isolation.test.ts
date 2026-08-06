@@ -6,6 +6,7 @@ import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synth
 interface InputEnrichmentRule {
   source: string;
   target: string;
+  targetProgram?: string;
 }
 
 interface ParsedSpec {
@@ -36,12 +37,19 @@ describe('per-document delegation slice isolation', () => {
     const artifact = synthesizeProgramSpecFromDomain(perDocumentReviewDomain());
     const rules = inputEnrichmentRules(artifact.registration_ts ?? '');
 
-    expect(rules.filter((rule) => rule.target === 'request.topic')).toEqual([
-      { source: 'work.source.current_document.text', target: 'request.topic' },
-    ]);
+    expect(rules.filter((rule) => rule.target === 'request.topic')).toEqual(
+      DOCUMENTS.map((document) => ({
+        source: 'work.source.current_document.text',
+        target: 'request.topic',
+        targetProgram: document.id,
+      })),
+    );
 
     for (const [index, document] of DOCUMENTS.entries()) {
-      const payload = materializePayload(rules, parentDomainWithActiveDocument(index));
+      const payload = materializePayload(
+        rulesForTargetProgram(rules, document.id),
+        parentDomainWithActiveDocument(index),
+      );
       const serialized = JSON.stringify(payload);
 
       expect(readNestedString(payload, 'request.topic')).toBe(document.text);
@@ -186,9 +194,19 @@ function perDocumentReviewDomain(): Record<string, unknown> {
 
 function inputEnrichmentRules(registrationSource: string): InputEnrichmentRule[] {
   return Array.from(
-    registrationSource.matchAll(/\{\s*source:\s*'([^']+)',\s*target:\s*'([^']+)'\s*\}/gu),
-    (match) => ({ source: match[1] as string, target: match[2] as string }),
+    registrationSource.matchAll(
+      /\{\s*source:\s*'([^']+)',\s*target:\s*'([^']+)'(?:,\s*targetProgram:\s*'([^']+)')?\s*\}/gu,
+    ),
+    (match) => ({
+      source: match[1] as string,
+      target: match[2] as string,
+      ...(match[3] ? { targetProgram: match[3] as string } : {}),
+    }),
   );
+}
+
+function rulesForTargetProgram(rules: InputEnrichmentRule[], targetProgram: string): InputEnrichmentRule[] {
+  return rules.filter((rule) => rule.targetProgram === undefined || rule.targetProgram === targetProgram);
 }
 
 function parentDomainWithActiveDocument(index: number): Map<string, unknown> {

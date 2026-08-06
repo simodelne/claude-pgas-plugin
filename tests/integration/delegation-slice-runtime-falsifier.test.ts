@@ -60,10 +60,10 @@ describe('delegation slice runtime delivery falsifier', () => {
     expect(parsed.projection[TARGET_STAGE]?.include).toContain('work.source.current_document.id');
     expect(parsed.projection[TARGET_STAGE]?.include).not.toContain('work.source.current_document.text');
     expect(targetChildSpec.projection.work.include).toEqual(expect.arrayContaining([...REQUEST_PROJECTION_PATHS]));
-    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.text', target: 'request.topic' }");
-    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.id', target: 'request.document_id' }");
-    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.name', target: 'request.document_name' }");
-    expect(artifact.registration_ts).toContain("source: 'transaction_understanding.result_json'");
+    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.text', target: 'request.topic', targetProgram: 'doc1' }");
+    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.id', target: 'request.document_id', targetProgram: 'doc1' }");
+    expect(artifact.registration_ts).toContain("{ source: 'work.source.current_document.name', target: 'request.document_name', targetProgram: 'doc1' }");
+    expect(artifact.registration_ts).toContain("source: 'transaction_understanding.result_json', target: 'domain_context.transaction_understanding', targetProgram: 'summary-context-worker'");
 
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-slice-runtime-'));
     try {
@@ -693,17 +693,19 @@ function firstString(...values: unknown[]): string | null {
 }
 
 function duplicateInputEnrichmentTargets(registrationSource: string): string[] {
-  const targets = Array.from(
-    registrationSource.matchAll(/\{\s*source:\s*'[^']+',\s*target:\s*'([^']+)'\s*\}/gu),
-    (match) => match[1]!,
+  const targetKeys = Array.from(
+    registrationSource.matchAll(
+      /\{\s*source:\s*'[^']+',\s*target:\s*'([^']+)'(?:,\s*targetProgram:\s*'([^']+)')?\s*\}/gu,
+    ),
+    (match) => `${match[2] ?? '*'}\u0000${match[1]!}`,
   );
   const seen = new Set<string>();
   const duplicates = new Set<string>();
-  for (const target of targets) {
-    if (seen.has(target)) {
-      duplicates.add(target);
+  for (const targetKey of targetKeys) {
+    if (seen.has(targetKey)) {
+      duplicates.add(targetKey.replace('\u0000', ':'));
     }
-    seen.add(target);
+    seen.add(targetKey);
   }
   return [...duplicates].sort();
 }
