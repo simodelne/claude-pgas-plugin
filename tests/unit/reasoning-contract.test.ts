@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertReasoningContract,
   deriveFallbackReasoningContract,
+  domainSpecFieldType,
   REASONING_CONTRACT_VERSION,
   reasoningContextForStage,
   runtimeTypeNameFor,
@@ -345,6 +346,64 @@ describe('assertReasoningContract', () => {
     expect(runtimeTypeNameFor('string_array')).toBe('string');
   });
 
+  it('accepts record_array contract fields with a declared inner record shape', () => {
+    const contract = validContract({
+      stage: 'extract_leads',
+      result_schema: {
+        fields: [
+          {
+            name: 'leads',
+            type: 'record_array',
+            description: 'Structured lead records.',
+            record_fields: {
+              name: 'string',
+              email: 'string',
+              relevance_score: 'number',
+            },
+          },
+          { name: 'source_count', type: 'number', description: 'Source count.' },
+          { name: 'complete', type: 'boolean', description: 'Whether extraction completed.' },
+        ],
+        allow_extra_fields: true,
+      },
+      items_schema: { templates: ['lead_count:<source_count>'], description: 'Lead count item.' },
+      canned_example: {
+        result: {
+          leads: [{ name: 'Ada Lovelace', email: 'ada@example.com', relevance_score: 1 }],
+          source_count: 1,
+          complete: true,
+        },
+        items: ['lead_count:1'],
+      },
+    });
+
+    expect(() => assertReasoningContract(contract, { stage: 'extract_leads' })).not.toThrow();
+    expect(runtimeTypeNameFor('record_array')).toBe('array');
+
+    const missingShape = validContract({
+      stage: 'extract_leads',
+      result_schema: {
+        fields: [
+          { name: 'leads', type: 'record_array', description: 'Structured lead records.' },
+          { name: 'source_count', type: 'number', description: 'Source count.' },
+          { name: 'complete', type: 'boolean', description: 'Whether extraction completed.' },
+        ],
+        allow_extra_fields: true,
+      },
+      items_schema: { templates: ['lead_count:<source_count>'], description: 'Lead count item.' },
+      canned_example: {
+        result: {
+          leads: [{ name: 'Ada Lovelace', email: 'ada@example.com', relevance_score: 1 }],
+          source_count: 1,
+          complete: true,
+        },
+        items: ['lead_count:1'],
+      },
+    });
+
+    expect(() => assertReasoningContract(missingShape, { stage: 'extract_leads' })).toThrow(/record_fields/u);
+  });
+
   it('maps contract field types to nominal GKType runtime type names', () => {
     expect(runtimeTypeNameFor('string')).toBe('string');
     expect(runtimeTypeNameFor('enum')).toBe('string');
@@ -353,6 +412,7 @@ describe('assertReasoningContract', () => {
     // S-11 forbids MSet into array-typed paths; string_array args are JSON
     // array strings on the engine's JSON-string-scalar pattern.
     expect(runtimeTypeNameFor('string_array')).toBe('string');
+    expect(runtimeTypeNameFor('record_array')).toBe('array');
   });
 });
 
@@ -714,6 +774,53 @@ describe('deriveFallbackReasoningContract', () => {
     expect(contract.canned_example.result.approved).toBe(true);
     expect(contract.canned_example.result.risks).toEqual(['sample risks']);
     expect(contract.canned_example.items).toEqual(['approved:true', 'risks:sample risks', 'total_usd:1']);
+  });
+
+  it('derives record_array fields and canned records from repeated-record domain specs', () => {
+    const withSpec = artifact();
+    withSpec.synthesis_context = {
+      ...withSpec.synthesis_context!,
+      stages: withSpec.synthesis_context!.stages.map((stage) => stage.slug === 'recommendation'
+        ? {
+            ...stage,
+            domain_spec: {
+              reads: ['risk_assessment.output.result_json'],
+              produces: {
+                result_json: {
+                  stage: 'string',
+                  leads: [{ name: 'string', email: 'string', relevance_score: 'number' }],
+                  source_count: 'number',
+                  extraction_complete: 'boolean',
+                },
+                items_json: ['source_count:<source_count>'],
+              },
+              rules: ['Extract leads as structured records.'],
+              invariants: ['Every lead has name email relevance_score.'],
+            },
+          }
+        : stage),
+    };
+
+    expect(domainSpecFieldType([{ name: 'string', email: 'string', relevance_score: 'number' }])).toBe('record_array');
+
+    const contract = deriveFallbackReasoningContract('recommendation', withSpec);
+    expect(contract.result_schema.fields.map((field) => [field.name, field.type])).toEqual([
+      ['leads', 'record_array'],
+      ['source_count', 'number'],
+      ['extraction_complete', 'boolean'],
+    ]);
+    expect(contract.result_schema.fields[0]).toMatchObject({
+      name: 'leads',
+      type: 'record_array',
+      record_fields: {
+        name: 'string',
+        email: 'string',
+        relevance_score: 'number',
+      },
+    });
+    expect(contract.canned_example.result.leads).toEqual([
+      { name: 'sample name', email: 'sample email', relevance_score: 1 },
+    ]);
   });
 
   it('derives an honest generic contract when the artifact has no synthesis context', () => {

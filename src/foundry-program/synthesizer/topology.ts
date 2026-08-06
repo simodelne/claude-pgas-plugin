@@ -165,9 +165,24 @@ export function outputProjectionFields(
       ? [`${modeName}.output`, `${modeName}.result_json`, `${modeName}.items_json`]
       : [`${modeName}.output`];
   }
-  return reasoningContractsBySlug.has(modeName)
-    ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`]
+  const contract = reasoningContractsBySlug.get(modeName);
+  return contract
+    ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`, ...recordArrayProjectionFields(modeName, contract)]
     : [`${modeName}.result_json`, `${modeName}.items_json`];
+}
+
+function recordArrayProjectionFields(modeName: string, contract: ReasoningStageContract): string[] {
+  return contract.result_schema.fields.flatMap((field) => {
+    if (field.type !== 'record_array') {
+      return [];
+    }
+    const basePath = `${modeName}.result.${field.name}`;
+    return [
+      basePath,
+      `${basePath}.*`,
+      ...Object.keys(field.record_fields ?? {}).map((name) => `${basePath}.*.${name}`),
+    ];
+  });
 }
 
 export function actionMapEntryFor(
@@ -195,8 +210,11 @@ export function actionMapEntryFor(
   const deterministicResultPathInstruction = isDeterministicResultPathStage
     ? ' This is a deterministic wrapper: emit this action with an EMPTY payload. Do NOT author result_json, items_json, bytes, or any output fields; the wrapper computes and stores the result deterministically.'
     : '';
+  const hasRecordArrayField = contract?.result_schema.fields.some((field) => field.type === 'record_array') === true;
   const reasoningEnvelopeDescription = isContractedReasoningStage
-    ? ' The generated handler accepts result_json as either a native JSON object or a JSON string, and items_json as either a native JSON array or a JSON string; it canonicalizes both into JSON strings at the stage output path.'
+    ? hasRecordArrayField
+      ? ' The generated handler accepts the declared result fields as top-level arguments and canonicalizes them into JSON strings at the stage output path.'
+      : ' The generated handler accepts result_json as either a native JSON object or a JSON string, and items_json as either a native JSON array or a JSON string; it canonicalizes both into JSON strings at the stage output path.'
     : '';
   const compositeReasoningMutations = !isBootstrap && action.archetype === 'llm-reasoning' && !isContractedReasoningStage
     ? [
@@ -204,23 +222,31 @@ export function actionMapEntryFor(
         { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
       ]
     : [];
-  const tolerantReasoningCaptureMutations = isContractedReasoningStage
+  const tolerantReasoningCaptureMutations = isContractedReasoningStage && !hasRecordArrayField
     ? [
         { op: 'MSet', path: `${action.source}.raw_result_json`, value: {}, from_arg: 'result_json' },
         { op: 'MSet', path: `${action.source}.raw_items_json`, value: [], from_arg: 'items_json' },
       ]
     : [];
+  const contractedReasoningFieldMutations = contract
+    ? contract.result_schema.fields.map((field) => field.type === 'record_array'
+      ? {
+          op: 'MAppend',
+          path: `${action.source}.result.${field.name}`,
+          value: {},
+          from_arg: field.name,
+        }
+      : {
+          op: 'MSet',
+          path: `${action.source}.raw_result_fields.${field.name}`,
+          from_arg: field.name,
+        })
+    : [];
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
     ...compositeReasoningMutations,
     ...tolerantReasoningCaptureMutations,
-    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? [] : [
-      ...(contract ? contract.result_schema.fields.map((field) => ({
-        op: 'MSet',
-        path: `${action.source}.raw_result_fields.${field.name}`,
-        from_arg: field.name,
-      })) : []),
-    ]),
+    ...(isBootstrap || action.archetype !== 'llm-reasoning' ? [] : contractedReasoningFieldMutations),
   ];
 
   return {
@@ -236,11 +262,13 @@ export function actionMapEntryFor(
     ...(isBootstrap || action.archetype !== 'llm-reasoning' ? {} : {
       arg_descriptions: contract
         ? {
+            ...(!hasRecordArrayField ? {
             result_json: `Optional tolerant result for the ${action.source} LLM reasoning stage. May be a native JSON object or a JSON string encoding an object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
             items_json: `Optional tolerant item list produced by the ${action.source} LLM reasoning stage. May be a native JSON array or a JSON string array matching the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
+            } : {}),
             ...Object.fromEntries(contract.result_schema.fields.map((field) => [
               field.name,
-              `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}`,
+              `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}${field.type === 'record_array' ? ` Provide a native JSON array of objects matching: ${JSON.stringify(field.record_fields ?? {})}.` : ''}`,
             ])),
           }
         : {

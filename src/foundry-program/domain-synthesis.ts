@@ -9,6 +9,7 @@ import { createProviderHandles } from '@simodelne/pgas-server/plugin.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { ExportStageDescriptor, SynthesizedArtifact } from './synthesizer-store.js';
 import { resynthesizeWithReasoningContracts } from './synthesizer.js';
+import { isRepeatedRecordSchema } from './schema-shapes.js';
 import {
   synthesizeReasoningContract,
   type ReasoningContractGenerator,
@@ -4132,9 +4133,9 @@ function perSourceEntries(domain: Record<string, unknown>): Record<string, unkno
 
 function leadEntries(domain: Record<string, unknown>): Record<string, unknown>[] {
   return firstNonEmptyArray(
-    arrayAt(domain, 'extract_leads.result.leads'),
     arrayValue(resultJsonRecord(valueAtPath(domain, 'extract_leads.output')).leads),
     arrayValue(resultJsonRecord(valueAtPath(domain, 'extract_leads.result_json')).leads),
+    arrayAt(domain, 'extract_leads.result.leads'),
     arrayAt(domain, 'leads'),
     arrayAt(domain, 'records'),
   ).filter(isPlainRecord).map((record) => ({ ...record }));
@@ -4317,10 +4318,6 @@ function fallbackFieldExpression(schemaValue: unknown): string {
   }
   // Default to a deterministic non-empty string, echoing the stage for traceability.
   return "input.stage + '-pending'";
-}
-
-function isRepeatedRecordSchema(value: unknown): value is [Record<string, unknown>] {
-  return Array.isArray(value) && value.length === 1 && isRecord(value[0]);
 }
 
 function isArraySchemaValue(value: unknown): boolean {

@@ -75,6 +75,7 @@ import {
 } from './synthesizer/topology.js';
 import { pdfReportArtifactRule, renderRegistrationSource } from './synthesizer/registration-artifacts.js';
 import { validateSynthesizedSpec } from './synthesizer/validation.js';
+import { isRepeatedRecordSchema } from './schema-shapes.js';
 export type {
   DelegationChildrenValidationContext,
   DocumentsValidationContext,
@@ -653,8 +654,16 @@ export function synthesizeProgramSpecFromDomain(
         schema[`${modeName}.raw_result_fields`] = 'object';
         schema[`${modeName}.result`] = 'object';
         for (const field of reasoningContract.result_schema.fields) {
-          schema[`${modeName}.raw_result_fields.${field.name}`] = 'any';
-          schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
+          if (field.type === 'record_array') {
+            schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
+            schema[`${modeName}.result.${field.name}.*`] = 'object';
+            for (const [recordField, recordType] of Object.entries(field.record_fields ?? {})) {
+              schema[`${modeName}.result.${field.name}.*.${recordField}`] = runtimeTypeNameFor(recordType);
+            }
+          } else {
+            schema[`${modeName}.raw_result_fields.${field.name}`] = 'any';
+            schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
+          }
         }
       }
     } else {
@@ -1144,14 +1153,18 @@ function applyReasoningFieldMirrorReactions(
   reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
 ): void {
   for (const [stage, contract] of reasoningContractsBySlug) {
+    const mirroredFields = contract.result_schema.fields.filter((field) => field.type !== 'record_array');
+    if (mirroredFields.length === 0) {
+      continue;
+    }
     reactions[reasoningFieldMirrorReactionName(stage)] = {
       event: 'AfterMutation',
       watch: unique([
         `${stage}.output`,
         `${stage}.raw_result_json`,
-        ...contract.result_schema.fields.map((field) => `${stage}.raw_result_fields.${field.name}`),
+        ...mirroredFields.map((field) => `${stage}.raw_result_fields.${field.name}`),
       ]),
-      write_scope: contract.result_schema.fields.map((field) => `${stage}.result.${field.name}`),
+      write_scope: mirroredFields.map((field) => `${stage}.result.${field.name}`),
     };
   }
 }
@@ -4584,7 +4597,9 @@ ${fieldResolvers}
   const reasoningFieldMirrorReactionEntries = options.includeReactionHandlers
     ? [...contractActionSources].map((stage) => {
         const contract = reasoningContractsBySlug.get(stage);
-        const fieldNames = contract?.result_schema.fields.map((field) => field.name) ?? [];
+        const fieldNames = contract?.result_schema.fields
+          .filter((field) => field.type !== 'record_array')
+          .map((field) => field.name) ?? [];
         const stringArrayFieldNames = contract?.result_schema.fields
           .filter((field) => field.type === 'string_array')
           .map((field) => field.name) ?? [];
@@ -7109,15 +7124,23 @@ function renderContractsSource(
     !!spec.input_domain && typeof spec.input_domain === 'object' && !Array.isArray(spec.input_domain))
     ? '\n  input_domain?: Record<string, unknown>;'
     : '';
+  const usesRecordArrayContract = [...reasoningContractsBySlug.values()].some((contract) =>
+    contract.result_schema.fields.some((field) => field.type === 'record_array'));
+  const reasoningFieldTypeUnion = usesRecordArrayContract
+    ? "'string' | 'number' | 'boolean' | 'enum' | 'string_array' | 'record_array'"
+    : "'string' | 'number' | 'boolean' | 'enum' | 'string_array'";
+  const recordFieldsContractLine = usesRecordArrayContract
+    ? "\n  record_fields?: Readonly<Record<string, 'string' | 'number' | 'boolean' | 'string_array'>>;"
+    : '';
   const reasoningContractsBlock = reasoningContractsBySlug.size === 0
     ? ''
     : `
 
 export interface ReasoningFieldContract {
   name: string;
-  type: 'string' | 'number' | 'boolean' | 'enum' | 'string_array';
+  type: ${reasoningFieldTypeUnion};
   description: string;
-  enum_values?: readonly string[];
+  enum_values?: readonly string[];${recordFieldsContractLine}
 }
 
 export interface ReasoningStageContract {
@@ -10708,12 +10731,16 @@ function fanOutPayloadFor(
 }
 
 function resultFieldsFromPrompt(prompt: string): FieldSpec[] {
-  const marker = 'result_json must be a JSON object containing at least:';
-  const start = prompt.indexOf(marker);
+  const markers = [
+    'result_json must be a JSON object containing at least:',
+    'Populate every declared result field directly:',
+  ];
+  const marker = markers.find((candidate) => prompt.includes(candidate));
+  const start = marker ? prompt.indexOf(marker) : -1;
   if (start < 0) {
     return [];
   }
-  const afterMarker = prompt.slice(start + marker.length);
+  const afterMarker = prompt.slice(start + marker!.length);
   const period = afterMarker.indexOf('.');
   const sentence = period >= 0 ? afterMarker.slice(0, period) : afterMarker;
   const fields: FieldSpec[] = [];
@@ -10759,6 +10786,9 @@ function sampleResultValue(field: FieldSpec): unknown {
 
 function sampleArgumentValue(field: FieldSpec): unknown {
   const value = sampleResultValue(field);
+  if (field.type.includes('record_array')) {
+    return value;
+  }
   return Array.isArray(value) || (value && typeof value === 'object')
     ? JSON.stringify(value)
     : value;
@@ -11730,9 +11760,13 @@ function promptForStage(
       ]
     : [];
   if (reasoningContract) {
+    const hasRecordArrayField = reasoningContract.result_schema.fields.some((field) => field.type === 'record_array');
+    const returnInstruction = hasRecordArrayField
+      ? `Return your reasoning through the stage action's top-level arguments. Populate every declared result field directly: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Do not wrap these fields inside result_json.`
+      : `Return your reasoning through the stage action's arguments. result_json must be a JSON object containing at least: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed. items_json must be a JSON array of strings matching: ${reasoningContract.items_schema.templates.join(', ')}.`;
     return [
       reasoningContract.reasoning_prompt,
-      `Return your reasoning through the stage action's arguments. result_json must be a JSON object containing at least: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed. items_json must be a JSON array of strings matching: ${reasoningContract.items_schema.templates.join(', ')}.`,
+      returnInstruction,
       ...domainSpecSuffix,
     ].join('\n');
   }
@@ -11784,7 +11818,7 @@ function guidanceFor(
     if (reasoningContract) {
       stageGuidance.push(
         ...reasoningContract.result_schema.fields.map((field) =>
-          `${field.name} (${field.type}${field.type === 'enum' ? `, one of: ${(field.enum_values ?? []).join(' | ')}` : ''}): ${field.description}`),
+          `${field.name} (${field.type}${field.type === 'enum' ? `, one of: ${(field.enum_values ?? []).join(' | ')}` : ''}${field.type === 'record_array' ? `, records: ${JSON.stringify(field.record_fields ?? {})}` : ''}): ${field.description}`),
         `items_json templates: ${reasoningContract.items_schema.templates.join(', ')}.`,
         'Populate every core argument; the composite result_json must agree with the per-field arguments.',
       );
@@ -13077,10 +13111,16 @@ function collectDomainSpecProducedPaths(
 ): void {
   const resultJson = produces.result_json;
   if (resultJson && typeof resultJson === 'object' && !Array.isArray(resultJson)) {
-    for (const field of Object.keys(resultJson)) {
+    for (const [field, schemaValue] of Object.entries(resultJson)) {
       schemaPaths.add(`${stageSlug}.${field}`);
       schemaPaths.add(`${stageSlug}.result.${field}`);
       schemaPaths.add(`${stageSlug}.output.result_json.${field}`);
+      if (isRepeatedRecordSchema(schemaValue)) {
+        schemaPaths.add(`${stageSlug}.result.${field}.*`);
+        for (const nestedField of Object.keys(schemaValue[0])) {
+          schemaPaths.add(`${stageSlug}.result.${field}.*.${nestedField}`);
+        }
+      }
     }
   }
   if (Array.isArray(produces.items_json)) {

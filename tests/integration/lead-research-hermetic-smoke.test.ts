@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { load } from 'js-yaml';
 import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 
 import { assertSynthesizableCapabilities } from '../../src/foundry-program/capability-registry.js';
@@ -16,6 +17,13 @@ const RESYNTHESIS_MODULE = new URL(
   import.meta.url,
 );
 const VITEST_BIN = new URL('../../node_modules/vitest/vitest.mjs', import.meta.url);
+
+interface ParsedSpec {
+  action_map: Record<string, { mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }> }>;
+  projection: Record<string, { include?: string[] }>;
+  prompts: Record<string, string>;
+  schema: Record<string, string>;
+}
 
 describe('lead-research-agent hermetic smoke', () => {
   it('assesses as three host-backed scaffolds with zero refuses', () => {
@@ -57,6 +65,63 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(true);
       expect(summary.typecheck_output).not.toContain('error TS');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-renders record_array lead extraction as a typed array tool argument', { timeout: 120_000 }, async () => {
+    const tempDir = mkdtempSync(join(fileURLToPath(TEMP_RENDER_PARENT), 'tmp-f1-record-array-'));
+    try {
+      const { renderLeadResearchScaffold } = await import(RESYNTHESIS_MODULE.href) as {
+        renderLeadResearchScaffold(options: { targetRoot: string; runTypecheck: boolean }): Promise<{
+          target_root: string;
+          rendered_files: string[];
+        }>;
+      };
+      await renderLeadResearchScaffold({ targetRoot: tempDir, runTypecheck: false });
+
+      const contracts = readFileSync(join(
+        tempDir,
+        'src/programs/lead-research-agent/contracts.ts',
+      ), 'utf8');
+      const parentSpec = load(readFileSync(join(
+        tempDir,
+        'src/programs/lead-research-agent/specs.yml',
+      ), 'utf8')) as ParsedSpec;
+
+      expect(contracts).toContain('"name": "leads"');
+      expect(contracts).toContain('"type": "record_array"');
+      expect(contracts).toContain('"record_fields"');
+      expect(contracts).toContain('"relevance_score": "number"');
+      expect(parentSpec.prompts.extract_leads).toContain('Populate every declared result field directly');
+      expect(parentSpec.prompts.extract_leads).not.toContain('result_json must be a JSON object containing at least');
+      expect(parentSpec.schema).toMatchObject({
+        'extract_leads.result.leads': 'array',
+        'extract_leads.result.leads.*': 'object',
+        'extract_leads.result.leads.*.name': 'string',
+        'extract_leads.result.leads.*.email': 'string',
+        'extract_leads.result.leads.*.relevance_score': 'number',
+      });
+      const extractMutations = parentSpec.action_map.complete_extract_leads?.mutations ?? [];
+      expect(extractMutations).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          op: 'MAppend',
+          path: 'extract_leads.result.leads',
+          value: {},
+          from_arg: 'leads',
+        }),
+      ]));
+      expect(extractMutations).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ from_arg: 'result_json' }),
+      ]));
+      expect(extractMutations).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ from_arg: 'items_json' }),
+      ]));
+      expect(parentSpec.projection.aggregate?.include).toEqual(expect.arrayContaining([
+        'extract_leads.result.leads',
+        'extract_leads.result.leads.*.email',
+      ]));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
