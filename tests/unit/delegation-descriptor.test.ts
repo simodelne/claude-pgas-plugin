@@ -481,6 +481,48 @@ describe('delegation children descriptor synthesis gate', () => {
     expect(childArtifacts?.[0]?.spec_yaml).toContain('from_state: inputs.request.topic');
   });
 
+  it('does not emit seeded_topic child invariants or smoke assertions without request.topic enrichment', () => {
+    const baseChild = validChild();
+    const artifact = synthesizeProgramSpecFromDomain({
+      ...linearDomain,
+      'intake.delegation_json': JSON.stringify({
+        ...validDelegation(),
+        children: [
+          {
+            ...baseChild,
+            synthesize_child: {
+              kind: 'worker',
+              purpose: 'Navigate one configured source and return source-scoped results.',
+              result_fields: {
+                source: 'string',
+                status: 'string',
+                pages_visited: 'number',
+                item_count: 'number',
+              },
+            },
+            payload_map: {
+              'request.source': 'intake.summary',
+              'domain_context.original_request': 'inputs.initial_user_text',
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(artifact.registration_ts).toContain("target: 'request.source'");
+    expect(artifact.registration_ts).not.toContain("target: 'request.topic'");
+    expect(artifact.smoke_test_ts).toContain('generated delegation smoke');
+    expect(artifact.smoke_test_ts).not.toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
+    expect(artifact.smoke_test_ts).not.toContain("seeded_topic: 'seeded delegation topic'");
+
+    const childArtifacts = (artifact as SynthesizedSpec & { child_artifacts?: Array<SynthesizedSpec & { slug: string; name: string }> }).child_artifacts;
+    expect(childArtifacts).toHaveLength(1);
+    const childSpec = childArtifacts?.[0]?.spec_yaml ?? '';
+    expect(childSpec).not.toContain('seeded_topic');
+    expect(childSpec).not.toContain('Echo inputs.request.topic');
+    expect(childSpec).not.toContain('from_state: inputs.request.topic');
+  });
+
   it('synthesizes self-contained research-agent child artifacts', () => {
     const artifact = synthesizeProgramSpecFromDomain({
       ...linearDomain,

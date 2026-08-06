@@ -9,6 +9,13 @@ interface DeterministicStep {
   trigger: string;
 }
 
+interface DeterministicMode {
+  decision_only?: boolean;
+  vocabulary: readonly string[];
+  transitions: ReadonlyArray<{ target: string; guard?: unknown }>;
+  preconditions?: Map<string, readonly unknown[]> | { readonly [actionName: string]: readonly unknown[] | undefined };
+}
+
 const CONTROL_ACTIONS = new Set([
   'record_note',
   'pin_note',
@@ -66,6 +73,12 @@ function buildDeterministicPath(entry: ProgramEntry): DeterministicStep[] {
       throw new Error(`missing mode in deterministic path: ${modeName}`);
     }
 
+    const automaticTarget = automaticDecisionOnlyTarget(mode);
+    if (automaticTarget) {
+      modeName = automaticTarget;
+      continue;
+    }
+
     const next = nextTransitionAction(spec, modeName);
     steps.push({
       name: next.name,
@@ -90,6 +103,7 @@ function nextTransitionAction(spec: Specification, modeName: string): { name: st
   const transitionTargets = new Set(mode.transitions.map((transition) => transition.target));
   const candidates = [...(spec.proceed_to?.entries() ?? [])]
     .filter(([name, target]) => transitionTargets.has(target) && mode.vocabulary.includes(name))
+    .filter(([name]) => canDriveActionLinearly(mode, name))
     .filter(([name]) => !CONTROL_ACTIONS.has(name));
 
   const candidate = candidates[0];
@@ -97,6 +111,38 @@ function nextTransitionAction(spec: Specification, modeName: string): { name: st
     throw new Error(`no deterministic transition action from mode: ${modeName}`);
   }
   return { name: candidate[0], target: candidate[1] };
+}
+
+function automaticDecisionOnlyTarget(mode: DeterministicMode): string | undefined {
+  if (mode.decision_only !== true || mode.vocabulary.length > 0 || mode.transitions.length !== 1) {
+    return undefined;
+  }
+  const transition = mode.transitions[0];
+  if (!transition || transition.guard !== undefined) {
+    return undefined;
+  }
+  return transition.target;
+}
+
+function canDriveActionLinearly(mode: DeterministicMode, actionName: string): boolean {
+  return !preconditionsFor(mode, actionName).some((precondition) => {
+    if (!precondition || typeof precondition !== 'object' || Array.isArray(precondition)) {
+      return false;
+    }
+    const path = (precondition as { path?: unknown }).path;
+    return typeof path === 'string' && path.endsWith('.fan_out.complete');
+  });
+}
+
+function preconditionsFor(mode: DeterministicMode, actionName: string): readonly unknown[] {
+  const preconditions = mode.preconditions;
+  if (!preconditions) {
+    return [];
+  }
+  if (preconditions instanceof Map) {
+    return preconditions.get(actionName) ?? [];
+  }
+  return preconditions[actionName] ?? [];
 }
 
 function firstInputChannel(spec: Specification): string {
