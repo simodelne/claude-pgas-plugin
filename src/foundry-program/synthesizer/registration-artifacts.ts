@@ -1,4 +1,4 @@
-import type { ProgramArtifactPolicy, ProgramArtifactRule } from '@simodelne/pgas-server/plugin.js';
+import type { ProgramArtifactPolicy, ProgramArtifactRule, ProgramDelegationPolicy } from '@simodelne/pgas-server/plugin.js';
 
 import { tsString } from './shared.js';
 
@@ -18,7 +18,7 @@ export function pdfReportArtifactRule(input: {
 export function renderRegistrationSource(
   pascalName: string,
   policies: {
-    delegationPolicy?: { allowedTargetPrograms: string[]; inputEnrichment: Array<{ source: string; target: string }> };
+    delegationPolicy?: Required<Pick<ProgramDelegationPolicy, 'allowedTargetPrograms' | 'inputEnrichment'>>;
     delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
     artifactPolicy?: ProgramArtifactPolicy;
     queryPolicy?: { allowedWorldQueryPrefixes: string[]; mode: 'enforce' };

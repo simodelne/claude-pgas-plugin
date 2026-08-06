@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
+import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesizedArtifact } from './synthesizer-store.js';
@@ -9528,20 +9528,28 @@ function stringFact(value: unknown, fallback: string): string {
 `;
 }
 
+type DelegationInputEnrichmentRule = NonNullable<ProgramDelegationPolicy['inputEnrichment']>[number];
+
 function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
   allowedTargetPrograms: string[];
-  inputEnrichment: Array<{ source: string; target: string }>;
+  inputEnrichment: DelegationInputEnrichmentRule[];
 } {
-  const inputEnrichment: Array<{ source: string; target: string }> = [];
+  const inputEnrichment: DelegationInputEnrichmentRule[] = [];
   const seenEnrichment = new Set<string>();
+  const scopePerTargetProgram = unique(children.map(delegationTargetSpec)).length > 1;
   for (const child of children) {
+    const targetProgram = delegationTargetSpec(child);
     for (const [target, source] of Object.entries(child.payload_map)) {
-      const key = `${source}\u0000${target}`;
+      const key = scopePerTargetProgram
+        ? `${targetProgram}\u0000${source}\u0000${target}`
+        : `${source}\u0000${target}`;
       if (seenEnrichment.has(key)) {
         continue;
       }
       seenEnrichment.add(key);
-      inputEnrichment.push({ source, target });
+      inputEnrichment.push(scopePerTargetProgram
+        ? { source, target, targetProgram }
+        : { source, target });
     }
   }
   return {
