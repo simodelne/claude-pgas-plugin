@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { primitiveForConstruct } from './engine-primitive-registry.js';
 
 export type GovernedConstructKind =
   | 'domain_shape_branch'
@@ -587,24 +588,29 @@ function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
 }
 
 function messageForGovernedConstruct(kind: GovernedConstructKind): string {
+  const primitive = primitiveForConstruct(kind);
+  const primitiveReference = primitive
+    ? ` Move to engine primitive '${primitive.primitive_name}' (see ${primitive.request_ref}).`
+    : '';
+
   switch (kind) {
     case 'domain_shape_branch':
-      return 'Governed construct domain_shape_branch must be engine-declared as modes + transition guards + enum_router, not imperative branching.';
+      return `Governed construct domain_shape_branch must be engine-declared as modes + transition guards + enum_router, not imperative branching.${primitiveReference}`;
     case 'multi_path_fallback':
-      return 'Governed construct multi_path_fallback must be engine-declared as a single read path or projection field, not fallback domain navigation.';
+      return `Governed construct multi_path_fallback must be engine-declared as a single read path or projection field, not fallback domain navigation.${primitiveReference}`;
     case 'compute_dedup':
-      return 'Governed construct compute_dedup requires a keyed/idempotent collection engine primitive or refusal; do not emit imperative dedup logic.';
+      return `Governed construct compute_dedup requires a keyed/idempotent collection engine primitive or refusal; do not emit imperative dedup logic.${primitiveReference}`;
     case 'compute_aggregate':
-      return 'Governed construct compute_aggregate requires an engine primitive or refusal; do not emit imperative aggregate/group logic.';
+      return `Governed construct compute_aggregate requires an engine primitive or refusal; do not emit imperative aggregate/group logic.${primitiveReference}`;
     case 'compute_score':
-      return 'Governed construct compute_score requires an engine primitive or refusal; do not emit imperative score/rank logic.';
+      return `Governed construct compute_score requires an engine primitive or refusal; do not emit imperative score/rank logic.${primitiveReference}`;
     case 'compute_sort':
-      return 'Governed construct compute_sort requires an engine primitive or refusal; do not emit imperative sort/rank logic.';
+      return `Governed construct compute_sort requires an engine primitive or refusal; do not emit imperative sort/rank logic.${primitiveReference}`;
     case 'adhoc_validation_throw':
-      return 'Governed construct adhoc_validation_throw must be engine-declared as GK gates or transition preconditions, not runtime domain-shape throws.';
+      return `Governed construct adhoc_validation_throw must be engine-declared as GK gates or transition preconditions, not runtime domain-shape throws.${primitiveReference}`;
     case 'silent_catch':
-      return 'Governed construct silent_catch must rely on engine gates/preconditions for reachability, not swallowed catch blocks.';
+      return `Governed construct silent_catch must rely on engine gates/preconditions for reachability, not swallowed catch blocks.${primitiveReference}`;
     case 'json_reshape':
-      return 'Governed construct json_reshape must be engine-declared as action_map mutations (+ from_arg) and reactions, not JSON re-parse reshaping.';
+      return `Governed construct json_reshape must be engine-declared as action_map mutations (+ from_arg) and reactions, not JSON re-parse reshaping.${primitiveReference}`;
   }
 }
