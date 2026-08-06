@@ -1,4 +1,5 @@
 import { isRecord } from '../util/guards.js';
+import { ENGINE_PRIMITIVE_REGISTRY, primitiveForConstruct } from './engine-primitive-registry.js';
 // pgas-new #166 — foundry capability registry + honest refusal (uplift PR-1).
 //
 // The live 2026-07-14 Codex-driven session for the SimoneOS `contract-revision`
@@ -190,6 +191,16 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     gap_note: 'requires separate falsifiers and synthesis support for each richer frontend surface; native DOCX track-change UI remains platform-blocked with export_docx_trackchange.',
   },
   {
+    capability: 'governed_compute_pending_primitive',
+    status: 'refuses',
+    evidence: capabilityEvidence([
+      'governable computation (e.g. keyed dedup/idempotent upsert) has no engine primitive yet',
+      'foundry refuses rather than emit brittle imperative logic; see engine-primitive-registry active asks',
+    ]),
+    since_version: '3.28.0',
+    gap_note: 'blocked on keyed/idempotent-collection + completion-predicate engine primitives (active asks)',
+  },
+  {
     capability: 'export_html',
     status: 'scaffolds_with_gap',
     evidence: 'deterministic HTML export surface is scaffolded through a foundry-emitted export stage and bundled standalone render module.',
@@ -358,6 +369,30 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
   },
 ];
 
+const GOVERNED_COMPUTE_PENDING_CAPABILITY = 'governed_compute_pending_primitive';
+
+const GOVERNED_COMPUTE_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:dedup(?:e|ed|es|ing)?|deduplicat\w*|de[- ]?duplicat\w*|upsert\w*|keyed[- ]collection)\b/i,
+    label: 'keyed dedup/idempotent upsert computation',
+  },
+  {
+    pattern: /\bidempotent\w*\b[^.]{0,50}\b(?:writes?|updates?|upsert\w*|persist\w*|collections?|records?|leads?|contacts?|store)\b/i,
+    label: 'idempotent collection write computation',
+  },
+  {
+    pattern: /\b(?:writes?|updates?|upsert\w*|persist\w*|collections?|records?|leads?|contacts?|store)\b[^.]{0,50}\bidempotent\w*\b/i,
+    label: 'idempotent collection write computation',
+  },
+] as const;
+
+const KEYED_COLLECTION_SCHEMA_MARKER =
+  /\b(?:dedupe_?key|dedupe|deduplicat\w*|de[-_ ]?duplicat\w*|idempotent\w*|upsert\w*|keyed[_ -]?collection|unique_?key|identity_?key|key_?field|record_?key|merge_?key|by_(?:email|id|profile_url|url|domain)|new_?vs_?existing)\b/i;
+const IDENTITY_FIELD_NAME =
+  /^(?:email|email_address|profile_url|url|domain|record_id|lead_id|contact_id|account_id|company_id|id)$/i;
+
+const HOST_BACKED_PERSISTENCE_PATTERN = /\bPersistenceHostConnector\b|connector_slug["']?\s*:\s*["']?persistence\b|\bintegration["']?\s*:\s*["']?persistence\b/i;
+
 // Deep-flatten every string leaf (bounded depth) so nested domain_spec rules /
 // invariants and completion outputs are scanned, not just top-level fields.
 function collectStringLeaves(value: unknown, out: string[], depth = 0): void {
@@ -433,6 +468,119 @@ function detectDelegationCapabilities(delegation: Record<string, unknown> | unde
     // else: external-adapter / llm-reasoning / service stage (incl. result_path) — synthesizable, not flagged.
   }
   return demands;
+}
+
+function detectGovernedComputePendingPrimitiveCapabilities(
+  haystack: string,
+  stages: ReadonlyArray<object> | undefined,
+): CapabilityDemand[] {
+  const primitive = primitiveForConstruct('compute_dedup');
+  if (!primitive || primitive.status !== 'active_ask') return [];
+
+  const demands: CapabilityDemand[] = [];
+  if (!hasHostBackedPersistenceDescriptor(stages, haystack)) {
+    for (const detector of GOVERNED_COMPUTE_TEXT_DETECTORS) {
+      const match = detector.pattern.exec(haystack);
+      if (!match) continue;
+      demands.push({
+        capability: GOVERNED_COMPUTE_PENDING_CAPABILITY,
+        evidence: governedComputePendingPrimitiveEvidence(
+          `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`,
+          primitive,
+        ),
+      });
+      break;
+    }
+  }
+
+  for (const stage of stages ?? []) {
+    if (!isRecord(stage) || stageDeclaresPersistenceHostConnector(stage)) continue;
+    const domainSpec = stage.domain_spec;
+    if (!isRecord(domainSpec) || !isRecord(domainSpec.produces)) continue;
+    const schemaSignal = keyedCollectionProducesSignal(domainSpec.produces);
+    if (!schemaSignal) continue;
+    const slug = typeof stage.slug === 'string' && stage.slug.length > 0 ? stage.slug : '<unknown>';
+    demands.push({
+      capability: GOVERNED_COMPUTE_PENDING_CAPABILITY,
+      evidence: governedComputePendingPrimitiveEvidence(
+        `stage ${slug} domain_spec.produces ${schemaSignal}`,
+        primitive,
+      ),
+    });
+  }
+
+  return demands;
+}
+
+function governedComputePendingPrimitiveEvidence(
+  signal: string,
+  primitive: NonNullable<ReturnType<typeof primitiveForConstruct>>,
+): string {
+  return `${signal}; ${primitive.computation_class} maps to active engine primitive '${primitive.primitive_name}' ` +
+    `(${primitive.request_ref}); active asks: ${activePrimitiveSummary()}`;
+}
+
+function activePrimitiveSummary(): string {
+  return ENGINE_PRIMITIVE_REGISTRY
+    .filter((entry) => entry.status === 'active_ask')
+    .map((entry) => `${entry.primitive_name} (${entry.request_ref})`)
+    .join(', ');
+}
+
+function hasHostBackedPersistenceDescriptor(stages: ReadonlyArray<object> | undefined, haystack: string): boolean {
+  if (HOST_BACKED_PERSISTENCE_PATTERN.test(haystack)) return true;
+  return (stages ?? []).some((stage) => isRecord(stage) && stageDeclaresPersistenceHostConnector(stage));
+}
+
+function stageDeclaresPersistenceHostConnector(stage: Record<string, unknown>): boolean {
+  const connectorSignals = [
+    stage.integration,
+    stage.connector_slug,
+    stage.connector,
+    stage.connector_id,
+    stage.service,
+  ].filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase());
+
+  if (connectorSignals.some((value) => value === 'persistence' || value === 'persistencehostconnector')) return true;
+
+  const leaves: string[] = [];
+  collectStringLeaves(stage, leaves);
+  return leaves.some((leaf) => /\bPersistenceHostConnector\b/u.test(leaf));
+}
+
+function keyedCollectionProducesSignal(produces: Record<string, unknown>): string | undefined {
+  const tokens: string[] = [];
+  collectSchemaTokens(produces, tokens);
+  const marker = tokens.find((token) => KEYED_COLLECTION_SCHEMA_MARKER.test(token));
+  if (!marker || !schemaHasRecordArrayWithIdentityField(produces)) return undefined;
+  return `implies keyed collection identity (${marker})`;
+}
+
+function collectSchemaTokens(value: unknown, out: string[], depth = 0): void {
+  if (value == null || depth > 8) return;
+  if (typeof value === 'string') {
+    out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectSchemaTokens(item, out, depth + 1);
+  } else if (isRecord(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      out.push(key);
+      collectSchemaTokens(item, out, depth + 1);
+    }
+  }
+}
+
+function schemaHasRecordArrayWithIdentityField(value: unknown, depth = 0): boolean {
+  if (value == null || depth > 8) return false;
+  if (Array.isArray(value)) {
+    if (value.length === 1 && isRecord(value[0]) && Object.keys(value[0]).some((key) => IDENTITY_FIELD_NAME.test(key))) {
+      return true;
+    }
+    return value.some((item) => schemaHasRecordArrayWithIdentityField(item, depth + 1));
+  }
+  if (!isRecord(value)) return false;
+  return Object.values(value).some((item) => schemaHasRecordArrayWithIdentityField(item, depth + 1));
 }
 
 function detectConfigDrivenExtractionSchemaCapabilities(stages: ReadonlyArray<object> | undefined): CapabilityDemand[] {
@@ -567,6 +715,7 @@ export function detectRequestedCapabilities(input: CapabilityDetectionInput): Ca
     const match = detector.pattern.exec(haystack);
     if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
+  for (const demand of detectGovernedComputePendingPrimitiveCapabilities(haystack, input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectConfigDrivenExtractionSchemaCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectPdfReportExportCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectDocumentsCapabilities(input.documents)) add(demand.capability, demand.evidence);
