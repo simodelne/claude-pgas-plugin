@@ -5,6 +5,9 @@
 - Engine alignment: generated scaffolds now target `@simodelne/pgas-server@3.27.2`.
 - Reasoning contracts: added `record_array` fields for repeated-record `domain_spec.produces.result_json` schemas.
 - Lead research: record-array extraction now declares array/object `P.*.<field>` state paths and uses `MAppend from_arg` so native tools receive and store structured lead records.
+- Delegation enrichment scoping: `inputEnrichment` entries are scoped per child via `targetProgram` (engine 3.27.0 P4.2) when a delegation has multiple distinct child targets; single-child/all-target behavior is byte-identical (#290).
+- Server config: exposed the typed `roundTimeoutMs` per-round liveness timeout (engine 3.27.1) in the foundry server and generated standalone scaffolds, resolved from `PGAS_ROUND_TIMEOUT_MS` (unset = env/5-minute default; `0` disables the watchdog) (#291).
+- Generated-program hardening: gated the delegation `seeded_topic` invariant + smoke assertion on actual `request.topic` enrichment (dropped where a child is seeded a source, not a topic), and fixed the generated deterministic-path test to handle `decision_only` auto-hops and delegation fan-out topologies (#288).
 
 ## v3.26.0
 
