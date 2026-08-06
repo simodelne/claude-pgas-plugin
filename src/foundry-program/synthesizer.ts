@@ -2792,6 +2792,21 @@ function delegationTargetSpec(child: DelegationChildDescriptor): string {
   return childSlug && childSlug.length > 0 ? childSlug : child.id;
 }
 
+function delegationSeedsRequestTopic(child: DelegationChildDescriptor): boolean {
+  return Object.prototype.hasOwnProperty.call(child.payload_map, 'request.topic') &&
+    typeof child.payload_map['request.topic'] === 'string' &&
+    child.payload_map['request.topic'].trim().length > 0;
+}
+
+function delegationDeclaresSeededTopicResult(child: DelegationChildDescriptor): boolean {
+  return delegationResultFields(child).some(([field]) =>
+    field.toLowerCase().replace(/[-\s]+/gu, '_') === 'seeded_topic');
+}
+
+function delegationEchoesSeededTopic(child: DelegationChildDescriptor): boolean {
+  return delegationSeedsRequestTopic(child) && delegationDeclaresSeededTopicResult(child);
+}
+
 function delegationResultFields(child: DelegationChildDescriptor): Array<[string, string]> {
   return Object.entries(child.synthesize_child?.result_fields ?? {});
 }
@@ -8736,6 +8751,14 @@ function workerChildDomain(
   child: DelegationChildDescriptor,
 ): Record<string, unknown> {
   const resultFields = child.synthesize_child?.result_fields ?? {};
+  const seedsTopic = delegationSeedsRequestTopic(child);
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
+  const commonRequestReads = [
+    ...(seedsTopic ? ['inputs.request.topic'] : []),
+    'inputs.request.document_id',
+    'inputs.request.document_name',
+    'inputs.domain_context.source_program',
+  ];
   return {
     'program.slug': childSlug,
     'program.name': childName,
@@ -8747,25 +8770,31 @@ function workerChildDomain(
         slug: 'receive',
         is_bootstrap: true,
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program'],
+          reads: commonRequestReads,
           produces: {},
           rules: ['Accept the delegated request seeded by the parent session.'],
-          invariants: ['Do not invent a different request topic.'],
+          invariants: seedsTopic
+            ? ['Do not invent a different request topic.']
+            : ['Keep the delegated request scoped to parent-provided inputs.'],
         },
       },
       {
         slug: 'work',
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          reads: [...commonRequestReads, 'inputs.domain_context.original_request'],
           produces: {
             result_json: Object.fromEntries(Object.keys(resultFields).map((field) => [field, 'string'])),
-            items_json: [`${child.id}:<seeded_topic>`],
+            items_json: [emitsSeededTopic ? `${child.id}:<seeded_topic>` : `${child.id}:summary:<summary>`],
           },
           rules: [
             'Produce the delegated worker result from the seeded request.',
-            'Echo inputs.request.topic exactly into work.result.seeded_topic when that field exists.',
+            ...(emitsSeededTopic
+              ? ['Echo inputs.request.topic exactly into work.result.seeded_topic when that field exists.']
+              : []),
           ],
-          invariants: ['The exported seeded_topic proves parent input enrichment reached the child.'],
+          invariants: emitsSeededTopic
+            ? ['The exported seeded_topic proves parent input enrichment reached the child.']
+            : ['Derive delegated worker results only from projected request and domain context.'],
         },
       },
       { slug: 'complete', is_terminal: true },
@@ -8786,10 +8815,11 @@ function workerChildDomain(
 
 function workerChildReasoningContract(child: DelegationChildDescriptor): ReasoningStageContract {
   const rawFields = child.synthesize_child?.result_fields ?? {};
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
   const fields = Object.entries(rawFields).map(([name, rawType]) => ({
     name,
     type: reasoningFieldTypeFor(rawType),
-    description: name === 'seeded_topic'
+    description: name === 'seeded_topic' && emitsSeededTopic
       ? 'Exact echo of inputs.request.topic supplied by parent input enrichment.'
       : `Delegated worker ${name.replace(/_/gu, ' ')} result.`,
   }));
@@ -8801,14 +8831,16 @@ function workerChildReasoningContract(child: DelegationChildDescriptor): Reasoni
         ? true
         : field.type === 'string_array'
           ? [`${field.name}-sample`]
-          : field.name === 'seeded_topic'
+          : field.name === 'seeded_topic' && emitsSeededTopic
             ? 'seeded delegation topic'
             : `${field.name}-sample`,
   ]));
   return {
     contract_version: REASONING_CONTRACT_VERSION,
     stage: 'work',
-    reasoning_prompt: `Complete delegated worker request ${child.id}. Use the projected inputs.request.topic, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    reasoning_prompt: emitsSeededTopic
+      ? `Complete delegated worker request ${child.id}. Use the projected inputs.request.topic, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`
+      : `Complete delegated worker request ${child.id}. Use the projected inputs.request and inputs.domain_context fields. Return the requested result fields.`,
     result_schema: {
       fields,
       allow_extra_fields: true,
@@ -8834,6 +8866,14 @@ function researchAgentChildDomain(
 ): Record<string, unknown> {
   const resultFields = child.synthesize_child?.result_fields ?? {};
   const resultSchema = Object.fromEntries(Object.keys(resultFields).map((field) => [field, 'string']));
+  const seedsTopic = delegationSeedsRequestTopic(child);
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
+  const commonRequestReads = [
+    ...(seedsTopic ? ['inputs.request.topic'] : []),
+    'inputs.request.document_id',
+    'inputs.request.document_name',
+    'inputs.domain_context.source_program',
+  ];
   return {
     'program.slug': childSlug,
     'program.name': childName,
@@ -8847,38 +8887,55 @@ function researchAgentChildDomain(
         slug: 'receive',
         is_bootstrap: true,
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program'],
+          reads: commonRequestReads,
           produces: {},
           rules: ['Accept the delegated research request seeded by the parent session.'],
-          invariants: ['Do not invent a different request topic.'],
+          invariants: seedsTopic
+            ? ['Do not invent a different request topic.']
+            : ['Keep the delegated research request scoped to parent-provided inputs.'],
         },
       },
       {
         slug: 'research',
         domain_spec: {
-          reads: ['inputs.request.topic', 'inputs.request.query', 'inputs.request.document_id', 'inputs.request.document_name', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          reads: [
+            ...(seedsTopic ? ['inputs.request.topic'] : []),
+            'inputs.request.query',
+            'inputs.request.document_id',
+            'inputs.request.document_name',
+            'inputs.domain_context.source_program',
+            'inputs.domain_context.original_request',
+          ],
           produces: {
             result_json: backend === 'host_connector'
               ? { ...resultSchema, adapter_kind: 'string' }
               : resultSchema,
-            items_json: [`${child.id}:<seeded_topic>`],
+            items_json: [emitsSeededTopic ? `${child.id}:<seeded_topic>` : `${child.id}:research:<summary>`],
           },
           rules: backend === 'host_connector'
             ? [
                 'Do not implement a real research backend in foundry code.',
                 'Use only the fixture-backed in-memory mock research connector.',
-                'Echo inputs.request.topic exactly into the seeded_topic result field when that field exists.',
+                ...(emitsSeededTopic
+                  ? ['Echo inputs.request.topic exactly into the seeded_topic result field when that field exists.']
+                  : []),
               ]
             : [
                 'Research over the delegated request using only the projected inputs.request and inputs.domain_context fields.',
-                'Echo inputs.request.topic exactly into research.result.seeded_topic when that field exists.',
+                ...(emitsSeededTopic
+                  ? ['Echo inputs.request.topic exactly into research.result.seeded_topic when that field exists.']
+                  : []),
               ],
           invariants: backend === 'host_connector'
             ? [
                 'adapter_kind must be in_memory_mock.',
-                'The exported seeded_topic proves parent input enrichment reached the child.',
+                ...(emitsSeededTopic
+                  ? ['The exported seeded_topic proves parent input enrichment reached the child.']
+                  : []),
               ]
-            : ['The exported seeded_topic proves parent input enrichment reached the child.'],
+            : emitsSeededTopic
+              ? ['The exported seeded_topic proves parent input enrichment reached the child.']
+              : ['Derive delegated research results only from projected request and domain context.'],
         },
       },
       { slug: 'complete', is_terminal: true },
@@ -8907,10 +8964,11 @@ function researchAgentChildDomain(
 
 function researchAgentChildReasoningContract(child: DelegationChildDescriptor): ReasoningStageContract {
   const rawFields = child.synthesize_child?.result_fields ?? {};
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
   const fields = Object.entries(rawFields).map(([name, rawType]) => ({
     name,
     type: reasoningFieldTypeFor(rawType),
-    description: name === 'seeded_topic'
+    description: name === 'seeded_topic' && emitsSeededTopic
       ? 'Exact echo of inputs.request.topic supplied by parent input enrichment.'
       : `Delegated research ${name.replace(/_/gu, ' ')} result.`,
   }));
@@ -8922,14 +8980,16 @@ function researchAgentChildReasoningContract(child: DelegationChildDescriptor): 
         ? true
         : field.type === 'string_array'
           ? [`${field.name}-sample`]
-          : field.name === 'seeded_topic'
+          : field.name === 'seeded_topic' && emitsSeededTopic
             ? 'seeded delegation topic'
             : `${field.name}-sample`,
   ]));
   return {
     contract_version: REASONING_CONTRACT_VERSION,
     stage: 'research',
-    reasoning_prompt: `Complete delegated research request ${child.id}. Use the projected inputs.request.topic, inputs.request.query, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    reasoning_prompt: emitsSeededTopic
+      ? `Complete delegated research request ${child.id}. Use the projected inputs.request.topic, inputs.request.query, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`
+      : `Complete delegated research request ${child.id}. Use the projected inputs.request, inputs.request.query, inputs.request.document_id, inputs.request.document_name, and inputs.domain_context fields. Return the requested result fields.`,
     result_schema: {
       fields,
       allow_extra_fields: true,
@@ -8952,11 +9012,15 @@ function patchWorkerChildSpecForDelegation(specYaml: string, child: DelegationCh
 
 function patchDelegationChildSpecForDelegation(specYaml: string, child: DelegationChildDescriptor, middleStage: 'research' | 'work'): string {
   const spec = load(specYaml) as MutableRecord;
+  const seedsTopic = delegationSeedsRequestTopic(child);
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
   const schema = recordField(spec, 'schema');
   schema['inputs.request'] = 'object';
   schema['inputs.request.intent'] = 'string';
   schema['inputs.request.query'] = 'string';
-  schema['inputs.request.topic'] = 'string';
+  if (seedsTopic) {
+    schema['inputs.request.topic'] = 'string';
+  }
   schema['inputs.request.document_id'] = 'string';
   schema['inputs.request.document_name'] = 'string';
   schema['inputs.domain_context'] = 'object';
@@ -8980,7 +9044,7 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
       'inputs.request',
       'inputs.request.intent',
       'inputs.request.query',
-      'inputs.request.topic',
+      ...(seedsTopic ? ['inputs.request.topic'] : []),
       'inputs.request.document_id',
       'inputs.request.document_name',
       'inputs.domain_context',
@@ -8992,13 +9056,15 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
 
   const prompts = recordField(spec, 'prompts');
   prompts.receive = `${String(prompts.receive ?? '')}\nAccept the delegated request; inputs.request and inputs.domain_context are seeded by the parent delegation.`;
-  prompts[middleStage] = `${String(prompts[middleStage] ?? '')}\nUse inputs.request.topic as the delegated topic. For document-slice delegations, inputs.request.document_id and inputs.request.document_name identify the only target document. The seeded_topic result field, when present, must echo inputs.request.topic exactly.`;
+  prompts[middleStage] = emitsSeededTopic
+    ? `${String(prompts[middleStage] ?? '')}\nUse inputs.request.topic as the delegated topic. For document-slice delegations, inputs.request.document_id and inputs.request.document_name identify the only target document. The seeded_topic result field, when present, must echo inputs.request.topic exactly.`
+    : `${String(prompts[middleStage] ?? '')}\nUse only the delegated inputs projected under inputs.request and inputs.domain_context.`;
 
   const actionMap = recordField(spec, 'action_map');
   const completeStage = recordField(actionMap, `complete_${middleStage}`);
   const mutations = Array.isArray(completeStage.mutations) ? completeStage.mutations as MutableRecord[] : [];
   for (const mutation of mutations) {
-    if (mutation.path === `${middleStage}.raw_result_fields.seeded_topic`) {
+    if (emitsSeededTopic && mutation.path === `${middleStage}.raw_result_fields.seeded_topic`) {
       mutation.value = '';
       mutation.from_arg = 'seeded_topic';
       mutation.from_state = 'inputs.request.topic';
@@ -9401,9 +9467,10 @@ export const capabilityGaps = ${JSON.stringify(gaps, null, 2)} as const;
 }
 
 function renderResearchHostConnectorMockStageSource(child: DelegationChildDescriptor): string {
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
   const fieldEntries = Object.entries(child.synthesize_child?.result_fields ?? {})
     .map(([field, type]) => {
-      if (field === 'seeded_topic') {
+      if (field === 'seeded_topic' && emitsSeededTopic) {
         return `    seeded_topic: topic,`;
       }
       const normalizedType = tsTypeForResultField(type);
@@ -9417,22 +9484,24 @@ function renderResearchHostConnectorMockStageSource(child: DelegationChildDescri
 
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   void runtime;
-  const topic = stringFact(input.domain['inputs.request.topic'], 'seeded delegation topic');
+${emitsSeededTopic ? `  const topic = stringFact(input.domain['inputs.request.topic'], 'seeded delegation topic');` : ''}
   const result = {
 ${fieldEntries}
     adapter_kind: 'in_memory_mock',
   };
   return {
     result_json: JSON.stringify(result),
-    items_json: JSON.stringify([\`research:\${topic}\`]),
+    items_json: JSON.stringify([${emitsSeededTopic ? '`research:${topic}`' : "'research:complete'"}]),
     digest: '',
     adapter_kind: 'in_memory_mock',
   };
 }
 
+${emitsSeededTopic ? `
 function stringFact(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
 }
+` : ''}
 `;
 }
 
@@ -9534,6 +9603,14 @@ function renderReuseDelegationSmokeTestSource(
   const resultPath = child.result_path;
   const base = delegationStateBase(child);
   const policy = delegationPolicyForChildren([child]);
+  const emitsSeededTopic = delegationSeedsRequestTopic(child);
+  const childPromptExpectation = emitsSeededTopic ? `, 'seeded delegation topic'` : '';
+  const completeRequestPayload = emitsSeededTopic
+    ? `{ request: { topic: 'seeded delegation topic' } }`
+    : `{ request: { intent: 'complete-child' } }`;
+  const degradeRequestPayload = emitsSeededTopic
+    ? `{ request: { topic: 'force-degrade' } }`
+    : `{ request: { intent: 'force-degrade' } }`;
   const childSpecYaml = `name: ${JSON.stringify(childTargetSpec)}
 termination: BoundedSession
 topology: CyclicTopology
@@ -9648,12 +9725,12 @@ describe('generated manifest reuse delegation smoke', () => {
     const complete = await runDelegationScenario({
       script: [
         scripted(effect('begin_work', {})),
-        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { topic: 'seeded delegation topic' } }, ${tsString(delegationChannelName(child))})),
-        scripted(effect('accept_request', { accepted: true }, 'child_output'), 'seeded delegation topic'),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, ${completeRequestPayload}, ${tsString(delegationChannelName(child))})),
+        scripted(effect('accept_request', { accepted: true }, 'child_output')${childPromptExpectation}),
         scripted(effect('finish_work', {
-          summary: 'complete legal research',
-          seeded_topic: 'seeded delegation topic',
-        }, 'child_output'), 'seeded delegation topic'),
+          summary: 'complete legal research'${emitsSeededTopic ? `,
+          seeded_topic: 'seeded delegation topic'` : ''},
+        }, 'child_output')${childPromptExpectation}),
         scripted(effect(${tsString(transitionActionName)}, {
           result_json: JSON.stringify({ parent: 'complete after delegation' }),
           items_json: JSON.stringify(['parent-complete']),
@@ -9665,8 +9742,8 @@ describe('generated manifest reuse delegation smoke', () => {
     expect(Number(result.rounds)).toBeGreaterThanOrEqual(1);
     expect(result.mode).toBe('complete');
     expect(result.summary).toBe('complete legal research');
-    expect(result.seeded_topic).toBe('seeded delegation topic');
-    expect(complete.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
+${emitsSeededTopic ? `    expect(result.seeded_topic).toBe('seeded delegation topic');
+` : ''}    expect(complete.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
     expect(complete.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(false);
     expect(complete.final.mode).toBe('complete');
 
@@ -9674,8 +9751,8 @@ describe('generated manifest reuse delegation smoke', () => {
       parentMaxDelegatedRounds: 1,
       script: [
         scripted(effect('begin_work', {})),
-        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { topic: 'force-degrade' } }, ${tsString(delegationChannelName(child))})),
-        scripted(effect('accept_request', { accepted: true }, 'child_output'), 'force-degrade'),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, ${degradeRequestPayload}, ${tsString(delegationChannelName(child))})),
+        scripted(effect('accept_request', { accepted: true }, 'child_output')${emitsSeededTopic ? `, 'force-degrade'` : ''}),
         scripted(effect(${tsString(transitionActionName)}, {
           result_json: JSON.stringify({ parent: 'complete after degraded delegation' }),
           items_json: JSON.stringify(['parent-complete-after-degrade']),
@@ -10215,6 +10292,7 @@ function renderDelegationSmokeTestSource(
   const childPascal = toPascalCase(childSlug);
   const childStage = childResultStage(child);
   const backedResearch = child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector';
+  const emitsSeededTopic = delegationEchoesSeededTopic(child);
   const childCompleteAction = `complete_${childStage}`;
   const childCompleteChannel = backedResearch ? 'stage_output' : 'widget_output';
   const childCompletePayload = backedResearch
@@ -10222,18 +10300,57 @@ function renderDelegationSmokeTestSource(
     : `{
           result_json: JSON.stringify({ summary: 'child completed delegated work' }),
           items_json: JSON.stringify(['delegated-work-complete']),
-          summary: 'child completed delegated work',
-          seeded_topic: 'seeded delegation topic',
+          summary: 'child completed delegated work'${emitsSeededTopic ? `,
+          seeded_topic: 'seeded delegation topic'` : ''},
         }`;
   const childResultAssertions = backedResearch
-    ? `    expect(String(result.result_json)).toContain('seeded delegation topic');
+    ? emitsSeededTopic
+      ? `    expect(String(result.result_json)).toContain('seeded delegation topic');
     expect(result.adapter_kind).toBe('in_memory_mock');`
-    : `    expect(result.seeded_topic).toBe('seeded delegation topic');`;
+      : `    expect(result.adapter_kind).toBe('in_memory_mock');`
+    : emitsSeededTopic
+      ? `    expect(result.seeded_topic).toBe('seeded delegation topic');`
+      : '';
+  const childPromptExpectation = emitsSeededTopic ? `, 'seeded delegation topic'` : '';
   const transitionAction = transitionActions.find((action) => action.source === child.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
   const transitionChannel = smokeTransitionActionUsesWidgetOutput(transitionAction) ? 'widget_output' : 'stage_output';
   const resultPath = child.result_path;
   const base = delegationStateBase(child);
+  const hasFanOut = child.fan_out !== undefined;
+  const completeScenario = hasFanOut
+    ? `    const complete = await runDelegationScenario({
+      completeChild: true,
+    });`
+    : `    const complete = await runDelegationScenario({
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'complete-child' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('begin_work', {})${childPromptExpectation}),
+        scripted(effect(${tsString(childCompleteAction)}, ${childCompletePayload}, ${tsString(childCompleteChannel)})${childPromptExpectation}),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after delegation' }),
+          items_json: JSON.stringify(['parent-complete']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });`;
+  const degradedScenario = hasFanOut
+    ? `    const degraded = await runDelegationScenario({
+      parentMaxDelegatedRounds: 1,
+      completeChild: false,
+    });`
+    : `    const degraded = await runDelegationScenario({
+      parentMaxDelegatedRounds: 1,
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'force-degrade' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('begin_work', {})${childPromptExpectation}),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after degraded delegation' }),
+          items_json: JSON.stringify(['parent-complete-after-degrade']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });`;
   return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10253,18 +10370,7 @@ import { create${childPascal}ProgramEntry } from '../src/programs/${childSlug}/r
 
 describe('generated delegation smoke', () => {
   it('runs synthesized delegation hermetically through the route for ${name}', async () => {
-    const complete = await runDelegationScenario({
-      script: [
-        scripted(effect('begin_work', {})),
-        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'complete-child' } }, ${tsString(delegationChannelName(child))})),
-        scripted(effect('begin_work', {}), 'seeded delegation topic'),
-        scripted(effect(${tsString(childCompleteAction)}, ${childCompletePayload}, ${tsString(childCompleteChannel)}), 'seeded delegation topic'),
-        scripted(effect(${tsString(transitionActionName)}, {
-          result_json: JSON.stringify({ parent: 'complete after delegation' }),
-          items_json: JSON.stringify(['parent-complete']),
-        }, ${tsString(transitionChannel)})),
-      ],
-    });
+${completeScenario}
     const result = resultAt(complete.afterDelegation.domain, ${tsString(resultPath)});
     expect(result.status).toBe('complete');
     expect(Number(result.rounds)).toBeGreaterThanOrEqual(1);
@@ -10274,18 +10380,7 @@ ${childResultAssertions}
     expect(complete.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(false);
     expect(complete.final.mode).toBe('complete');
 
-    const degraded = await runDelegationScenario({
-      parentMaxDelegatedRounds: 1,
-      script: [
-        scripted(effect('begin_work', {})),
-        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'force-degrade' } }, ${tsString(delegationChannelName(child))})),
-        scripted(effect('begin_work', {}), 'seeded delegation topic'),
-        scripted(effect(${tsString(transitionActionName)}, {
-          result_json: JSON.stringify({ parent: 'complete after degraded delegation' }),
-          items_json: JSON.stringify(['parent-complete-after-degrade']),
-        }, ${tsString(transitionChannel)})),
-      ],
-    });
+${degradedScenario}
     const degradeResult = resultAt(degraded.afterDelegation.domain, ${tsString(resultPath)});
     expect(degradeResult.status).toBe('failed');
     expect(degradeResult.optional).toBe(true);
@@ -10298,7 +10393,8 @@ ${childResultAssertions}
 
 interface DelegationScenario {
   parentMaxDelegatedRounds?: number;
-  script: ScriptedAuthorResponse[];
+  script?: ScriptedAuthorResponse[];
+  completeChild?: boolean;
 }
 
 interface ScriptedAuthorResponse {
@@ -10324,7 +10420,9 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
       { name: ${tsString(childSlug)}, entry: create${childPascal}ProgramEntry() },
     ],
     drivers: {
-      authorHandle: scriptedAuthor(scenario.script),
+      authorHandle: scenario.script
+        ? scriptedAuthor(scenario.script)
+        : fanOutAuthor({ completeChild: scenario.completeChild !== false }),
       observerHandle: {
         modelId: 'generated-delegation-smoke-observer',
         async complete() {
@@ -10341,15 +10439,26 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
     const created = await client.sessions.create({ program: ${tsString(slug)} });
     const sessionId = created.sessionId;
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
+    if (!scenario.script) {
+      const afterDelegation = await driveUntil(
+        client,
+        sessionId,
+        (snapshot) => snapshot.domain[${tsString(`${base}.settled`)}] === true,
+        'delegation settled',
+      );
+      const final = await driveUntil(
+        client,
+        sessionId,
+        (snapshot) => snapshot.mode === 'complete',
+        'terminal complete',
+      );
+      return { afterDelegation, final };
+    }
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch delegated worker' });
     const afterDelegation = await readSnapshot(client, sessionId);
     // The delegation continuation may already have advanced the parent to a terminal
     // mode; tolerate an over-trigger on the completion step.
-    try {
-      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
-    } catch (error) {
-      if (!String((error as Error).message).includes('terminal')) throw error;
-    }
+    await triggerToleratingTerminal(client, sessionId, 'complete parent after delegation settled');
     const final = await readSnapshot(client, sessionId);
     return { afterDelegation, final };
   } finally {
@@ -10364,7 +10473,8 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
   const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
   const specPath = join(tempDir, 'parent-patched-specs.yml');
   writeFileSync(specPath, patched, 'utf8');
-  const { spec } = loadSpecWithPatterns(specPath);
+  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);
+  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);
   const toolRegistry = createToolRegistry();
   register${parentPascal}Tools(toolRegistry);
   return {
@@ -10386,6 +10496,31 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
       return adapters;
     },
   };
+}
+
+function withDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
 }
 
 async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
@@ -10420,6 +10555,236 @@ function firstString(...values: unknown[]): string | null {
     if (typeof value === 'string' && value.length > 0) return value;
   }
   return null;
+}
+
+async function driveUntil(
+  client: PgasClient,
+  sessionId: string,
+  predicate: (snapshot: Snapshot) => boolean,
+  label: string,
+): Promise<Snapshot> {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const snapshot = await readSnapshot(client, sessionId);
+    if (predicate(snapshot)) {
+      return snapshot;
+    }
+    await triggerToleratingTerminal(client, sessionId, \`continue generated delegation smoke \${String(attempt + 1)}\`);
+    await delayTick();
+  }
+  const stalled = await readSnapshot(client, sessionId);
+  throw new Error(\`timed out waiting for \${label}; mode=\${String(stalled.mode)} domain=\${JSON.stringify(stalled.domain)}\`);
+}
+
+async function triggerToleratingTerminal(client: PgasClient, sessionId: string, payload: string): Promise<void> {
+  try {
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload });
+  } catch (error) {
+    if (!String((error as Error).message).includes('terminal')) {
+      throw error;
+    }
+  }
+}
+
+interface FanOutAuthorOptions {
+  completeChild: boolean;
+}
+
+interface TerminalActionExample {
+  name: string;
+  channel?: string;
+}
+
+interface FieldSpec {
+  name: string;
+  type: string;
+}
+
+function fanOutAuthor(options: FanOutAuthorOptions) {
+  return {
+    modelId: 'generated-delegation-fanout-smoke-author',
+    async complete(prompt: string) {
+      const examples = terminalExamples(prompt);
+      if (examples.length === 0) {
+        throw new Error('fan-out smoke author found no terminal action in prompt: ' + prompt.slice(0, 500));
+      }
+      const selected = selectFanOutExample(prompt, examples, options);
+      const channel = selected.channel ?? 'widget_output';
+      return JSON.stringify(effect(selected.name, fanOutPayloadFor(selected.name, channel, prompt, options), channel));
+    },
+  };
+}
+
+function selectFanOutExample(
+  prompt: string,
+  examples: readonly TerminalActionExample[],
+  options: FanOutAuthorOptions,
+): TerminalActionExample {
+  if (!options.completeChild && examples.some((example) => example.name === ${tsString(childCompleteAction)})) {
+    throw new Error('degrade scenario unexpectedly reached delegated child completion');
+  }
+  const request = examples.find((example) => example.name === ${tsString(delegationRequestActionName(child))});
+  if (request && !hasCompletedFanOut(prompt)) {
+    return request;
+  }
+  const transition = examples.find((example) => example.name === ${tsString(transitionActionName)});
+  if (transition && (hasCompletedFanOut(prompt) || !request)) {
+    return transition;
+  }
+  const selected = examples[0];
+  if (!selected) {
+    throw new Error('fan-out smoke author could not select an action');
+  }
+  return selected;
+}
+
+function terminalExamples(prompt: string): TerminalActionExample[] {
+  const examples: TerminalActionExample[] = [];
+  const seen = new Set<string>();
+  const add = (example: TerminalActionExample): void => {
+    if (seen.has(example.name)) return;
+    seen.add(example.name);
+    examples.push(example);
+  };
+  const jsonPattern = /Valid terminal action JSON example:\\s*\\{"actions":\\[\\{"kind":"EffectAction","name":"([^"]+)","channel":"([^"]+)","payload":\\{\\}\\}\\]\\}/gu;
+  for (const match of prompt.matchAll(jsonPattern)) {
+    if (match[1]) {
+      add({ name: match[1], ...(match[2] ? { channel: match[2] } : {}) });
+    }
+  }
+  const callPattern = /call ([A-Za-z_][A-Za-z0-9_]*) as the single native tool_call/gu;
+  for (const match of prompt.matchAll(callPattern)) {
+    if (match[1]) {
+      add({ name: match[1] });
+    }
+  }
+  return examples;
+}
+
+function hasCompletedFanOut(prompt: string): boolean {
+  return /"[^"]+\\.fan_out\\.complete"\\s*:\\s*true/u.test(prompt);
+}
+
+function fanOutPayloadFor(
+  action: string,
+  channel: string,
+  prompt: string,
+  options: FanOutAuthorOptions,
+): Record<string, unknown> {
+  if (action === 'begin_work') {
+    return {};
+  }
+  if (action === ${tsString(childCompleteAction)}) {
+    return ${childCompletePayload};
+  }
+  if (action === ${tsString(delegationRequestActionName(child))}) {
+    return { request: { intent: options.completeChild ? 'complete-child' : 'force-degrade' } };
+  }
+  if (prompt.includes('EMPTY payload')) {
+    return {};
+  }
+  const fields = resultFieldsFromPrompt(prompt);
+  if (fields.length > 0) {
+    const result = Object.fromEntries(fields.map((field) => [field.name, sampleResultValue(field)]));
+    const payload: Record<string, unknown> = {
+      result_json: JSON.stringify(result),
+      items_json: JSON.stringify([deterministicItemFor(action, result)]),
+    };
+    for (const field of fields) {
+      payload[field.name] = sampleArgumentValue(field);
+    }
+    return payload;
+  }
+  const payload: Record<string, unknown> = {
+    result_json: JSON.stringify({ stage: action, status: 'deterministic' }),
+    items_json: JSON.stringify([action]),
+  };
+  if (channel === 'stage_output') {
+    payload.__stage_runtime = {
+      now_iso: '2026-07-16T00:00:00.000Z',
+      random: 0.25,
+    };
+  }
+  return payload;
+}
+
+function resultFieldsFromPrompt(prompt: string): FieldSpec[] {
+  const marker = 'result_json must be a JSON object containing at least:';
+  const start = prompt.indexOf(marker);
+  if (start < 0) {
+    return [];
+  }
+  const afterMarker = prompt.slice(start + marker.length);
+  const period = afterMarker.indexOf('.');
+  const sentence = period >= 0 ? afterMarker.slice(0, period) : afterMarker;
+  const fields: FieldSpec[] = [];
+  const fieldPattern = /([A-Za-z_][A-Za-z0-9_]*)\\s+\\(([^)]*)\\)/gu;
+  for (const match of sentence.matchAll(fieldPattern)) {
+    if (match[1] && match[2]) {
+      fields.push({ name: match[1], type: match[2].toLowerCase() });
+    }
+  }
+  return fields;
+}
+
+function sampleResultValue(field: FieldSpec): unknown {
+  if (field.name === 'leads') {
+    return [sampleLead()];
+  }
+  if (field.name === 'items') {
+    return [{ title: 'Deterministic item', email: 'lead@example.com', url: 'https://example.com/deterministic' }];
+  }
+  if (field.name === 'audit') {
+    return [{ action: 'fetch', url: 'https://example.com/deterministic', status: 'ok' }];
+  }
+  if (field.type.includes('number') || /(?:count|total|score|visited|rounds)$/u.test(field.name)) {
+    return 1;
+  }
+  if (field.type.includes('boolean')) {
+    return true;
+  }
+  if (field.name === 'status') {
+    return 'complete';
+  }
+  if (field.type.includes('array') || field.name.endsWith('s')) {
+    return [field.name + '-sample'];
+  }
+  if (field.name === 'source' || field.name.endsWith('_url')) {
+    return 'https://example.com/deterministic';
+  }
+  if (field.name.includes('email')) {
+    return 'lead@example.com';
+  }
+  return field.name + '-sample';
+}
+
+function sampleArgumentValue(field: FieldSpec): unknown {
+  const value = sampleResultValue(field);
+  return Array.isArray(value) || (value && typeof value === 'object')
+    ? JSON.stringify(value)
+    : value;
+}
+
+function sampleLead(): Record<string, unknown> {
+  return {
+    name: 'Deterministic Lead',
+    role: 'Director',
+    company: 'Example Co',
+    email: 'lead@example.com',
+    profile_url: 'https://example.com/deterministic',
+    notes: 'Generated deterministic lead fixture.',
+    relevance_score: 1,
+  };
+}
+
+function deterministicItemFor(action: string, result: Record<string, unknown>): string {
+  if (typeof result.email === 'string') {
+    return action + ':' + result.email;
+  }
+  return action + ':deterministic';
+}
+
+function delayTick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function scriptedAuthor(responses: ScriptedAuthorResponse[]) {

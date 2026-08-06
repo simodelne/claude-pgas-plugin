@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
@@ -14,6 +15,7 @@ const RESYNTHESIS_MODULE = new URL(
   '../../.dd-report-exp/lead-research/resynthesize-lead-research.js',
   import.meta.url,
 );
+const VITEST_BIN = new URL('../../node_modules/vitest/vitest.mjs', import.meta.url);
 
 describe('lead-research-agent hermetic smoke', () => {
   it('assesses as three host-backed scaffolds with zero refuses', () => {
@@ -55,6 +57,61 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(true);
       expect(summary.typecheck_output).not.toContain('error TS');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-render seeded_topic invariants for source-navigation delegation without topic enrichment', { timeout: 120_000 }, async () => {
+    const tempDir = mkdtempSync(join(fileURLToPath(TEMP_RENDER_PARENT), 'tmp-f2-render-'));
+    try {
+      const { renderLeadResearchScaffold } = await import(RESYNTHESIS_MODULE.href) as {
+        renderLeadResearchScaffold(options: { targetRoot: string; runTypecheck: boolean }): Promise<{
+          target_root: string;
+          rendered_files: string[];
+        }>;
+      };
+      await renderLeadResearchScaffold({ targetRoot: tempDir, runTypecheck: false });
+
+      const childSpec = readFileSync(join(
+        tempDir,
+        'src/programs/lead-research-source-navigation/specs.yml',
+      ), 'utf8');
+      const smokeTest = readFileSync(join(tempDir, 'tests/generated-program-smoke.test.ts'), 'utf8');
+
+      expect(childSpec).not.toContain('seeded_topic');
+      expect(childSpec).not.toContain('Echo inputs.request.topic');
+      expect(smokeTest).not.toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
+      expect(smokeTest).not.toContain("seeded_topic: 'seeded delegation topic'");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-renders a generated deterministic test that drives delegation and decision_only to complete', { timeout: 180_000 }, async () => {
+    const tempDir = mkdtempSync(join(fileURLToPath(TEMP_RENDER_PARENT), 'tmp-f3-det-'));
+    try {
+      const { renderLeadResearchScaffold } = await import(RESYNTHESIS_MODULE.href) as {
+        renderLeadResearchScaffold(options: { targetRoot: string; runTypecheck: boolean }): Promise<{
+          target_root: string;
+          rendered_files: string[];
+        }>;
+      };
+      await renderLeadResearchScaffold({ targetRoot: tempDir, runTypecheck: false });
+
+      const output = execFileSync(process.execPath, [
+        fileURLToPath(VITEST_BIN),
+        'run',
+        '--pool=threads',
+        '--maxWorkers=1',
+        'tests/program-deterministic.test.ts',
+      ], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        env: { ...process.env, CI: '1' },
+      });
+
+      expect(output).toContain('1 passed');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

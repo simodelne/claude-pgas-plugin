@@ -543,6 +543,9 @@ function templateForStandaloneArtifact(
   if (artifact.path === 'src/server.ts' && synthesizedSources.childArtifacts.length > 0) {
     return inlineTemplate(renderMultiProgramServerSource(slug, synthesizedSources.childArtifacts.map((child) => child.slug)));
   }
+  if (artifact.path === 'tests/program-deterministic.test.ts' && synthesizedSources.childArtifacts.length > 0) {
+    return inlineTemplate(renderMultiProgramDeterministicTestSource(slug, synthesizedSources.childArtifacts.map((child) => child.slug)));
+  }
   const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSources);
   if (synthesizedTemplate) {
     return synthesizedTemplate;
@@ -1123,6 +1126,390 @@ const server = await createPgasServer({
 });
 
 await server.start();
+`;
+}
+
+function renderMultiProgramDeterministicTestSource(primarySlug: string, childSlugs: string[]): string {
+  const imports = [
+    `import { create${toPascalCase(primarySlug)}ProgramEntry } from '../src/programs/${primarySlug}/registration.js';`,
+    ...childSlugs.map((slug) => `import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';`),
+  ].join('\n');
+  const programs = [
+    `{ name: '${primarySlug}', entry: create${toPascalCase(primarySlug)}ProgramEntry() }`,
+    ...childSlugs.map((slug) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`),
+  ].join(',\n    ');
+  return `import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import type { ProgramEntry, Specification } from '@simodelne/pgas-server/plugin.js';
+${imports}
+
+interface Snapshot {
+  mode: string | null;
+  status: string | null;
+  domain: Record<string, unknown>;
+  rounds: unknown[];
+}
+
+interface FieldSpec {
+  name: string;
+  type: string;
+}
+
+interface TerminalActionExample {
+  name: string;
+  channel?: string;
+}
+
+describe('${primarySlug} deterministic runtime', () => {
+  it('drives the program through a deterministic trigger path', async () => {
+    const programEntries: Array<{ name: string; entry: ProgramEntry }> = [
+      ${programs},
+    ];
+    const primary = programEntries[0];
+    if (!primary) {
+      throw new Error('deterministic route test missing primary program entry');
+    }
+
+    const server = await createPgasServer({
+      programs: programEntries,
+      drivers: {
+        authorHandle: deterministicAuthor(actionChannelsFor(programEntries.map((program) => program.entry.spec))),
+        observerHandle: {
+          modelId: 'generated-deterministic-route-observer',
+          async complete() {
+            return 'noop';
+          },
+        },
+      },
+      devMode: true,
+      telemetry: { enabled: false },
+      port: 0,
+    });
+    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+
+    try {
+      const created = await client.sessions.create({ program: ${JSON.stringify(primarySlug)} });
+      const snapshot = await driveToTerminal(client, created.sessionId, firstInputChannel(primary.entry.spec), primary.entry.spec);
+
+      expect(isTerminalSnapshot(snapshot, primary.entry.spec)).toBe(true);
+      expect(snapshot.mode === null || primary.entry.spec.terminal.includes(snapshot.mode)).toBe(true);
+      expect(snapshot.rounds.length).toBeGreaterThan(0);
+      expect(hasFallbackRound(snapshot.rounds)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+async function driveToTerminal(
+  client: PgasClient,
+  sessionId: string,
+  inputChannel: string,
+  spec: Specification,
+): Promise<Snapshot> {
+  for (let attempt = 0; attempt < 48; attempt += 1) {
+    const snapshot = await readSnapshot(client, sessionId);
+    if (isTerminalSnapshot(snapshot, spec)) {
+      return snapshot;
+    }
+
+    if (isDecisionOnlyMode(spec, snapshot.mode)) {
+      await delayTick();
+      const afterAuto = await readSnapshot(client, sessionId);
+      if (afterAuto.mode !== snapshot.mode || isTerminalSnapshot(afterAuto, spec)) {
+        continue;
+      }
+      throw new Error(\`decision_only mode did not auto-advance: \${String(snapshot.mode)}\`);
+    }
+
+    try {
+      await client.sessions.trigger(sessionId, {
+        channel: inputChannel,
+        payload: attempt === 0 ? 'start deterministic scaffold' : 'continue deterministic scaffold',
+      });
+    } catch (error) {
+      if (!String((error as Error).message).includes('terminal')) {
+        throw error;
+      }
+      return readSnapshot(client, sessionId);
+    }
+  }
+  const stalled = await readSnapshot(client, sessionId);
+  throw new Error(\`deterministic route did not reach a terminal mode; stopped in \${String(stalled.mode)}\`);
+}
+
+function deterministicAuthor(actionChannels: Map<string, string>) {
+  return {
+    modelId: 'generated-deterministic-route-author',
+    async complete(prompt: string) {
+      const example = terminalExample(prompt);
+      const channel = example.channel ?? actionChannels.get(example.name) ?? 'widget_output';
+      return JSON.stringify(effect(example.name, payloadFor(example.name, channel, prompt), channel));
+    },
+  };
+}
+
+function terminalExample(prompt: string): TerminalActionExample {
+  const examples = terminalExamples(prompt);
+  if (examples.length === 0) {
+    throw new Error('deterministic author could not find a terminal action in prompt: ' + prompt.slice(0, 500));
+  }
+  const rejected = rejectedActions(prompt);
+  const candidates = examples.filter((example) => !rejected.has(example.name));
+  const viable = candidates.length > 0 ? candidates : examples;
+  const request = viable.find((example) => example.name.startsWith('request_'));
+  if (request && shouldPreferRequestAction(prompt, rejected, request.name)) {
+    return request;
+  }
+  const selected = viable[0] ?? examples[0];
+  if (!selected) {
+    throw new Error('deterministic author could not select a terminal action');
+  }
+  return selected;
+}
+
+function terminalExamples(prompt: string): TerminalActionExample[] {
+  const examples: TerminalActionExample[] = [];
+  const seen = new Set<string>();
+  const add = (example: TerminalActionExample): void => {
+    if (seen.has(example.name)) {
+      return;
+    }
+    seen.add(example.name);
+    examples.push(example);
+  };
+
+  const jsonPattern = /Valid terminal action JSON example:\\s*\\{"actions":\\[\\{"kind":"EffectAction","name":"([^"]+)","channel":"([^"]+)","payload":\\{\\}\\}\\]\\}/gu;
+  for (const match of prompt.matchAll(jsonPattern)) {
+    if (match[1]) {
+      add({ name: match[1], ...(match[2] ? { channel: match[2] } : {}) });
+    }
+  }
+  const callPattern = /call ([A-Za-z_][A-Za-z0-9_]*) as the single native tool_call/gu;
+  for (const match of prompt.matchAll(callPattern)) {
+    if (match[1]) {
+      add({ name: match[1] });
+    }
+  }
+  return examples;
+}
+
+function rejectedActions(prompt: string): Set<string> {
+  const rejected = new Set<string>();
+  const rejectionPattern = /(?:Action|action) "([^"]+)"[^\\n]*(?:not|invalid|precondition|reject|fail)/gu;
+  for (const match of prompt.matchAll(rejectionPattern)) {
+    if (match[1]) {
+      rejected.add(match[1]);
+    }
+  }
+  return rejected;
+}
+
+function shouldPreferRequestAction(prompt: string, rejected: ReadonlySet<string>, actionName: string): boolean {
+  if (rejected.has(actionName)) {
+    return false;
+  }
+  if (hasCompletedFanOut(prompt)) {
+    return false;
+  }
+  return prompt.includes('.fan_out.') ||
+    prompt.includes('delegation') ||
+    prompt.includes('target_spec');
+}
+
+function hasCompletedFanOut(prompt: string): boolean {
+  return /"[^"]+\\.fan_out\\.complete"\\s*:\\s*true/u.test(prompt);
+}
+
+function payloadFor(action: string, channel: string, prompt: string): Record<string, unknown> {
+  const expectsEmptyPayload = prompt.includes('EMPTY payload');
+  const payload: Record<string, unknown> = {};
+  if (action === 'begin_work') {
+    return payload;
+  }
+  if (action.startsWith('request_')) {
+    payload.request = {
+      intent: 'deterministic',
+      source: 'https://example.com/deterministic',
+      allowed_domains: ['example.com'],
+    };
+    return payload;
+  }
+
+  const fields = resultFieldsFromPrompt(prompt);
+  if (fields.length > 0) {
+    const result = Object.fromEntries(fields.map((field) => [field.name, sampleResultValue(field)]));
+    payload.result_json = JSON.stringify(result);
+    payload.items_json = JSON.stringify([deterministicItemFor(action, result)]);
+    for (const field of fields) {
+      payload[field.name] = sampleArgumentValue(field);
+    }
+  } else if (!expectsEmptyPayload) {
+    payload.result_json = JSON.stringify({ stage: action, status: 'deterministic' });
+    payload.items_json = JSON.stringify([action]);
+  }
+
+  if (channel === 'stage_output' && !expectsEmptyPayload) {
+    payload.__stage_runtime = {
+      now_iso: '2026-06-28T00:00:00.000Z',
+      random: 0.25,
+    };
+  }
+  return payload;
+}
+
+function resultFieldsFromPrompt(prompt: string): FieldSpec[] {
+  const marker = 'result_json must be a JSON object containing at least:';
+  const start = prompt.indexOf(marker);
+  if (start < 0) {
+    return [];
+  }
+  const afterMarker = prompt.slice(start + marker.length);
+  const period = afterMarker.indexOf('.');
+  const sentence = period >= 0 ? afterMarker.slice(0, period) : afterMarker;
+  const fields: FieldSpec[] = [];
+  const fieldPattern = /([A-Za-z_][A-Za-z0-9_]*)\\s+\\(([^)]*)\\)/gu;
+  for (const match of sentence.matchAll(fieldPattern)) {
+    if (match[1] && match[2]) {
+      fields.push({ name: match[1], type: match[2].toLowerCase() });
+    }
+  }
+  return fields;
+}
+
+function sampleResultValue(field: FieldSpec): unknown {
+  if (field.name === 'leads') {
+    return [sampleLead()];
+  }
+  if (field.name === 'items') {
+    return [{ title: 'Deterministic item', email: 'lead@example.com', url: 'https://example.com/deterministic' }];
+  }
+  if (field.name === 'audit') {
+    return [{ action: 'fetch', url: 'https://example.com/deterministic', status: 'ok' }];
+  }
+  if (field.type.includes('number') || /(?:count|total|score|visited|rounds)$/u.test(field.name)) {
+    return 1;
+  }
+  if (field.type.includes('boolean')) {
+    return true;
+  }
+  if (field.type.includes('array') || field.name.endsWith('s')) {
+    return [\`\${field.name}-sample\`];
+  }
+  if (field.name === 'status') {
+    return 'complete';
+  }
+  if (field.name === 'source' || field.name.endsWith('_url')) {
+    return 'https://example.com/deterministic';
+  }
+  if (field.name.includes('email')) {
+    return 'lead@example.com';
+  }
+  return \`\${field.name}-sample\`;
+}
+
+function sampleArgumentValue(field: FieldSpec): unknown {
+  const value = sampleResultValue(field);
+  return Array.isArray(value) || (value && typeof value === 'object')
+    ? JSON.stringify(value)
+    : value;
+}
+
+function sampleLead(): Record<string, unknown> {
+  return {
+    name: 'Deterministic Lead',
+    role: 'Director',
+    company: 'Example Co',
+    email: 'lead@example.com',
+    profile_url: 'https://example.com/deterministic',
+    notes: 'Generated deterministic lead fixture.',
+    relevance_score: 1,
+  };
+}
+
+function deterministicItemFor(action: string, result: Record<string, unknown>): string {
+  if (typeof result.email === 'string') {
+    return \`\${action}:\${result.email}\`;
+  }
+  return \`\${action}:deterministic\`;
+}
+
+function actionChannelsFor(specs: Specification[]): Map<string, string> {
+  const channels = new Map<string, string>();
+  for (const spec of specs) {
+    for (const [name, action] of spec.action_map) {
+      channels.set(name, action.channel ?? 'widget_output');
+    }
+  }
+  return channels;
+}
+
+function firstInputChannel(spec: Specification): string {
+  for (const [id, channel] of spec.schannels) {
+    if (channel.direction === 'In' && id !== 'system_query_result' && id !== 'system_mode_entry') {
+      return id;
+    }
+  }
+  for (const [id, channel] of spec.schannels) {
+    if (channel.direction === 'In') {
+      return id;
+    }
+  }
+  throw new Error(\`program \${spec.name} declares no input channel\`);
+}
+
+function isDecisionOnlyMode(spec: Specification, modeName: string | null): boolean {
+  if (!modeName) {
+    return false;
+  }
+  const mode = spec.modes.get(modeName) as { decision_only?: boolean } | undefined;
+  return mode?.decision_only === true;
+}
+
+function isTerminalSnapshot(snapshot: Snapshot, spec: Specification): boolean {
+  return !!snapshot.mode && spec.terminal.includes(snapshot.mode) ||
+    String(snapshot.status ?? '').toLowerCase() === 'completed' ||
+    String(snapshot.status ?? '').toLowerCase() === 'complete';
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    status: firstString(envelope.status, state?.status),
+    domain: world.domain as Record<string, unknown>,
+    rounds: Array.isArray(state?.rounds) ? state.rounds : [],
+  };
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel: string) {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function hasFallbackRound(rounds: unknown[]): boolean {
+  return rounds.some((round) => {
+    if (!round || typeof round !== 'object' || Array.isArray(round)) return false;
+    const result = (round as { result?: unknown }).result;
+    return !!result && typeof result === 'object' && !Array.isArray(result) &&
+      (result as { fallback?: unknown }).fallback === true;
+  });
+}
+
+function delayTick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 `;
 }
 
