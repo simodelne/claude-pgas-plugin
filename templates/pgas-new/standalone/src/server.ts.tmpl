@@ -7,9 +7,13 @@ import { create{{PASCAL_NAME}}ProgramEntry } from './programs/{{SLUG}}/registrat
 // and the engine boots its legacy JSON author path exactly as before.
 const drivers = resolveAuthorDrivers();
 
+// per-round liveness timeout in ms; unset = env/5-min default; 0 disables
+const roundTimeoutMs: number | undefined = process.env.PGAS_ROUND_TIMEOUT_MS ? Number(process.env.PGAS_ROUND_TIMEOUT_MS) : undefined;
+
 const server = await createPgasServer({
   programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
   devMode: process.env.PGAS_DEV_MODE === '1',
+  roundTimeoutMs,
   ...(drivers ? { drivers } : {}),
 });
 

@@ -409,6 +409,25 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders standalone server roundTimeoutMs env wiring', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-round-timeout-'));
+    try {
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+
+      const server = readFileSync(join(outDir, 'src/server.ts'), 'utf8');
+
+      expect(server).toContain(
+        '// per-round liveness timeout in ms; unset = env/5-min default; 0 disables',
+      );
+      expect(server).toContain(
+        'const roundTimeoutMs: number | undefined = process.env.PGAS_ROUND_TIMEOUT_MS ? Number(process.env.PGAS_ROUND_TIMEOUT_MS) : undefined;',
+      );
+      expect(server).toContain('  roundTimeoutMs,');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders standalone handlers without foundry-internal relative imports', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-handler-imports-'));
     try {
