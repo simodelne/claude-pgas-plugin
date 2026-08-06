@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.27.2
+
+- Engine alignment: generated scaffolds now target `@simodelne/pgas-server@3.27.2`.
+- Reasoning contracts: added `record_array` fields for repeated-record `domain_spec.produces.result_json` schemas.
+- Lead research: record-array extraction now declares array/object `P.*.<field>` state paths and uses `MAppend from_arg` so native tools receive and store structured lead records.
+
 ## v3.26.0
 
 - Lead-research-agent foundry line: added `config_driven_extraction_schema` as a synthesizable capability, with `web_navigation_guarded`, `cross_session_persistence`, and `export_pdf_report` registered as host-backed `scaffolds_with_gap`.

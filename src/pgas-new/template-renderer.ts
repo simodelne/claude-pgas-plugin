@@ -1360,12 +1360,16 @@ function payloadFor(action: string, channel: string, prompt: string): Record<str
 }
 
 function resultFieldsFromPrompt(prompt: string): FieldSpec[] {
-  const marker = 'result_json must be a JSON object containing at least:';
-  const start = prompt.indexOf(marker);
+  const markers = [
+    'result_json must be a JSON object containing at least:',
+    'Populate every declared result field directly:',
+  ];
+  const marker = markers.find((candidate) => prompt.includes(candidate));
+  const start = marker ? prompt.indexOf(marker) : -1;
   if (start < 0) {
     return [];
   }
-  const afterMarker = prompt.slice(start + marker.length);
+  const afterMarker = prompt.slice(start + marker!.length);
   const period = afterMarker.indexOf('.');
   const sentence = period >= 0 ? afterMarker.slice(0, period) : afterMarker;
   const fields: FieldSpec[] = [];
@@ -1411,6 +1415,9 @@ function sampleResultValue(field: FieldSpec): unknown {
 
 function sampleArgumentValue(field: FieldSpec): unknown {
   const value = sampleResultValue(field);
+  if (field.type.includes('record_array')) {
+    return value;
+  }
   return Array.isArray(value) || (value && typeof value === 'object')
     ? JSON.stringify(value)
     : value;

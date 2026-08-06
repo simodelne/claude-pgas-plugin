@@ -1,11 +1,11 @@
 # PGAS-New Architecture
 
-Status: v3.25.0 foundry release candidate; checked engine version
-`PGAS_SERVER_VERSION` is `@simodelne/pgas-server@3.26.0`.
+Status: v3.27.2 foundry release candidate; checked engine version
+`PGAS_SERVER_VERSION` is `@simodelne/pgas-server@3.27.2`.
 
 ## Changelog
 
-### Since v3.1.0 (current foundry: v3.25.0, checked engine 3.26.0)
+### Since v3.1.0 (current foundry: v3.27.2, checked engine 3.27.2)
 
 - This doc tracks the foundry architecture, not every release; per-version history lives in the git tags / GitHub releases. Major additions since v3.1.0: real LLM-reasoning domain synthesis; `repo_targeting` + existing-repo attachment; per-item confirmation loops; child-session + research-agent delegation; document upload intake + deterministic DOCX/PDF text extraction; DOCX/HTML export (artifacts are first-class `SessionArtifactRecord`s); and manifest-driven connector reuse of existing repo programs.
 
@@ -33,7 +33,7 @@ The legacy `--template pgas-new-foundry` value is retained only as a hidden comp
 ## PGAS Contract
 
 Generated consumers target the `@simodelne/pgas-server` version recorded by
-`PGAS_SERVER_VERSION` (3.26.0 today; dependency specs use `^${PGAS_SERVER_VERSION}`)
+`PGAS_SERVER_VERSION` (3.27.2 today; dependency specs use `^${PGAS_SERVER_VERSION}`)
 and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
