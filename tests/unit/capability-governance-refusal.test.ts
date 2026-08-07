@@ -7,12 +7,13 @@ import {
 import { ENGINE_PRIMITIVE_REGISTRY } from '../../src/foundry-program/engine-primitive-registry.js';
 
 describe('governance refusal for not-yet-landed primitives', () => {
-  it('refuses a domain requiring keyed dedup/persist (pending keyed/idempotent-collection)', () => {
+  it('synthesizes a domain requiring keyed dedup/persist now that keyed_by landed', () => {
     const input = { purpose: 'Deduplicate and upsert extracted leads across sessions by email into the store.',
       extraText: 'dedupe by email; idempotent upsert; keyed collection' };
-    expect(() => assertSynthesizableCapabilities(input)).toThrow();
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
     const demands = detectRequestedCapabilities(input).map((d) => d.capability);
-    expect(demands).toContain('governed_compute_pending_primitive');
+    expect(demands).not.toContain('governed_compute_pending_primitive');
+    expect(demands).toContain('cross_session_persistence');
   });
   it('does not refuse a domain with no not-yet-declarable computation', () => {
     const input = { purpose: 'Summarize an uploaded memo and export it as a DOCX.', extraText: 'summarize; docx export' };
