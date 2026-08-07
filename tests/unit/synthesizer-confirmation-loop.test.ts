@@ -170,6 +170,19 @@ describe('confirmation_loop descriptor synthesis', () => {
     ]));
     expect(parsed.modes.review_work.preconditions?.propose_item).toEqual([
       { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
+      {
+        kind: 'Implies',
+        subs: [
+          { kind: 'FieldTruthy', path: 'summary.confirmation_loop.active_item_id' },
+          {
+            kind: 'PreviousItemFieldEquals',
+            path: 'work_units.items_terminal_status',
+            cursor: 'summary.confirmation_loop.active_item_id',
+            value: true,
+            order: { kind: 'plan_array' },
+          },
+        ],
+      },
     ]);
     expect(parsed.modes.review_work.preconditions?.complete_review_work).toEqual([
       { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true },
@@ -228,6 +241,21 @@ describe('confirmation_loop descriptor synthesis', () => {
       'summary.confirmation_loop.active_item_id': 'any',
       'work_units.all_terminal': 'boolean',
     });
+    expect(parsed.modes.review_work.preconditions?.propose_item).toEqual(expect.arrayContaining([
+      {
+        kind: 'Implies',
+        subs: [
+          { kind: 'FieldTruthy', path: 'summary.confirmation_loop.active_item_id' },
+          {
+            kind: 'PreviousItemFieldEquals',
+            path: 'work_units.items_terminal_status',
+            cursor: 'summary.confirmation_loop.active_item_id',
+            value: true,
+            order: { kind: 'plan_array' },
+          },
+        ],
+      },
+    ]));
     expect(parsed.reactions.enforce_review_work_status.write_scope).not.toContain('work_units.all_terminal');
     expect(artifact.handlers_ts).not.toContain("path: 'work_units.all_terminal', value: allTerminal");
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();

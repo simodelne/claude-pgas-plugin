@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { load } from 'js-yaml';
-import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 
 import { assertSynthesizableCapabilities } from '../../src/foundry-program/capability-registry.js';
 import { startRouteHarness } from './foundry-test-utils.js';
@@ -66,7 +66,11 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/persistence.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(true);
-      const parentSpec = load(readFileSync(join(tempDir, 'src/programs/lead-research-agent/specs.yml'), 'utf8')) as ParsedSpec;
+      const parentSpecPath = join(tempDir, 'src/programs/lead-research-agent/specs.yml');
+      const childSpecPath = join(tempDir, 'src/programs/lead-research-source-navigation/specs.yml');
+      expect(() => loadSpecWithPatterns(parentSpecPath)).not.toThrow();
+      expect(() => loadSpecWithPatterns(childSpecPath)).not.toThrow();
+      const parentSpec = load(readFileSync(parentSpecPath, 'utf8')) as ParsedSpec;
       expect(parentSpec.features).toContain('keyed_collection');
       expect(parentSpec.keyed_collections).toEqual([
         { collection: 'extract_leads.result.leads', key: 'email' },

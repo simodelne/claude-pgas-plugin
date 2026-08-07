@@ -3323,10 +3323,28 @@ function applyConfirmationLoopIntentModeWiring(
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
     appendModePrecondition(mode, proposeAction, { kind: 'FieldFalsy', path: loop.aggregate.guard_field });
+    appendModePrecondition(mode, proposeAction, confirmationLoopCursorReaderPredicate(loop));
     for (const action of completionActions) {
       appendModePrecondition(mode, action.name, collectionLifecycleTerminalStatusPredicate(loop.collection));
     }
   });
+}
+
+function confirmationLoopCursorReaderPredicate(loop: ConfirmationLoopDescriptor): Record<string, unknown> {
+  const cursor = confirmationLoopActiveItemIdPath(loop);
+  return {
+    kind: 'Implies',
+    subs: [
+      { kind: 'FieldTruthy', path: cursor },
+      {
+        kind: 'PreviousItemFieldEquals',
+        path: collectionLifecycleTerminalStatusItemsPath(loop.collection),
+        cursor,
+        value: true,
+        order: { kind: 'plan_array' },
+      },
+    ],
+  };
 }
 
 function applyConfirmationLoopProjection(
