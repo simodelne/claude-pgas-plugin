@@ -79,6 +79,18 @@ interface ParsedSpec {
   }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
   schema: Record<string, string>;
+  derived_paths?: Array<{
+    target: string;
+    when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
+    set: {
+      kind: string;
+      params?: {
+        collection_path?: string;
+        field?: string;
+        value?: unknown;
+      };
+    };
+  }>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
   action_map: Record<string, {
     channel?: string;
@@ -196,10 +208,30 @@ describe('collection_lifecycle descriptor synthesis', () => {
       'work_units.items.*.title': 'string',
       'work_units.items.*.priority': 'number',
       'work_units.items.*.status': 'string',
+      'work_units.items.*.__terminal': 'boolean',
+      'work_units.items_terminal_status': 'array',
+      'work_units.items_terminal_status.*': 'object',
+      'work_units.items_terminal_status.*.id': 'string',
+      'work_units.items_terminal_status.*.status': 'boolean',
       'work_units.pending_event_json': 'string',
       'work_units.lifecycle_violation_json': 'string',
       'work_units.all_terminal': 'boolean',
     });
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      {
+        target: 'work_units.all_terminal',
+        when: { always: true },
+        set: {
+          kind: 'all_items_field_eq',
+          params: {
+            collection_path: 'work_units.items_terminal_status',
+            field: 'status',
+            value: true,
+          },
+        },
+      },
+    ]));
+    expect(parsed.reactions).not.toHaveProperty('compute_work_units_all_terminal');
     expect(parsed.schema).not.toHaveProperty('work_units.items_json');
     expect(parsed.projection.review_work.include).toContain('work_units.items');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();

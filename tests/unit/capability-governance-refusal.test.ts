@@ -19,13 +19,22 @@ describe('governance refusal for not-yet-landed primitives', () => {
     const input = { purpose: 'Summarize an uploaded memo and export it as a DOCX.', extraText: 'summarize; docx export' };
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
   });
+  it('does not refuse landed cursor or completion primitive requests', () => {
+    const input = {
+      purpose: 'Use an iteration_cursor and completion_guard over work items.',
+      extraText: 'first_item_where_field_ne over items and all_items_field_eq when every item status equals approved',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
+  });
   it('derives pending-primitive refusal from the active registry set via a test seam', () => {
-    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'domain_shape_branch'
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'adhoc_validation_throw'
       ? { ...entry, foundry_enforcement: 'active' as const }
       : entry);
     const input = {
-      purpose: 'Declare a completion guard: every item status field equals approved before continuing.',
-      extraText: 'completion_guard all_items_field_eq all items status equals approved',
+      purpose: 'Declare a content invariant before finalization.',
+      extraText: 'content_invariant_predicate authored-field invariant finalization predicate',
     };
 
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();

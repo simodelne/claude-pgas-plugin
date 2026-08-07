@@ -513,7 +513,7 @@ function detectGovernedComputePendingPrimitiveCapabilities(
       case 'compute_dedup':
         demands.push(...detectComputeDedupPendingPrimitiveCapabilities(haystack, stages, primitive, primitiveRegistry));
         break;
-      case 'domain_shape_branch':
+      case 'completion_guard':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, COMPLETION_GUARD_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
       case 'iteration_cursor':

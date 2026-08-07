@@ -116,6 +116,19 @@ interface ParsedSpec {
   schema: Record<string, string>;
   prompts: Record<string, string>;
   guidance: Record<string, string[]>;
+  derived_paths?: Array<{
+    target: string;
+    when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
+    set: {
+      kind: string;
+      params?: {
+        collection_path?: string;
+        field?: string;
+        value?: unknown;
+        order?: { kind: string; path?: string };
+      };
+    };
+  }>;
   ingestion: Record<string, string[]>;
   proceed_to: Record<string, string>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
@@ -133,7 +146,7 @@ describe('confirmation_loop descriptor synthesis', () => {
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
 
     expect(parsed.modes.review_work.transitions).toEqual([
-      { target: 'assemble_work', guard: { kind: 'FieldTruthy', path: 'work_units.all_terminal' } },
+      { target: 'assemble_work', guard: { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true } },
     ]);
     expect(parsed.action_map.propose_item.awaits_user_decision).toEqual({
       channel: 'user_confirmation',
@@ -153,12 +166,57 @@ describe('confirmation_loop descriptor synthesis', () => {
       { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
     ]);
     expect(parsed.modes.review_work.preconditions?.complete_review_work).toEqual([
-      { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
+      { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true },
     ]);
     expect(parsed.prompts.review_work).toContain('call complete_review_work exactly once to advance downstream');
     expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
       expect.stringContaining('call complete_review_work exactly once to advance downstream'),
     ]));
+  });
+
+  it('emits engine-derived completion and cursor paths for confirmation loops', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoop());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      {
+        target: 'work_units.all_terminal',
+        when: { always: true },
+        set: {
+          kind: 'all_items_field_eq',
+          params: {
+            collection_path: 'work_units.items_terminal_status',
+            field: 'status',
+            value: true,
+          },
+        },
+      },
+      {
+        target: 'summary.confirmation_loop.active_item_id',
+        when: { always: true },
+        set: {
+          kind: 'first_item_where_field_ne',
+          params: {
+            collection_path: 'work_units.items_terminal_status',
+            field: 'status',
+            value: true,
+            order: { kind: 'plan_array' },
+          },
+        },
+      },
+    ]));
+    expect(parsed.schema).toMatchObject({
+      'work_units.items.*.__terminal': 'boolean',
+      'work_units.items_terminal_status': 'array',
+      'work_units.items_terminal_status.*': 'object',
+      'work_units.items_terminal_status.*.id': 'string',
+      'work_units.items_terminal_status.*.status': 'boolean',
+      'summary.confirmation_loop.active_item_id': 'any',
+      'work_units.all_terminal': 'boolean',
+    });
+    expect(parsed.reactions.enforce_review_work_status.write_scope).not.toContain('work_units.all_terminal');
+    expect(artifact.handlers_ts).not.toContain("path: 'work_units.all_terminal', value: allTerminal");
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 
   it('emits user_confirmation targeting, confirmation_pairing, propose_item, and an engine-valid spec', () => {
@@ -238,6 +296,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       'work_units.all_terminal',
       'summary.confirmation_loop',
       'summary.confirmation_loop.active_item',
+      'summary.confirmation_loop.active_item_id',
       'summary.confirmation_loop.total_items',
       'summary.confirmation_loop.terminal_items',
       'summary.confirmation_loop.pending_items',
@@ -263,11 +322,12 @@ describe('confirmation_loop descriptor synthesis', () => {
       watch: ['inputs.user_decision.decision', 'inputs.user_decision.timestamp'],
       write_scope: [
         'work_units.items.*.status',
+        'work_units.items.*.__terminal',
+        'work_units.items_terminal_status.*.status',
         'work_units.items.*.user_instruction',
         'work_units.confirmation_violation_json',
         'summary.confirmation_loop.one_proposed_demotions',
         'summary.confirmation_loop.last_applied_decision',
-        'work_units.all_terminal',
       ],
     });
     expect(parsed.reactions.summarize_review_work_approval).toEqual({
@@ -290,6 +350,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       watch: [],
       write_scope: [
         'work_units.items.*',
+        'work_units.items_terminal_status',
         'summary.confirmation_loop.applied_proposal_count',
         'summary.confirmation_loop.seed_state',
       ],
@@ -312,6 +373,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       'review_work.proposal.proposed_text': 'string',
       'review_work.proposal.log': 'array',
       'summary.confirmation_loop.active_item': 'object',
+      'summary.confirmation_loop.active_item_id': 'any',
       'summary.confirmation_loop.active_item.id': 'string',
       'summary.confirmation_loop.active_item.title': 'string',
       'summary.confirmation_loop.active_item.status': 'string',
@@ -418,14 +480,18 @@ describe('confirmation_loop descriptor synthesis', () => {
       { id: 'wu-2', title: 'Two', status: 'pending' },
     ], savedPending(save, 'approve', 0));
     expect(approved.valueAt('work_units.items.0.status')).toBe('accepted');
+    expect(approved.valueAt('work_units.items.0.__terminal')).toBe(true);
+    expect(approved.valueAt('work_units.items_terminal_status.0.status')).toBe(true);
     expect(approved.valueAt('summary.confirmation_loop.last_applied_decision')).toBe('2026-07-15T00:00:00.000Z');
-    expect(approved.valueAt('work_units.all_terminal')).toBe(false);
+    expect(approved.valueAt('work_units.all_terminal')).toBeUndefined();
 
     const revised = runEnforce(enforce, [
       { id: 'wu-1', title: 'One', status: 'proposed' },
       { id: 'wu-2', title: 'Two', status: 'pending' },
     ], savedPending(save, 'request_revision', 0, 'Tighten the summary.'));
     expect(revised.valueAt('work_units.items.0.status')).toBe('proposed');
+    expect(revised.valueAt('work_units.items.0.__terminal')).toBe(false);
+    expect(revised.valueAt('work_units.items_terminal_status.0.status')).toBe(false);
     expect(revised.valueAt('work_units.items.0.user_instruction')).toBe('Tighten the summary.');
 
     const skipped = runEnforce(enforce, [
@@ -433,13 +499,17 @@ describe('confirmation_loop descriptor synthesis', () => {
       { id: 'wu-2', title: 'Two', status: 'accepted' },
     ], savedPending(save, 'reject', 0));
     expect(skipped.valueAt('work_units.items.0.status')).toBe('skipped');
-    expect(skipped.valueAt('work_units.all_terminal')).toBe(true);
+    expect(skipped.valueAt('work_units.items.0.__terminal')).toBe(true);
+    expect(skipped.valueAt('work_units.items_terminal_status.0.status')).toBe(true);
+    expect(skipped.valueAt('work_units.all_terminal')).toBeUndefined();
 
     const demoted = runEnforce(enforce, [
       { id: 'wu-1', title: 'One', status: 'proposed' },
       { id: 'wu-2', title: 'Two', status: 'proposed' },
     ], '');
     expect(demoted.valueAt('work_units.items.1.status')).toBe('pending');
+    expect(demoted.valueAt('work_units.items.1.__terminal')).toBe(false);
+    expect(demoted.valueAt('work_units.items_terminal_status.1.status')).toBe(false);
     expect(JSON.parse(String(demoted.valueAt('work_units.confirmation_violation_json')))).toMatchObject({
       reason: 'multiple_proposed',
       demoted_index: 1,
@@ -448,10 +518,10 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(demoted.valueAt('summary.confirmation_loop.one_proposed_demotions')).toBe(1);
 
     const aggregate = runEnforce(enforce, [
-      { id: 'wu-1', title: 'One', status: 'accepted' },
-      { id: 'wu-2', title: 'Two', status: 'skipped' },
+      { id: 'wu-1', title: 'One', status: 'accepted', __terminal: true },
+      { id: 'wu-2', title: 'Two', status: 'skipped', __terminal: true },
     ], '');
-    expect(aggregate.valueAt('work_units.all_terminal')).toBe(true);
+    expect(aggregate.valueAt('work_units.all_terminal')).toBeUndefined();
 
     const fallback = runEnforce(enforce, [
       { id: 'wu-1', title: 'One', status: 'proposed' },
@@ -462,6 +532,8 @@ describe('confirmation_loop descriptor synthesis', () => {
       ['inputs.user_decision.target_item_index', 0],
     ]);
     expect(fallback.valueAt('work_units.items.0.status')).toBe('accepted');
+    expect(fallback.valueAt('work_units.items.0.__terminal')).toBe(true);
+    expect(fallback.valueAt('work_units.items_terminal_status.0.status')).toBe(true);
   });
 
   it('generated handlers apply timestamp-distinct identical decisions independently', () => {
@@ -523,6 +595,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       proposed_text: '',
       user_instruction: '',
       description: 'Confirm critical services are healthy before launch.',
+      __terminal: false,
       status: 'pending',
     });
     expect(objectSeeded.valueAt('work_units.items.1')).toEqual({
@@ -531,8 +604,13 @@ describe('confirmation_loop descriptor synthesis', () => {
       proposed_text: '',
       user_instruction: '',
       description: 'Check rollback commands and ownership before release.',
+      __terminal: false,
       status: 'pending',
     });
+    expect(objectSeeded.valueAt('work_units.items_terminal_status')).toEqual([
+      { id: 'wu-1', status: false },
+      { id: 'wu-2', status: false },
+    ]);
     expect(objectSeeded.valueAt('summary.confirmation_loop.seed_state')).toBe('seeded');
     expect(objectSeeded.valueAt('summary.confirmation_loop.seed_state')).not.toBe('invalid_items_json');
 
@@ -545,11 +623,13 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(mixedSeeded.valueAt('work_units.items.0')).toMatchObject({
       id: 'unit-1',
       title: 'Review fallback title source',
+      __terminal: false,
       status: 'pending',
     });
     expect(mixedSeeded.valueAt('work_units.items.1')).toMatchObject({
       id: 'unit-2',
       title: 'Confirm owner handoff',
+      __terminal: false,
       status: 'pending',
     });
     expect(mixedSeeded.valueAt('summary.confirmation_loop.seed_state')).toBe('seeded');
@@ -562,6 +642,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       title: 'Draft launch checklist',
       proposed_text: '',
       user_instruction: '',
+      __terminal: false,
       status: 'pending',
     });
     expect(seeded.valueAt('work_units.items.1')).toEqual({
@@ -569,8 +650,13 @@ describe('confirmation_loop descriptor synthesis', () => {
       title: 'Confirm owner handoff',
       proposed_text: '',
       user_instruction: '',
+      __terminal: false,
       status: 'pending',
     });
+    expect(seeded.valueAt('work_units.items_terminal_status')).toEqual([
+      { id: 'unit-1', status: false },
+      { id: 'unit-2', status: false },
+    ]);
     expect(seeded.valueAt('summary.confirmation_loop.seed_state')).toBe('seeded');
 
     const invalidSeed = runChoreograph(choreograph, [
@@ -602,6 +688,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       title: 'Draft launch checklist',
       proposed_text: 'First proposal',
       user_instruction: '',
+      __terminal: false,
       status: 'proposed',
     });
     expect(applied.valueAt('summary.confirmation_loop.applied_proposal_count')).toBe(1);

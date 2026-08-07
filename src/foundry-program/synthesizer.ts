@@ -87,6 +87,8 @@ export { assertPreconditionVocabularyAlignment } from './synthesizer/validation.
 
 const COLLECTION_LIFECYCLE_EVENT_CHANNEL = 'lifecycle_event';
 const COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE = '';
+const DERIVED_TERMINAL_FIELD = '__terminal';
+const DERIVED_TERMINAL_STATUS_FIELD = 'status';
 const USER_CONFIRMATION_CHANNEL = 'user_confirmation';
 const DOCUMENT_UPLOAD_CHANNEL = 'document_upload';
 const DOCUMENT_INTAKE_ROOT = 'inputs.document_intake';
@@ -467,6 +469,7 @@ export function synthesizeProgramSpecFromDomain(
   }
 
   applyTransitions(synthesizedModes, transitionActions, modeNames);
+  applyConfirmationLoopTransitionGuards(synthesizedModes, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
   applyStageOutputChannels(synthesizedModes, transitionActions, reasoningContractsBySlug);
   if (completion.collection_lifecycle) {
@@ -704,6 +707,7 @@ export function synthesizeProgramSpecFromDomain(
   applyRegisteredToolSchema(schema, registeredTools);
   applyHubSectionArtifactSchema(schema, hubSectionArtifacts);
   applySkillTriageSpec(spec, skills);
+  applyCollectionCompletionDerivedPaths(spec, completion.collection_lifecycle, confirmationLoops);
   const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
@@ -945,6 +949,31 @@ function applyTransitions(
     }
     modeTransitions.push(emittedTransition);
     fromMode.transitions = modeTransitions;
+  }
+}
+
+function applyConfirmationLoopTransitionGuards(
+  modes: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor | undefined,
+  transitionActions: TransitionAction[],
+): void {
+  if (!lifecycle) {
+    return;
+  }
+  for (const loop of loops) {
+    const completionTargets = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions)
+      .map((action) => action.target);
+    if (completionTargets.length === 0) {
+      continue;
+    }
+    const mode = recordField(modes, loop.stage);
+    const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
+    for (const transition of transitions) {
+      if (typeof transition.target === 'string' && completionTargets.includes(transition.target)) {
+        transition.guard = collectionLifecycleTerminalStatusPredicate(loop.collection);
+      }
+    }
   }
 }
 
@@ -1270,17 +1299,112 @@ function applyCollectionLifecycleReactions(
     reactions[collectionLifecycleApplyReactionName(descriptor)] = {
       event: 'AfterRound',
       write_scope: [
-        descriptor.storage.items_path,
+        ...(descriptor.storage.representation === 'indexed_array'
+          ? [
+              collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path),
+              `${descriptor.storage.items_path}.*.${descriptor.item.status_field}`,
+              `${descriptor.storage.items_path}.*.${DERIVED_TERMINAL_FIELD}`,
+            ]
+          : [descriptor.storage.items_path]),
         descriptor.storage.event_path,
         descriptor.storage.violation_path,
       ],
     };
   }
-  reactions[collectionLifecycleReactionName(descriptor)] = {
-    event: hasLlmTransitions ? 'AfterRound' : 'AfterMutation',
-    ...(hasLlmTransitions ? {} : { watch: [descriptor.storage.items_path] }),
-    write_scope: [descriptor.aggregate.guard_field],
+  if (descriptor.storage.representation !== 'indexed_array') {
+    reactions[collectionLifecycleReactionName(descriptor)] = {
+      event: hasLlmTransitions ? 'AfterRound' : 'AfterMutation',
+      ...(hasLlmTransitions ? {} : { watch: [descriptor.storage.items_path] }),
+      write_scope: [descriptor.aggregate.guard_field],
+    };
+  }
+}
+
+function applyCollectionCompletionDerivedPaths(
+  spec: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor | undefined,
+  loops: ConfirmationLoopDescriptor[],
+): void {
+  const derivedPaths = Array.isArray(spec.derived_paths) ? spec.derived_paths as MutableRecord[] : [];
+  if (descriptor?.storage.representation === 'indexed_array') {
+    const terminalItemsPath = collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path);
+    appendDerivedPathRule(derivedPaths, {
+      target: descriptor.aggregate.guard_field,
+      when: { always: true },
+      set: {
+        kind: 'all_items_field_eq',
+        params: {
+          collection_path: terminalItemsPath,
+          field: DERIVED_TERMINAL_STATUS_FIELD,
+          value: true,
+        },
+      },
+    });
+  }
+  if (descriptor) {
+    for (const loop of loops) {
+      if (loop.collection !== descriptor.storage.items_path) {
+        continue;
+      }
+      appendDerivedPathRule(derivedPaths, {
+        target: confirmationLoopActiveItemIdPath(loop),
+        when: { always: true },
+        set: {
+          kind: 'first_item_where_field_ne',
+          params: {
+            collection_path: collectionLifecycleTerminalStatusItemsPath(loop.collection),
+            field: DERIVED_TERMINAL_STATUS_FIELD,
+            value: true,
+            order: { kind: 'plan_array' },
+          },
+        },
+      });
+    }
+  }
+  if (derivedPaths.length > 0) {
+    spec.derived_paths = derivedPaths;
+  } else {
+    delete spec.derived_paths;
+  }
+}
+
+function appendDerivedPathRule(derivedPaths: MutableRecord[], rule: MutableRecord): void {
+  if (!derivedPaths.some((candidate) => candidate.target === rule.target)) {
+    derivedPaths.push(rule);
+  }
+}
+
+function collectionLifecycleTerminalStatusItemsPath(itemsPath: string): string {
+  const parts = itemsPath.split('.').filter((part) => part.length > 0);
+  const leaf = parts.pop() ?? 'items';
+  return [...parts, `${leaf}_terminal_status`].join('.');
+}
+
+function collectionLifecycleTerminalStatusPredicate(itemsPath: string): MutableRecord {
+  return {
+    kind: 'AllItemsStatus',
+    path: collectionLifecycleTerminalStatusItemsPath(itemsPath),
+    value: true,
   };
+}
+
+function collectionLifecycleTerminalStatusItems(
+  items: unknown[],
+  descriptor: CollectionLifecycleDescriptor,
+): Array<Record<string, unknown>> {
+  return items.map((item, index) => {
+    const record = item && typeof item === 'object' && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : {};
+    const id = typeof record[descriptor.item.id_field] === 'string'
+      ? record[descriptor.item.id_field]
+      : String(index);
+    return {
+      id,
+      [DERIVED_TERMINAL_STATUS_FIELD]: record[DERIVED_TERMINAL_FIELD] === true ||
+        descriptor.aggregate.terminal_statuses.includes(String(record[descriptor.item.status_field] ?? '')),
+    };
+  });
 }
 
 function applyCollectionLifecycleSchema(
@@ -1294,6 +1418,12 @@ function applyCollectionLifecycleSchema(
       schema[`${descriptor.storage.items_path}.*.${fieldName}`] = fieldType;
     }
     schema[`${descriptor.storage.items_path}.*.${descriptor.item.status_field}`] = 'string';
+    schema[`${descriptor.storage.items_path}.*.${DERIVED_TERMINAL_FIELD}`] = 'boolean';
+    const terminalItemsPath = collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path);
+    schema[terminalItemsPath] = 'array';
+    schema[`${terminalItemsPath}.*`] = 'object';
+    schema[`${terminalItemsPath}.*.id`] = 'string';
+    schema[`${terminalItemsPath}.*.${DERIVED_TERMINAL_STATUS_FIELD}`] = 'boolean';
   } else {
     schema[descriptor.storage.items_path] = 'string';
   }
@@ -3076,11 +3206,12 @@ function applyConfirmationLoopReactions(
       watch: ['inputs.user_decision.decision', 'inputs.user_decision.timestamp'],
       write_scope: unique([
         `${loop.collection}.*.${lifecycle.item.status_field}`,
+        `${loop.collection}.*.${DERIVED_TERMINAL_FIELD}`,
+        `${collectionLifecycleTerminalStatusItemsPath(loop.collection)}.*.${DERIVED_TERMINAL_STATUS_FIELD}`,
         ...confirmationLoopInstructionPaths(loop),
         confirmationLoopViolationPath(loop, lifecycle),
         confirmationLoopDemotionCounterPath(loop),
         confirmationLoopAppliedDecisionPath(loop),
-        loop.aggregate.guard_field,
       ]),
     };
     reactions[confirmationLoopSummarizeReactionName(loop)] = {
@@ -3105,6 +3236,7 @@ function applyConfirmationLoopReactions(
       watch: [],
       write_scope: [
         `${loop.collection}.*`,
+        collectionLifecycleTerminalStatusItemsPath(loop.collection),
         confirmationLoopAppliedProposalCountPath(loop),
         confirmationLoopSeedStatePath(loop),
       ],
@@ -3130,7 +3262,7 @@ function applyConfirmationLoopIntentModeWiring(
     mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
     appendModePrecondition(mode, proposeAction, { kind: 'FieldFalsy', path: loop.aggregate.guard_field });
     for (const action of completionActions) {
-      appendModePrecondition(mode, action.name, { kind: 'FieldTruthy', path: loop.aggregate.guard_field });
+      appendModePrecondition(mode, action.name, collectionLifecycleTerminalStatusPredicate(loop.collection));
     }
   });
 }
@@ -3191,6 +3323,7 @@ function confirmationLoopApproveProjectionPaths(loop: ConfirmationLoopDescriptor
     loop.aggregate.guard_field,
     summaryPath,
     `${summaryPath}.active_item`,
+    confirmationLoopActiveItemIdPath(loop),
     `${summaryPath}.total_items`,
     `${summaryPath}.terminal_items`,
     `${summaryPath}.pending_items`,
@@ -3408,6 +3541,7 @@ function applyConfirmationLoopSchema(
     schema[confirmationLoopViolationPath(loop, lifecycle)] = 'string';
     schema[confirmationLoopSummaryPath(loop)] = 'object';
     schema[`${confirmationLoopSummaryPath(loop)}.active_item`] = 'object';
+    schema[confirmationLoopActiveItemIdPath(loop)] = 'any';
     schema[`${confirmationLoopSummaryPath(loop)}.total_items`] = 'number';
     schema[`${confirmationLoopSummaryPath(loop)}.terminal_items`] = 'number';
     schema[`${confirmationLoopSummaryPath(loop)}.pending_items`] = 'number';
@@ -3519,6 +3653,10 @@ function confirmationLoopRuntimeDecisions(
 
 function confirmationLoopSummaryPath(loop: ConfirmationLoopDescriptor): string {
   return loop.summary_path ?? `summary.${safeIdentifier(loop.stage)}`;
+}
+
+function confirmationLoopActiveItemIdPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopSummaryPath(loop)}.active_item_id`;
 }
 
 function confirmationLoopViolationPath(
@@ -5587,6 +5725,9 @@ function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleD
     return collectionLifecycleApplyEvent(
       snapshot,
       ${tsString(descriptor.storage.items_path)},
+      ${descriptor.storage.representation === 'indexed_array'
+        ? `${tsString(collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path))},`
+        : ''}
       ${tsString(descriptor.storage.event_path)},
       ${tsString(descriptor.storage.violation_path)},
       ${tsString(descriptor.item.id_field)},
@@ -5600,6 +5741,9 @@ function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleD
     );
   }]`
     : '';
+  if (descriptor.storage.representation === 'indexed_array') {
+    return applyEntry;
+  }
   return `${applyEntry},
   [${tsString(collectionLifecycleReactionName(descriptor))}, (snapshot, trigger, mode) => {
     void trigger;
@@ -5617,7 +5761,7 @@ function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleD
 
 function renderCollectionLifecycleAllTerminalHelper(descriptor: CollectionLifecycleDescriptor): string {
   if (descriptor.storage.representation === 'indexed_array') {
-    return `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  let parsed: unknown[];\n  try {\n    parsed = reconstructArray(Object.fromEntries(snapshot), itemsPath);\n  } catch {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}`;
+    return '';
   }
   return `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}`;
 }
@@ -5629,6 +5773,7 @@ function renderCollectionLifecycleApplyHelper(descriptor: CollectionLifecycleDes
 function collectionLifecycleApplyEvent(
   snapshot: ReadonlyMap<string, unknown>,
   itemsPath: string,
+  terminalItemsPath: string,
   eventPath: string,
   violationPath: string,
   idField: string,
@@ -5699,10 +5844,23 @@ function collectionLifecycleApplyEvent(
   if (transition.guard_field && !snapshot.get(transition.guard_field)) {
     return violation('guard_false', from);
   }
+  const terminalStatuses = new Set([${descriptor.aggregate.terminal_statuses.map(tsString).join(', ')}]);
+  const nextItems = items.map((item, index) =>
+    index === itemIndex && item && typeof item === 'object' && !Array.isArray(item)
+      ? { ...item as Record<string, unknown>, [statusField]: attemptedTo, ${tsString(DERIVED_TERMINAL_FIELD)}: terminalStatuses.has(attemptedTo) }
+      : item,
+  );
+  const terminalItems = nextItems.map((item, index) => {
+    const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const id = typeof record[idField] === 'string' ? record[idField] : String(index);
+    return { id, ${tsString(DERIVED_TERMINAL_STATUS_FIELD)}: record[${tsString(DERIVED_TERMINAL_FIELD)}] === true };
+  });
 
   return {
     mutations: [
       { op: 'MSet' as const, path: itemsPath + '.' + itemIndex + '.' + statusField, value: attemptedTo },
+      { op: 'MSet' as const, path: itemsPath + '.' + itemIndex + '.${DERIVED_TERMINAL_FIELD}', value: terminalStatuses.has(attemptedTo) },
+      { op: 'MSet' as const, path: terminalItemsPath, value: terminalItems },
       { op: 'MSet' as const, path: eventPath, value: '' },
     ],
   };
@@ -5826,6 +5984,7 @@ function renderConfirmationLoopReactionEntries(
     return confirmationLoopEnforceStatus(
       snapshot,
       ${tsString(loop.collection)},
+      ${tsString(collectionLifecycleTerminalStatusItemsPath(loop.collection))},
       ${tsString(lifecycle.item.id_field)},
       ${tsString(lifecycle.item.status_field)},
       ${tsString(confirmationLoopInitialStatus(lifecycle))},
@@ -5868,6 +6027,7 @@ function renderConfirmationLoopReactionEntries(
       snapshot,
       mode,
       ${tsString(loop.collection)},
+      ${tsString(collectionLifecycleTerminalStatusItemsPath(loop.collection))},
       ${tsString(loop.item_id_field ?? lifecycle.item.id_field)},
       ${tsString(lifecycle.item.status_field)},
       ${tsString(confirmationLoopInitialStatus(lifecycle))},
@@ -6553,6 +6713,7 @@ function confirmationLoopNormalizeDecision(
 function confirmationLoopEnforceStatus(
   snapshot: ReadonlyMap<string, unknown>,
   itemsPath: string,
+  terminalItemsPath: string,
   idField: string,
   statusField: string,
   initialStatus: string,
@@ -6602,8 +6763,12 @@ function confirmationLoopEnforceStatus(
       } else {
         const record = item as Record<string, unknown>;
         const nextStatus = decision.re_propose === true ? proposedStatus : decision.to;
+        const terminal = terminalStatuses.includes(nextStatus);
         record[statusField] = nextStatus;
+        record[${tsString(DERIVED_TERMINAL_FIELD)}] = terminal;
         mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + pending.value.target_index + '.' + statusField, value: nextStatus });
+        mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + pending.value.target_index + '.${DERIVED_TERMINAL_FIELD}', value: terminal });
+        mutations.push({ op: 'MSet' as const, path: terminalItemsPath + '.' + pending.value.target_index + '.${DERIVED_TERMINAL_STATUS_FIELD}', value: terminal });
         if (decision.instruction_path && pending.value.instruction.trim().length > 0) {
           mutations.push({ op: 'MSet' as const, path: decision.instruction_path.replace(/\\.\\*(?=\\.|$)/u, '.' + pending.value.target_index), value: pending.value.instruction });
         }
@@ -6621,7 +6786,10 @@ function confirmationLoopEnforceStatus(
   for (const { item, index } of proposed.slice(1)) {
     const record = item as Record<string, unknown>;
     record[statusField] = initialStatus;
+    record[${tsString(DERIVED_TERMINAL_FIELD)}] = false;
     mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + index + '.' + statusField, value: initialStatus });
+    mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + index + '.${DERIVED_TERMINAL_FIELD}', value: false });
+    mutations.push({ op: 'MSet' as const, path: terminalItemsPath + '.' + index + '.${DERIVED_TERMINAL_STATUS_FIELD}', value: false });
     mutations.push({ op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: 'multiple_proposed', kept_index: proposed[0]?.index ?? 0, demoted_index: index, demoted_id: typeof record[idField] === 'string' ? record[idField] : '' }) });
     demoted += 1;
   }
@@ -6629,12 +6797,7 @@ function confirmationLoopEnforceStatus(
     const current = snapshot.get(demotionCounterPath);
     mutations.push({ op: 'MSet' as const, path: demotionCounterPath, value: (typeof current === 'number' && Number.isFinite(current) ? current : 0) + demoted });
   }
-  const terminal = new Set(terminalStatuses);
-  const allTerminal = itemsAvailable && items.length > 0 && items.every((item) =>
-    item && typeof item === 'object' && !Array.isArray(item) &&
-    typeof (item as Record<string, unknown>)[statusField] === 'string' &&
-    terminal.has((item as Record<string, unknown>)[statusField] as string));
-  mutations.push({ op: 'MSet' as const, path: aggregateGuardPath, value: allTerminal });
+  void aggregateGuardPath;
   return mutations.length > 0 ? { mutations } : undefined;
 }
 
@@ -6673,6 +6836,7 @@ function confirmationLoopChoreographCollection(
   snapshot: ReadonlyMap<string, unknown>,
   mode: string,
   itemsPath: string,
+  terminalItemsPath: string,
   idField: string,
   statusField: string,
   initialStatus: string,
@@ -6705,6 +6869,14 @@ function confirmationLoopChoreographCollection(
       seeded.forEach((item, index) => {
         mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + index, value: item });
       });
+      mutations.push({
+        op: 'MSet' as const,
+        path: terminalItemsPath,
+        value: seeded.map((item, index) => ({
+          id: typeof item[idField] === 'string' ? item[idField] : String(index),
+          ${tsString(DERIVED_TERMINAL_STATUS_FIELD)}: item[${tsString(DERIVED_TERMINAL_FIELD)}] === true,
+        })),
+      });
       mutations.push({ op: 'MSet' as const, path: seedStatePath, value: 'seeded' });
       items = seeded;
     } else if (seed.kind === 'invalid') {
@@ -6735,6 +6907,7 @@ function confirmationLoopChoreographCollection(
     next[field] = typeof value === 'string' ? value : '';
   }
   next[statusField] = proposedStatus;
+  next[${tsString(DERIVED_TERMINAL_FIELD)}] = false;
   mutations.push(
     { op: 'MSet' as const, path: itemsPath + '.' + targetIndex, value: next },
     { op: 'MSet' as const, path: appliedProposalCountPath, value: proposalCount },
@@ -6827,6 +7000,7 @@ function confirmationLoopSeedItem(
     [idField]: seed.id ?? idPrefix + '-' + String(index + 1),
     [titleField]: seed.title,
     [statusField]: initialStatus,
+    [${tsString(DERIVED_TERMINAL_FIELD)}]: false,
   };
   for (const field of seedSchemaFields) {
     if (Object.prototype.hasOwnProperty.call(seed.fields, field)) {
@@ -11137,9 +11311,32 @@ function collectionLifecycleApplyEvent(
     return collectionLifecycleViolation(descriptor, itemId, from, attemptedTo, 'guard_false');
   }
 
-  const itemMutation = descriptor.storage.representation === 'indexed_array'
-    ? { op: 'MSet' as const, path: `${descriptor.storage.items_path}.${itemIndex}.${descriptor.item.status_field}`, value: attemptedTo }
-    : {
+  const itemMutations = descriptor.storage.representation === 'indexed_array'
+    ? [
+        { op: 'MSet' as const, path: `${descriptor.storage.items_path}.${itemIndex}.${descriptor.item.status_field}`, value: attemptedTo },
+        {
+          op: 'MSet' as const,
+          path: `${descriptor.storage.items_path}.${itemIndex}.${DERIVED_TERMINAL_FIELD}`,
+          value: descriptor.aggregate.terminal_statuses.includes(attemptedTo),
+        },
+        {
+          op: 'MSet' as const,
+          path: collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path),
+          value: collectionLifecycleTerminalStatusItems(
+            parsedItems.map((item, index) =>
+              index === itemIndex && item && typeof item === 'object' && !Array.isArray(item)
+                ? {
+                    ...item as Record<string, unknown>,
+                    [descriptor.item.status_field]: attemptedTo,
+                    [DERIVED_TERMINAL_FIELD]: descriptor.aggregate.terminal_statuses.includes(attemptedTo),
+                  }
+                : item,
+            ),
+            descriptor,
+          ),
+        },
+      ]
+    : [{
         op: 'MSet' as const,
         path: descriptor.storage.items_path,
         value: JSON.stringify(parsedItems.map((item, index) =>
@@ -11147,10 +11344,10 @@ function collectionLifecycleApplyEvent(
             ? { ...item as Record<string, unknown>, [descriptor.item.status_field]: attemptedTo }
             : item,
         )),
-      };
+      }];
   return {
     mutations: [
-      itemMutation,
+      ...itemMutations,
       { op: 'MSet' as const, path: descriptor.storage.event_path, value: COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE },
     ],
   };
@@ -11330,11 +11527,6 @@ function confirmationLoopEnforceStatus(
     }
   }
 
-  const allTerminal = itemsAvailable
-    ? confirmationLoopAllTerminal(items, lifecycle.item.status_field, loop.aggregate.terminal_statuses)
-    : false;
-  mutations.push({ op: 'MSet' as const, path: loop.aggregate.guard_field, value: allTerminal });
-
   return mutations.length > 0 ? { mutations } : undefined;
 }
 
@@ -11386,6 +11578,11 @@ function confirmationLoopChoreographCollection(
       seeded.forEach((item, index) => {
         mutations.push({ op: 'MSet' as const, path: `${loop.collection}.${index}`, value: item });
       });
+      mutations.push({
+        op: 'MSet' as const,
+        path: collectionLifecycleTerminalStatusItemsPath(loop.collection),
+        value: collectionLifecycleTerminalStatusItems(seeded, lifecycle),
+      });
       mutations.push({ op: 'MSet' as const, path: confirmationLoopSeedStatePath(loop), value: 'seeded' });
       items = seeded;
     } else if (seed.kind === 'invalid') {
@@ -11426,6 +11623,7 @@ function confirmationLoopChoreographCollection(
     next[field] = typeof value === 'string' ? value : '';
   }
   next[lifecycle.item.status_field] = loop.proposed_status;
+  next[DERIVED_TERMINAL_FIELD] = false;
   mutations.push(
     { op: 'MSet' as const, path: `${loop.collection}.${targetIndex}`, value: next },
     { op: 'MSet' as const, path: confirmationLoopAppliedProposalCountPath(loop), value: proposalCount },
@@ -11515,6 +11713,7 @@ function confirmationLoopSeedItem(
     [idField]: seed.id ?? `${loop.seed.id_prefix ?? 'item'}-${index + 1}`,
     [titleField]: seed.title,
     [lifecycle.item.status_field]: confirmationLoopInitialStatus(lifecycle),
+    [DERIVED_TERMINAL_FIELD]: false,
   };
   for (const field of confirmationLoopSeedSchemaFields(loop, lifecycle)) {
     if (Object.prototype.hasOwnProperty.call(seed.fields, field)) {
@@ -11658,11 +11857,23 @@ function applyConfirmationPendingDecision(
 
   const statusField = lifecycle.item.status_field;
   const nextStatus = decision.re_propose === true ? loop.proposed_status : decision.to;
+  const terminal = loop.aggregate.terminal_statuses.includes(nextStatus);
   (item as Record<string, unknown>)[statusField] = nextStatus;
+  (item as Record<string, unknown>)[DERIVED_TERMINAL_FIELD] = terminal;
   mutations.push({
     op: 'MSet' as const,
     path: `${loop.collection}.${targetIndex}.${statusField}`,
     value: nextStatus,
+  });
+  mutations.push({
+    op: 'MSet' as const,
+    path: `${loop.collection}.${targetIndex}.${DERIVED_TERMINAL_FIELD}`,
+    value: terminal,
+  });
+  mutations.push({
+    op: 'MSet' as const,
+    path: `${collectionLifecycleTerminalStatusItemsPath(loop.collection)}.${targetIndex}.${DERIVED_TERMINAL_STATUS_FIELD}`,
+    value: terminal,
   });
   if (decision.instruction_path && pending.instruction.trim().length > 0) {
     const instructionPath = indexedPath(decision.instruction_path, targetIndex);
@@ -11698,10 +11909,21 @@ function enforceOneProposedAtATime(
   for (const { item, index } of proposedIndices.slice(1)) {
     const record = item as Record<string, unknown>;
     record[statusField] = initialStatus;
+    record[DERIVED_TERMINAL_FIELD] = false;
     mutations.push({
       op: 'MSet' as const,
       path: `${loop.collection}.${index}.${statusField}`,
       value: initialStatus,
+    });
+    mutations.push({
+      op: 'MSet' as const,
+      path: `${loop.collection}.${index}.${DERIVED_TERMINAL_FIELD}`,
+      value: false,
+    });
+    mutations.push({
+      op: 'MSet' as const,
+      path: `${collectionLifecycleTerminalStatusItemsPath(loop.collection)}.${index}.${DERIVED_TERMINAL_STATUS_FIELD}`,
+      value: false,
     });
     mutations.push(confirmationLoopViolationMutation(loop, lifecycle, {
       reason: 'multiple_proposed',
