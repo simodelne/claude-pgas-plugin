@@ -8,6 +8,7 @@ export type GovernedConstructKind =
   | 'iteration_cursor'
   | 'multi_path_fallback'
   | 'compute_dedup'
+  | 'content_key_merge'
   | 'numeric_aggregate'
   | 'compute_aggregate'
   | 'partition_by_verdict'
@@ -1003,6 +1004,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct multi_path_fallback must be engine-declared as a single read path or projection field, not fallback domain navigation.${primitiveReference}`;
     case 'compute_dedup':
       return `Governed construct compute_dedup requires a keyed/idempotent collection engine primitive or refusal; do not emit imperative dedup logic.${primitiveReference}`;
+    case 'content_key_merge':
+      return `Governed construct content_key_merge must be engine-declared as merge_collections with reducers, not imperative content-key merge logic.${primitiveReference}`;
     case 'numeric_aggregate':
       return `Governed construct numeric_aggregate must be engine-declared as a sum_of derived path feeding numeric predicates, not imperative sum reducers.${primitiveReference}`;
     case 'compute_aggregate':

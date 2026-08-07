@@ -3608,15 +3608,32 @@ function recoverySteersForConfirmationLoops(
   if (!lifecycle) {
     return [];
   }
-  return loops.map((loop) => {
+  return loops.flatMap((loop) => {
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
     const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
     const completionActionNames = completionActions.map((action) => action.name);
-    return {
-      mode: loop.stage,
-      when: { kind: 'FieldTruthy', path: loop.aggregate.guard_field },
-      guidance: confirmationLoopCompletionGuidance(loop, completionActionNames, proposeAction),
-    };
+    const activeItemIdPath = confirmationLoopActiveItemIdPath(loop);
+    const summaryPath = confirmationLoopSummaryPath(loop);
+    return [
+      {
+        mode: loop.stage,
+        when: { kind: 'FieldTruthy', path: loop.aggregate.guard_field },
+        guidance: confirmationLoopCompletionGuidance(loop, completionActionNames, proposeAction),
+        set: { path: loop.aggregate.guard_field, value: true },
+      },
+      {
+        mode: loop.stage,
+        when: {
+          kind: 'All',
+          subs: [
+            { kind: 'FieldTruthy', path: activeItemIdPath },
+            { kind: 'FieldFalsy', path: loop.aggregate.guard_field },
+          ],
+        },
+        guidance: `Handle {{${activeItemIdPath}}} next with ${proposeAction}; use ${summaryPath}.active_item as the bounded ${lifecycle.item_label} view and do not inspect ${loop.collection}.`,
+        template_paths: [activeItemIdPath],
+      },
+    ];
   });
 }
 

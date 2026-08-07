@@ -201,6 +201,7 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
       'governable computation is refused only for registry classes with foundry_enforcement=active and no landed primitive',
       'keyed_by landed in @simodelne/pgas-server 3.29.0, so compute_dedup now synthesizes as a keyed_collections declaration',
       'numeric-comparison predicates and recovery_steers landed in @simodelne/pgas-server 3.30.0, so numeric_validation and recovery_steer no longer route to pending-primitive refusal',
+      'merge_collections landed in @simodelne/pgas-server 3.32.0, but foundry has no content-key merge emitter today, so content_key_merge remains pending enforcement and register-only',
     ]),
     since_version: '3.30.0',
     gap_note: 'blocked only when a future registry-active construct lacks a landed primitive',
@@ -537,6 +538,8 @@ function detectGovernedComputePendingPrimitiveCapabilities(
     switch (primitive.computation_class) {
       case 'compute_dedup':
         demands.push(...detectComputeDedupPendingPrimitiveCapabilities(haystack, stages, primitive, primitiveRegistry));
+        break;
+      case 'content_key_merge':
         break;
       case 'completion_guard':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, COMPLETION_GUARD_TEXT_DETECTORS, primitive, primitiveRegistry));

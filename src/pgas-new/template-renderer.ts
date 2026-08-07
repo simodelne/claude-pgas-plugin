@@ -1612,7 +1612,7 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 
 
 function renderDirectSource(source: string): string {
-  if (/\{\{[^}]+\}\}/.test(source)) {
+  if (/\{\{[A-Z0-9_]+\}\}/u.test(source)) {
     throw new Error('foundry program source must not contain template tokens');
   }
 

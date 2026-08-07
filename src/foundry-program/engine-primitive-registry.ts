@@ -1,6 +1,6 @@
 import type { GovernedConstructKind } from './governance-gate.js';
 
-export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type PrimitiveStatus = 'landed' | 'shipped' | 'building' | 'asked';
 export type FoundryEnforcement = 'active' | 'pending';
 
@@ -73,7 +73,7 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
     foundry_enforcement: 'active',
     since_engine_version: '3.30.0',
-    build_order_note: 'Confirmation-loop per-round recovery guidance now emits recovery_steers declarations instead of static typed-flag guidance emitters.',
+    build_order_note: 'Confirmation-loop per-round recovery guidance emits recovery_steers; 3.32.0 enrichment now uses idempotent set and template_paths for derived active-item cursor guidance.',
   },
   {
     computation_class: 'existential_completion_guard',
@@ -118,6 +118,17 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     foundry_enforcement: 'active',
     since_engine_version: '3.32.0',
     build_order_note: 'Narrow authored-text required-token coverage validation; other structural validation throws remain outside this primitive.',
+  },
+  {
+    computation_class: 'content_key_merge',
+    primitive_index: 10,
+    primitive_name: 'merge_collections',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#844',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'pending',
+    since_engine_version: '3.32.0',
+    build_order_note: 'Register-only adoption: no foundry content-key merge emitter exists today; keyed persistence continues to use keyed_collections, so merge_collections enforcement stays pending until a content-key reducer emitter is introduced.',
   },
 ] as const;
 
