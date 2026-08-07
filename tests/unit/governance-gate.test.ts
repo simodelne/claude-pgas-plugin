@@ -38,6 +38,20 @@ export function steerRecoveryGuidance(input) {
     ? 'Ask for a corrected answer before retrying.'
     : 'Continue with the current approval path.';
 }`;
+const NUMERIC_VALIDATION_BODY = `
+export function validateFidelity(input) {
+  if (input.domain.work.source.char_count < 40) {
+    throw new Error('source is below the minimum fidelity floor');
+  }
+  return true;
+}`;
+const NUMERIC_BUSINESS_BRANCH_BODY = `
+export function routeRisk(input) {
+  if (input.domain.score.risk_score >= 90) {
+    return { queue: 'security_escalation' };
+  }
+  return { queue: 'standard_ops' };
+}`;
 
 describe('detectGovernedConstructs', () => {
   it('flags a Set-based dedup and a multi-path fallback', () => {
@@ -79,6 +93,10 @@ export async function runStage(input, runtime) {
     const findings = detectGovernedConstructs(RECOVERY_STEER_BODY);
     expect(findings.map((x) => x.kind)).toContain('recovery_steer');
   });
+  it('flags numeric validation throws without broadening to ordinary numeric branching', () => {
+    expect(detectGovernedConstructs(NUMERIC_VALIDATION_BODY).map((x) => x.kind)).toContain('numeric_validation');
+    expect(detectGovernedConstructs(NUMERIC_BUSINESS_BRANCH_BODY).map((x) => x.kind)).not.toContain('numeric_validation');
+  });
 });
 
 describe('fatalGovernanceViolations', () => {
@@ -109,5 +127,17 @@ describe('fatalGovernanceViolations', () => {
       'stage_body',
       new Set(['completion_guard']),
     ).map((v) => v.kind)).toEqual(['completion_guard']);
+  });
+  it('is fatal for active numeric-validation and recovery-steer imperative bodies', () => {
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(NUMERIC_VALIDATION_BODY),
+      'stage_body',
+      new Set(['numeric_validation']),
+    ).map((v) => v.kind)).toEqual(['numeric_validation']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(RECOVERY_STEER_BODY),
+      'stage_body',
+      new Set(['recovery_steer']),
+    ).map((v) => v.kind)).toEqual(['recovery_steer']);
   });
 });

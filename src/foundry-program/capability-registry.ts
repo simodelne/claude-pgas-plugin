@@ -200,8 +200,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     evidence: capabilityEvidence([
       'governable computation is refused only for registry classes with foundry_enforcement=active and no landed primitive',
       'keyed_by landed in @simodelne/pgas-server 3.29.0, so compute_dedup now synthesizes as a keyed_collections declaration',
+      'numeric-comparison predicates and recovery_steers landed in @simodelne/pgas-server 3.30.0, so numeric_validation and recovery_steer no longer route to pending-primitive refusal',
     ]),
-    since_version: '3.29.0',
+    since_version: '3.30.0',
     gap_note: 'blocked only when a future registry-active construct lacks a landed primitive',
   },
   {
@@ -405,10 +406,10 @@ const ITERATION_CURSOR_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>
     label: 'iteration cursor/manual id-join computation',
   },
 ] as const;
-const CONTENT_INVARIANT_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+const NUMERIC_VALIDATION_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
   {
-    pattern: /\b(?:content[-_ ]invariant|content_invariant_predicate|finalization predicate|authored-field invariant|authored field invariant)\b/i,
-    label: 'content invariant/finalization predicate computation',
+    pattern: /\b(?:numeric[-_ ]validation|numeric comparison predicate|numeric[-_ ]comparison[-_ ]predicate|FieldLessThan|FieldLessOrEqual|FieldGreaterThan|FieldGreaterOrEqual|char_count\s*(?:>=|>|<=|<)\s*(?:min_chars|\d+)|min_chars\s*(?:<=|<|>=|>)\s*char_count|threshold validation|fidelity floor)\b/i,
+    label: 'numeric validation/comparison predicate computation',
   },
 ] as const;
 const RECOVERY_STEER_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
@@ -519,12 +520,13 @@ function detectGovernedComputePendingPrimitiveCapabilities(
       case 'iteration_cursor':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, ITERATION_CURSOR_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
-      case 'adhoc_validation_throw':
-        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, CONTENT_INVARIANT_TEXT_DETECTORS, primitive, primitiveRegistry));
+      case 'numeric_validation':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, NUMERIC_VALIDATION_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
       case 'recovery_steer':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, RECOVERY_STEER_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
+      case 'adhoc_validation_throw':
       case 'compute_aggregate':
       case 'compute_score':
       case 'compute_sort':

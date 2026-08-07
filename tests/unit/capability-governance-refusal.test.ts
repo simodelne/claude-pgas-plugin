@@ -28,13 +28,34 @@ describe('governance refusal for not-yet-landed primitives', () => {
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
     expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
   });
+  it('does not refuse landed numeric-validation or recovery-steer primitive requests', () => {
+    const input = {
+      purpose: 'Declare numeric validation and mode-scoped recovery steering for the generated workflow.',
+      extraText: 'numeric comparison predicate FieldGreaterOrEqual for char_count >= min_chars plus recovery_steer guidance when a typed flag is true',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
+  });
   it('derives pending-primitive refusal from the active registry set via a test seam', () => {
-    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'adhoc_validation_throw'
-      ? { ...entry, foundry_enforcement: 'active' as const }
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'numeric_validation'
+      ? { ...entry, primitive_status: 'asked' as const }
       : entry);
     const input = {
-      purpose: 'Declare a content invariant before finalization.',
-      extraText: 'content_invariant_predicate authored-field invariant finalization predicate',
+      purpose: 'Declare a numeric validation before finalization.',
+      extraText: 'numeric comparison predicate finalization predicate FieldGreaterOrEqual char_count min_chars',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(() => assertSynthesizableCapabilitiesForPrimitiveRegistry(input, synthetic)).toThrow();
+  });
+  it('derives recovery-steer pending-primitive refusal from the active registry set via a test seam', () => {
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'recovery_steer'
+      ? { ...entry, primitive_status: 'asked' as const }
+      : entry);
+    const input = {
+      purpose: 'Declare mode-scoped recovery steering.',
+      extraText: 'recovery_steer guidance string emitted when a typed flag requires recovery',
     };
 
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();

@@ -384,6 +384,11 @@ export function synthesizeProgramSpecFromDomain(
     stageClassificationBySlug,
   );
   const keyedCollections = keyedCollectionsForPersistence(stages, stageClassificationBySlug, reasoningContractsBySlug, domain);
+  const recoverySteers = recoverySteersForConfirmationLoops(
+    confirmationLoops,
+    completion.collection_lifecycle,
+    transitionActions,
+  );
   const exportActions = exportTransitionActions(transitionActions);
   const hasExportDecisionOnly = exportActions.length > 0;
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
@@ -437,11 +442,17 @@ export function synthesizeProgramSpecFromDomain(
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
     ...(keyedCollections.length > 0 ? ['keyed_collection'] : []),
+    ...(recoverySteers.length > 0 ? ['recovery_steer'] : []),
   ]);
   if (keyedCollections.length > 0) {
     spec.keyed_collections = keyedCollections;
   } else {
     delete spec.keyed_collections;
+  }
+  if (recoverySteers.length > 0) {
+    spec.recovery_steers = recoverySteers;
+  } else {
+    delete spec.recovery_steers;
   }
   if (hasExportDecisionOnly) {
     spec.pure = false;
@@ -469,6 +480,7 @@ export function synthesizeProgramSpecFromDomain(
   }
 
   applyTransitions(synthesizedModes, transitionActions, modeNames);
+  applyDocumentFidelityTransitionGuards(synthesizedModes, documents);
   applyConfirmationLoopTransitionGuards(synthesizedModes, confirmationLoops, completion.collection_lifecycle, transitionActions);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
   applyStageOutputChannels(synthesizedModes, transitionActions, reasoningContractsBySlug);
@@ -950,6 +962,48 @@ function applyTransitions(
     modeTransitions.push(emittedTransition);
     fromMode.transitions = modeTransitions;
   }
+}
+
+function applyDocumentFidelityTransitionGuards(
+  modes: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  const fidelity = documentUploadedFidelityPredicate(documents);
+  if (!fidelity) {
+    return;
+  }
+  const mode = recordField(modes, documents.stage);
+  const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
+  for (const transition of transitions) {
+    const existing = isRecord(transition.guard) ? transition.guard : undefined;
+    const uploadGuard = existing ? allPredicates([existing, fidelity]) : fidelity;
+    transition.guard = documents.required
+      ? uploadGuard
+      : { kind: 'Any', subs: [documentSkipRequestedPredicate(), uploadGuard] };
+  }
+}
+
+function documentUploadedFidelityPredicate(documents: DocumentsDescriptor): MutableRecord | undefined {
+  const minChars = documentMinChars(documents);
+  if (minChars <= 0) {
+    return undefined;
+  }
+  return {
+    kind: 'FieldGreaterOrEqual',
+    path: `${documents.result_path}.char_count`,
+    value: minChars,
+  };
+}
+
+function documentSkipRequestedPredicate(): MutableRecord {
+  return { kind: 'FieldEquals', path: `${DOCUMENT_INTAKE_ROOT}.status`, value: DOCUMENT_SKIP_STATUS };
+}
+
+function allPredicates(predicates: MutableRecord[]): MutableRecord {
+  return predicates.length === 1 ? predicates[0] as MutableRecord : { kind: 'All', subs: predicates };
 }
 
 function applyConfirmationLoopTransitionGuards(
@@ -2357,6 +2411,14 @@ function applyDocumentsActionPreconditions(
       action.name,
       { kind: 'FieldTruthy', path: readyPath },
     );
+    const fidelity = documentUploadedFidelityPredicate(documents);
+    if (fidelity) {
+      appendModePrecondition(
+        mode,
+        action.name,
+        fidelity,
+      );
+    }
   }
 }
 
@@ -3381,11 +3443,39 @@ function applyConfirmationLoopPrompts(
       { name: proposeAction, channel: 'widget_output', payloadExample: proposalPayload },
       ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
     ];
-    const completionInstruction = completionActionNames.length > 0
-      ? ` When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
-      : ` When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
+    const completionInstruction = ` ${confirmationLoopCompletionGuidance(loop, completionActionNames, proposeAction)}`;
     prompts[loop.stage] = `${existing}${terminalActionInstruction(terminalActions)}\nWork through the ${itemLabelPlural} one at a time. The projected ${confirmationLoopSummaryPath(loop)} object is the bounded approval view: use its active_item and progress counts for the item under review. Use projected upstream reasoning summaries such as result_json/result, including issue_analysis, due-diligence findings, intake facts, defects, risks, qualifications, and revision instructions when present; integrate that analysis into the proposal instead of drafting blank or generic content. Do not inspect or request the full ${loop.collection} collection. Call ${proposeAction} with the proposal content for the active item only while ${loop.aggregate.guard_field} is false; the runtime selects that item and pauses for the user's decision. For ${proposeAction}, emit the proposal content as top-level payload fields, not payload.mutations; use payload: ${JSON.stringify(proposalPayload)} and do not emit an empty proposed_text. Never write item statuses yourself. A revise decision includes the user's instruction on the active item; call ${proposeAction} again with revised content.${completionInstruction}`;
   }
+}
+
+function recoverySteersForConfirmationLoops(
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor | undefined,
+  transitionActions: TransitionAction[],
+): MutableRecord[] {
+  if (!lifecycle) {
+    return [];
+  }
+  return loops.map((loop) => {
+    const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
+    const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
+    const completionActionNames = completionActions.map((action) => action.name);
+    return {
+      mode: loop.stage,
+      when: { kind: 'FieldTruthy', path: loop.aggregate.guard_field },
+      guidance: confirmationLoopCompletionGuidance(loop, completionActionNames, proposeAction),
+    };
+  });
+}
+
+function confirmationLoopCompletionGuidance(
+  loop: ConfirmationLoopDescriptor,
+  completionActionNames: string[],
+  proposeAction: string,
+): string {
+  return completionActionNames.length > 0
+    ? `When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`
+    : `When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`;
 }
 
 function applyConfirmationLoopGuidance(
@@ -3400,12 +3490,11 @@ function applyConfirmationLoopGuidance(
   for (const loop of loops) {
     const existing = Array.isArray(guidance[loop.stage]) ? guidance[loop.stage] as string[] : [];
     const proposeAction = confirmationLoopProposeActionName(loop, 0, loops.length);
-    const completionActions = confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions);
-    const completionActionNames = completionActions.map((action) => action.name);
     const proposalPayload = confirmationLoopProposalPayloadExample(loop, lifecycle);
     const terminalActions = [
       { name: proposeAction, channel: 'widget_output', payloadExample: proposalPayload },
-      ...completionActionNames.map((name) => ({ name, channel: 'widget_output' })),
+      ...confirmationLoopCompletionTransitionActionsForLoop(loop, transitionActions)
+        .map((action) => ({ name: action.name, channel: 'widget_output' })),
     ];
     guidance[loop.stage] = [
       ...existing,
@@ -3415,9 +3504,6 @@ function applyConfirmationLoopGuidance(
       `For ${proposeAction}, emit the proposal content as top-level payload fields, not payload.mutations; use payload: ${JSON.stringify(proposalPayload)} and do not emit an empty proposed_text.`,
       `Keep approval authoring bounded: use ${confirmationLoopSummaryPath(loop)} progress counts and active_item only, not the full ${loop.collection} collection.`,
       'never write item statuses yourself; status changes are deterministic reaction-owned state.',
-      ...(completionActionNames.length > 0
-        ? [`When ${loop.aggregate.guard_field} is true, all items are resolved; call ${completionActionNames.join(' or ')} exactly once to advance downstream, and do not call ${proposeAction} again or open another confirmation prompt.`]
-        : [`When ${loop.aggregate.guard_field} is true, all items are resolved; do not call ${proposeAction} again or open another confirmation prompt.`]),
     ];
   }
 }
@@ -5229,7 +5315,6 @@ function renderDocumentReactionEntries(documents: DocumentsDescriptor): string {
 
 function renderDocumentHelper(documents: DocumentsDescriptor, includeReactionHelpers: boolean): string {
   const allowedTypes = JSON.stringify(documents.upload_types);
-  const minChars = documentMinChars(documents);
   const docxExtractionEnabled = documentsDemandsSelfContainedDocx(documents);
   const extractionContract = JSON.stringify(documentIngestExtractionContract(documents));
   const reactionHelpers = includeReactionHelpers
@@ -5386,21 +5471,6 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
   const charCount = fullText.length;
   const extractionKind = combinedExtractionKind(eligible.map((entry) => entry.extraction_kind));
   const documents = eligible.map((entry, index) => documentSlice(entry.document, entry.text, entry.extraction_kind, index));
-  if (charCount < ${String(minChars)}) {
-    return {
-      status: 'blocked_low_fidelity',
-      full_text: fullText,
-      documents,
-        current_document: documents[0] ?? {},
-        char_count: charCount,
-        file_count: eligible.length,
-        document_count: documents.length,
-        files_json: JSON.stringify(eligible.map((entry, index) => documentSummaryWithIndex(entry.document, index))),
-        extraction_kind: extractionKind,
-        extraction_contract: documentExtractionContract(),
-        reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
-      };
-  }
   return {
     status: 'extracted',
     full_text: fullText,

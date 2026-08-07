@@ -7,7 +7,7 @@ import {
 } from '../../src/foundry-program/engine-primitive-registry.js';
 
 describe('engine-primitive-registry', () => {
-  it('models cursor and completion as landed active primitives without broad domain-branch enforcement', () => {
+  it('models all five convergence primitives as landed active, with numeric validation narrowed', () => {
     expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5]);
 
     const cursor = primitiveForConstruct('iteration_cursor');
@@ -41,38 +41,48 @@ describe('engine-primitive-registry', () => {
       since_engine_version: '3.29.0',
     });
 
-    expect(primitiveForConstruct('adhoc_validation_throw')).toMatchObject({
+    expect(primitiveForConstruct('numeric_validation')).toMatchObject({
       primitive_index: 4,
-      primitive_name: 'content_invariant_predicate',
-      primitive_status: 'asked',
+      primitive_name: 'numeric_comparison_predicate',
+      primitive_status: 'landed',
       pgas_ref: 'simodelne/pgas#831',
-      foundry_enforcement: 'pending',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.30.0',
     });
     expect(primitiveForConstruct('recovery_steer')).toMatchObject({
       primitive_index: 5,
       primitive_name: 'recovery_steer',
-      primitive_status: 'asked',
+      primitive_status: 'landed',
       pgas_ref: 'simodelne/pgas#831',
-      foundry_enforcement: 'pending',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.30.0',
     });
 
     expect(primitiveForConstruct('domain_shape_branch')).toBeUndefined();
-    expect([...activeEnforcedConstructs()]).toEqual(['iteration_cursor', 'completion_guard', 'compute_dedup']);
+    expect(primitiveForConstruct('adhoc_validation_throw')).toBeUndefined();
+    expect([...activeEnforcedConstructs()]).toEqual([
+      'iteration_cursor',
+      'completion_guard',
+      'compute_dedup',
+      'numeric_validation',
+      'recovery_steer',
+    ]);
     expect([...refusedConstructs()]).toEqual([]);
   });
 
   it('derives active and refused construct sets from registry enforcement flags', () => {
-    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'adhoc_validation_throw'
-      ? { ...entry, foundry_enforcement: 'active' as const }
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'numeric_validation'
+      ? { ...entry, primitive_status: 'asked' as const }
       : entry);
 
     expect([...activeEnforcedConstructs(synthetic)]).toEqual([
       'iteration_cursor',
       'completion_guard',
       'compute_dedup',
-      'adhoc_validation_throw',
+      'numeric_validation',
+      'recovery_steer',
     ]);
-    expect([...refusedConstructs(synthetic)]).toEqual(['adhoc_validation_throw']);
+    expect([...refusedConstructs(synthetic)]).toEqual(['numeric_validation']);
   });
 
   it('every entry references an existing curator-request doc path', () => {

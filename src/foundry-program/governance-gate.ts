@@ -11,6 +11,7 @@ export type GovernedConstructKind =
   | 'compute_score'
   | 'compute_sort'
   | 'adhoc_validation_throw'
+  | 'numeric_validation'
   | 'recovery_steer'
   | 'silent_catch'
   | 'json_reshape';
@@ -70,6 +71,9 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
 
     if (ts.isIfStatement(node)) {
       const governed = expressionContainsDomainRead(node.expression);
+      if (looksLikeNumericValidationIf(node, domainCollectionVariables)) {
+        addFinding('numeric_validation', node);
+      }
       if (governed) {
         addFinding('domain_shape_branch', node);
       }
@@ -442,6 +446,40 @@ function isGuidanceStringLiteral(node: ts.Node): boolean {
   return (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text.trim().length > 0;
 }
 
+function looksLikeNumericValidationIf(
+  node: ts.IfStatement,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  return expressionContainsNumericComparison(node.expression, domainReadVariables)
+    && (statementContainsThrow(node.thenStatement) || Boolean(node.elseStatement && statementContainsThrow(node.elseStatement)));
+}
+
+function expressionContainsNumericComparison(
+  node: ts.Node,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  return nodeContains(node, (candidate) => {
+    if (!ts.isBinaryExpression(candidate) || !isNumericComparisonOperator(candidate.operatorToken.kind)) {
+      return false;
+    }
+    return expressionContainsDomainReadOrAlias(candidate.left, domainReadVariables)
+      || expressionContainsDomainReadOrAlias(candidate.right, domainReadVariables);
+  });
+}
+
+function isNumericComparisonOperator(kind: ts.SyntaxKind): boolean {
+  return [
+    ts.SyntaxKind.LessThanToken,
+    ts.SyntaxKind.LessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanToken,
+    ts.SyntaxKind.GreaterThanEqualsToken,
+  ].includes(kind);
+}
+
+function statementContainsThrow(node: ts.Node): boolean {
+  return nodeContains(node, (candidate) => ts.isThrowStatement(candidate));
+}
+
 function callbackArgument(expression: ts.Expression | undefined): CallbackExpression | undefined {
   if (!expression) return undefined;
   const unwrapped = unwrapExpression(expression);
@@ -629,6 +667,27 @@ function expressionContainsDomainRead(node: ts.Node): boolean {
   let found = false;
   const visit = (candidate: ts.Node): void => {
     if (found) return;
+    if (ts.isExpression(candidate) && isDomainMemberAccess(candidate)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function expressionContainsDomainReadOrAlias(
+  node: ts.Node,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  let found = false;
+  const visit = (candidate: ts.Node): void => {
+    if (found) return;
+    if (ts.isIdentifier(candidate) && domainReadVariables.has(candidate.text) && isIdentifierReference(candidate)) {
+      found = true;
+      return;
+    }
     if (ts.isExpression(candidate) && isDomainMemberAccess(candidate)) {
       found = true;
       return;
@@ -866,6 +925,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct compute_sort requires an engine primitive or refusal; do not emit imperative sort/rank logic.${primitiveReference}`;
     case 'adhoc_validation_throw':
       return `Governed construct adhoc_validation_throw must be engine-declared as GK gates or transition preconditions, not runtime domain-shape throws.${primitiveReference}`;
+    case 'numeric_validation':
+      return `Governed construct numeric_validation must be engine-declared as numeric-comparison predicates, not imperative threshold validation.${primitiveReference}`;
     case 'recovery_steer':
       return `Governed construct recovery_steer must be engine-declared as mode-scoped recovery steering, not a typed-flag guidance emitter.${primitiveReference}`;
     case 'silent_catch':

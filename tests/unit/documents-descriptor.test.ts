@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { load } from 'js-yaml';
 import { CapabilityRefusalError, capabilityStatus, detectRequestedCapabilities } from '../../src/foundry-program/capability-registry.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import {
@@ -228,8 +229,26 @@ describe('documents descriptor capability routing', () => {
     const artifact = synthesizeProgramSpecFromDomain(linearDomain({
       'intake.documents_json': JSON.stringify(validDocuments()),
     }));
+    const parsed = load(artifact.spec_yaml) as {
+      modes: Record<string, {
+        transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+      }>;
+    };
     expect(artifact.spec_yaml).toContain('document_upload:');
     expect(artifact.spec_yaml).toContain('ingest_documents:');
+    expect(parsed.modes.ingest_source.transitions).toEqual([
+      {
+        target: 'complete',
+        guard: {
+          kind: 'All',
+          subs: [
+            { kind: 'FieldTruthy', path: 'work.source_ready' },
+            { kind: 'FieldGreaterOrEqual', path: 'work.source.char_count', value: 40 },
+          ],
+        },
+      },
+    ]);
+    expect(artifact.handlers_ts).not.toContain('charCount < 40');
   });
 });
 
