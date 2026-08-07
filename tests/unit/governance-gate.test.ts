@@ -26,6 +26,12 @@ export async function runStage(input, runtime) {
   }
   return { result_json: JSON.stringify({ next }), items_json: '[]', digest: '' };
 }`;
+const COMPLETION_GUARD_BODY = `
+export async function runStage(input, runtime) {
+  const items = input.domain['work.items'] ?? [];
+  const allApproved = items.every((item) => item.status === 'approved');
+  return { result_json: JSON.stringify({ allApproved }), items_json: '[]', digest: '' };
+}`;
 const RECOVERY_STEER_BODY = `
 export function steerRecoveryGuidance(input) {
   return input.domain.review.recovery_required
@@ -64,6 +70,11 @@ export async function runStage(input, runtime) {
     const findings = detectGovernedConstructs(ITERATION_CURSOR_BODY);
     expect(findings.map((x) => x.kind)).toContain('iteration_cursor');
   });
+  it('flags an all-items field equality check as a completion guard', () => {
+    const findings = detectGovernedConstructs(COMPLETION_GUARD_BODY);
+    expect(findings.map((x) => x.kind)).toContain('completion_guard');
+    expect(findings.map((x) => x.kind)).not.toContain('domain_shape_branch');
+  });
   it('flags a steer/guidance emitter reading a typed recovery flag', () => {
     const findings = detectGovernedConstructs(RECOVERY_STEER_BODY);
     expect(findings.map((x) => x.kind)).toContain('recovery_steer');
@@ -86,5 +97,17 @@ describe('fatalGovernanceViolations', () => {
     const findings = detectGovernedConstructs(DEDUP_BODY); // also has multi_path_fallback
     const fatal = fatalGovernanceViolations(findings, 'stage_body', new Set(['compute_dedup']));
     expect(fatal.every((v) => v.kind === 'compute_dedup')).toBe(true); // multi_path_fallback detected but not enforced yet
+  });
+  it('is fatal for active cursor and completion-guard imperative bodies', () => {
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(ITERATION_CURSOR_BODY),
+      'stage_body',
+      new Set(['iteration_cursor']),
+    ).map((v) => v.kind)).toEqual(['iteration_cursor']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(COMPLETION_GUARD_BODY),
+      'stage_body',
+      new Set(['completion_guard']),
+    ).map((v) => v.kind)).toEqual(['completion_guard']);
   });
 });

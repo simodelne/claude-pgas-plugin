@@ -3,6 +3,7 @@ import { primitiveForConstruct } from './engine-primitive-registry.js';
 
 export type GovernedConstructKind =
   | 'domain_shape_branch'
+  | 'completion_guard'
   | 'iteration_cursor'
   | 'multi_path_fallback'
   | 'compute_dedup'
@@ -123,6 +124,9 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
 
       const methodName = callMethodName(node);
       const callback = callbackArgument(node.arguments[0]);
+      if (methodName === 'every' && callback && looksLikeCompletionGuard(node, callback, domainCollectionVariables)) {
+        addFinding('completion_guard', node);
+      }
       if ((methodName === 'filter' || methodName === 'reduce') && callback) {
         const dedup = callbackReferencesSetMembership(callback, setVariables)
           || (methodName === 'reduce' && looksLikeUniquenessMapReduce(callback));
@@ -308,6 +312,56 @@ function looksLikeIterationCursor(
     }
     return callbackContains(callback, (inner) => isIdJoinComparison(inner, itemName, joinedItemName));
   });
+}
+
+function looksLikeCompletionGuard(
+  node: ts.CallExpression,
+  callback: CallbackExpression,
+  domainCollectionVariables: ReadonlySet<string>,
+): boolean {
+  const expression = unwrapExpression(node.expression);
+  if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+    return false;
+  }
+  const collectionRoot = expressionRootIdentifierName(expression.expression);
+  if (
+    (!collectionRoot || !domainCollectionVariables.has(collectionRoot))
+    && !expressionContainsDomainRead(expression.expression)
+  ) {
+    return false;
+  }
+  const itemName = parameterName(callback, 0);
+  if (!itemName) {
+    return false;
+  }
+  return callbackContains(callback, (candidate) => isItemFieldEquality(candidate, itemName));
+}
+
+function isItemFieldEquality(node: ts.Node, itemName: string): boolean {
+  if (!ts.isBinaryExpression(node)) {
+    return false;
+  }
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken && node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken) {
+    return false;
+  }
+  return hasMemberReadRootedAt(node.left, itemName) && isPrimitiveComparisonValue(node.right)
+    || hasMemberReadRootedAt(node.right, itemName) && isPrimitiveComparisonValue(node.left);
+}
+
+function hasMemberReadRootedAt(node: ts.Expression, rootName: string): boolean {
+  const expression = unwrapExpression(node);
+  return (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression))
+    && expressionRootIdentifierName(expression) === rootName;
+}
+
+function isPrimitiveComparisonValue(node: ts.Expression): boolean {
+  const expression = unwrapExpression(node);
+  return ts.isStringLiteral(expression)
+    || ts.isNoSubstitutionTemplateLiteral(expression)
+    || ts.isNumericLiteral(expression)
+    || expression.kind === ts.SyntaxKind.TrueKeyword
+    || expression.kind === ts.SyntaxKind.FalseKeyword
+    || expression.kind === ts.SyntaxKind.NullKeyword;
 }
 
 function forOfInitializerName(initializer: ts.ForInitializer): string | undefined {
@@ -796,6 +850,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
   switch (kind) {
     case 'domain_shape_branch':
       return `Governed construct domain_shape_branch must be engine-declared as modes + transition guards + enum_router, not imperative branching.${primitiveReference}`;
+    case 'completion_guard':
+      return `Governed construct completion_guard must be engine-declared as an all-items field equality derived path, not imperative every() completion logic.${primitiveReference}`;
     case 'iteration_cursor':
       return `Governed construct iteration_cursor must be engine-declared as a first-item cursor primitive, not a manual id-join loop.${primitiveReference}`;
     case 'multi_path_fallback':
