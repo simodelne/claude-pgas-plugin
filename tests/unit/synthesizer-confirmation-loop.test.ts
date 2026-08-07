@@ -95,6 +95,7 @@ const confirmationLoop = {
 };
 
 interface ParsedSpec {
+  features?: string[];
   channels: Record<string, {
     direction: string;
     sync: string;
@@ -116,6 +117,11 @@ interface ParsedSpec {
   schema: Record<string, string>;
   prompts: Record<string, string>;
   guidance: Record<string, string[]>;
+  recovery_steers?: Array<{
+    mode: string;
+    when: Record<string, unknown>;
+    guidance: string;
+  }>;
   derived_paths?: Array<{
     target: string;
     when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
@@ -169,8 +175,16 @@ describe('confirmation_loop descriptor synthesis', () => {
       { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true },
     ]);
     expect(parsed.prompts.review_work).toContain('call complete_review_work exactly once to advance downstream');
-    expect(parsed.guidance.review_work).toEqual(expect.arrayContaining([
-      expect.stringContaining('call complete_review_work exactly once to advance downstream'),
+    expect(parsed.features).toEqual(expect.arrayContaining(['recovery_steer']));
+    expect(parsed.recovery_steers).toEqual(expect.arrayContaining([
+      {
+        mode: 'review_work',
+        when: { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
+        guidance: 'When work_units.all_terminal is true, all items are resolved; call complete_review_work exactly once to advance downstream, and do not call propose_item again or open another confirmation prompt.',
+      },
+    ]));
+    expect(parsed.guidance.review_work).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('When work_units.all_terminal is true'),
     ]));
   });
 

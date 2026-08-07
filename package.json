@@ -1,6 +1,6 @@
 {
   "name": "pgas-new",
-  "version": "3.29.0",
+  "version": "3.30.0",
   "private": true,
   "type": "module",
   "description": "PGAS-specific foundry for creating TypeScript/Node PGAS programs",
@@ -19,7 +19,7 @@
     "pgas-new": "./bin/pgas-new"
   },
   "dependencies": {
-    "@simodelne/pgas-server": "^3.29.0"
+    "@simodelne/pgas-server": "^3.30.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
