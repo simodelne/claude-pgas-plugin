@@ -11,6 +11,20 @@ import type { ClassifiedStage, StageArchetype } from '../stage-classifier.js';
 import type { ReasoningStageContract } from '../reasoning-contract.js';
 
 export type CollectionStorageRepresentation = 'json_string' | 'indexed_array';
+export type NumericAggregatePredicateKind =
+  | 'FieldLessThan'
+  | 'FieldLessOrEqual'
+  | 'FieldGreaterThan'
+  | 'FieldGreaterOrEqual';
+
+export interface CollectionLifecycleNumericSumDescriptor {
+  target: string;
+  field: string;
+  predicate?: {
+    kind: NumericAggregatePredicateKind;
+    value: number;
+  };
+}
 
 export interface Stage {
   slug: string;
@@ -125,6 +139,7 @@ export interface CollectionLifecycleDescriptor {
     guard_field: string;
     terminal_statuses: string[];
     require_non_empty: boolean;
+    numeric_sums?: CollectionLifecycleNumericSumDescriptor[];
   };
 }
 

@@ -1,6 +1,6 @@
 import type { GovernedConstructKind } from './governance-gate.js';
 
-export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5;
+export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export type PrimitiveStatus = 'landed' | 'shipped' | 'building' | 'asked';
 export type FoundryEnforcement = 'active' | 'pending';
 
@@ -74,6 +74,50 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     foundry_enforcement: 'active',
     since_engine_version: '3.30.0',
     build_order_note: 'Confirmation-loop per-round recovery guidance now emits recovery_steers declarations instead of static typed-flag guidance emitters.',
+  },
+  {
+    computation_class: 'existential_completion_guard',
+    primitive_index: 6,
+    primitive_name: 'any_item_field_eq',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#844',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.32.0',
+    build_order_note: 'Narrow existential completion flag over collection field equality; emitted from the same derived-path helper as all_items_field_eq.',
+  },
+  {
+    computation_class: 'partition_by_verdict',
+    primitive_index: 7,
+    primitive_name: 'items_where_field_eq',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#844',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.32.0',
+    build_order_note: 'Narrow partition-by-verdict buckets for approval flows; broad filter/group reshaping remains outside this class.',
+  },
+  {
+    computation_class: 'numeric_aggregate',
+    primitive_index: 8,
+    primitive_name: 'sum_of',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#844',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.32.0',
+    build_order_note: 'Narrow numeric sum aggregation over indexed collection item fields; non-sum grouping/aggregation remains refused as compute_aggregate.',
+  },
+  {
+    computation_class: 'token_coverage_validation',
+    primitive_index: 9,
+    primitive_name: 'FieldContainsAll',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#844',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.32.0',
+    build_order_note: 'Narrow authored-text required-token coverage validation; other structural validation throws remain outside this primitive.',
   },
 ] as const;
 

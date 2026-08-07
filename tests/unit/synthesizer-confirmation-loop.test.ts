@@ -231,6 +231,42 @@ describe('confirmation_loop descriptor synthesis', () => {
           },
         },
       },
+      {
+        target: 'summary.confirmation_loop.has_proposed_item',
+        when: { always: true },
+        set: {
+          kind: 'any_item_field_eq',
+          params: {
+            collection_path: 'work_units.items',
+            field: 'status',
+            value: 'proposed',
+          },
+        },
+      },
+      {
+        target: 'summary.confirmation_loop.status_buckets.accepted',
+        when: { always: true },
+        set: {
+          kind: 'items_where_field_eq',
+          params: {
+            collection_path: 'work_units.items',
+            field: 'status',
+            value: 'accepted',
+          },
+        },
+      },
+      {
+        target: 'summary.confirmation_loop.status_buckets.skipped',
+        when: { always: true },
+        set: {
+          kind: 'items_where_field_eq',
+          params: {
+            collection_path: 'work_units.items',
+            field: 'status',
+            value: 'skipped',
+          },
+        },
+      },
     ]));
     expect(parsed.schema).toMatchObject({
       'work_units.items.*.__terminal': 'boolean',
@@ -239,6 +275,12 @@ describe('confirmation_loop descriptor synthesis', () => {
       'work_units.items_terminal_status.*.id': 'string',
       'work_units.items_terminal_status.*.status': 'boolean',
       'summary.confirmation_loop.active_item_id': 'any',
+      'summary.confirmation_loop.has_proposed_item': 'boolean',
+      'summary.confirmation_loop.status_buckets': 'object',
+      'summary.confirmation_loop.status_buckets.accepted': 'array',
+      'summary.confirmation_loop.status_buckets.accepted.*': 'object',
+      'summary.confirmation_loop.status_buckets.skipped': 'array',
+      'summary.confirmation_loop.status_buckets.skipped.*': 'object',
       'work_units.all_terminal': 'boolean',
     });
     expect(parsed.modes.review_work.preconditions?.propose_item).toEqual(expect.arrayContaining([
@@ -339,6 +381,9 @@ describe('confirmation_loop descriptor synthesis', () => {
       'summary.confirmation_loop',
       'summary.confirmation_loop.active_item',
       'summary.confirmation_loop.active_item_id',
+      'summary.confirmation_loop.has_proposed_item',
+      'summary.confirmation_loop.status_buckets.accepted',
+      'summary.confirmation_loop.status_buckets.skipped',
       'summary.confirmation_loop.total_items',
       'summary.confirmation_loop.terminal_items',
       'summary.confirmation_loop.pending_items',
@@ -419,6 +464,12 @@ describe('confirmation_loop descriptor synthesis', () => {
       'summary.confirmation_loop.active_item.id': 'string',
       'summary.confirmation_loop.active_item.title': 'string',
       'summary.confirmation_loop.active_item.status': 'string',
+      'summary.confirmation_loop.has_proposed_item': 'boolean',
+      'summary.confirmation_loop.status_buckets': 'object',
+      'summary.confirmation_loop.status_buckets.accepted': 'array',
+      'summary.confirmation_loop.status_buckets.accepted.*': 'object',
+      'summary.confirmation_loop.status_buckets.skipped': 'array',
+      'summary.confirmation_loop.status_buckets.skipped.*': 'object',
       'summary.confirmation_loop.total_items': 'number',
       'summary.confirmation_loop.terminal_items': 'number',
       'summary.confirmation_loop.pending_items': 'number',

@@ -651,7 +651,7 @@ action_map:
         "{\"enabled\":false}".
 
         Valid example:
-        "{\"stage\":\"ingest_source\",\"upload_types\":[\"text/plain\",\"text/markdown\"],\"extraction\":\"self_contained\",\"result_path\":\"ingest_source.source\",\"required\":false,\"fidelity_floor\":{\"min_chars\":40}}"
+        "{\"stage\":\"ingest_source\",\"upload_types\":[\"text/plain\",\"text/markdown\"],\"extraction\":\"self_contained\",\"result_path\":\"ingest_source.source\",\"required\":false,\"fidelity_floor\":{\"min_chars\":40,\"required_tokens\":[\"topic\",\"date\"]}}"
 
         Use upload_types from the engine allow-list: text/plain,
         text/markdown, application/pdf,
@@ -1256,7 +1256,7 @@ guidance:
     - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']. If the user's answer contains rich stage objects with domain_spec, rules, invariants, or produces schemas, pass that exact rich object array as stages_json; do not simplify it to a string array."
     - "Q4 Decision points — branches, loops, bail-outs; these become extra transitions, optionally with guards. Default if skipped: no extra transitions."
     - "Q5 Delegation — does any stage delegate to a child session / another program, or need an explicit per-stage execution model? Default if skipped: 'none'. Use {\"stages\":{\"<slug>\":{\"kind\":\"llm-reasoning\"|\"pure-compute\"|\"external-adapter\",\"reasoning_per_turn\":true|false}}} only when the user gives explicit per-stage execution intent; otherwise keep the legacy no-delegation shapes like {}, {\"enabled\":false}, or none."
-    - "Optional Documents Descriptor — after Q5 and before Q6, call record_documents_descriptor only when the user explicitly needs uploaded document intake. Use a JSON-string object with stage, upload_types, extraction, result_path, and optional required/fidelity_floor. For no uploaded documents, skip this action or record 'none'."
+    - "Optional Documents Descriptor — after Q5 and before Q6, call record_documents_descriptor only when the user explicitly needs uploaded document intake. Use a JSON-string object with stage, upload_types, extraction, result_path, and optional required/fidelity_floor; fidelity_floor may include min_chars and required_tokens for token coverage. For no uploaded documents, skip this action or record 'none'."
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
     - "Optional Skill Catalog — after Q6 and before record_program_intake_finalize, call record_skill_catalog only when the user explicitly needs opt-in skills, skill activation, a skill catalog, or a conversational hub that activates skill playbooks. Use a JSON-string array of {name, body} entries. For programs without skills, skip this action."
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."

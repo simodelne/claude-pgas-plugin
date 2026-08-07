@@ -37,6 +37,15 @@ describe('governance refusal for not-yet-landed primitives', () => {
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
     expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
   });
+  it('does not refuse landed #844 primitive requests', () => {
+    const input = {
+      purpose: 'Declare existential completion, partition buckets, numeric aggregation, and token coverage validation.',
+      extraText: 'any_item_field_eq for a proposed item, items_where_field_eq accepted/rejected buckets, sum_of hours feeding FieldGreaterOrEqual, FieldContainsAll required tokens',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
+  });
   it('derives pending-primitive refusal from the active registry set via a test seam', () => {
     const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'numeric_validation'
       ? { ...entry, primitive_status: 'asked' as const }
@@ -44,6 +53,23 @@ describe('governance refusal for not-yet-landed primitives', () => {
     const input = {
       purpose: 'Declare a numeric validation before finalization.',
       extraText: 'numeric comparison predicate finalization predicate FieldGreaterOrEqual char_count min_chars',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(() => assertSynthesizableCapabilitiesForPrimitiveRegistry(input, synthetic)).toThrow();
+  });
+  it('derives #844 pending-primitive refusal from the active registry set via a test seam', () => {
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => [
+      'existential_completion_guard',
+      'partition_by_verdict',
+      'numeric_aggregate',
+      'token_coverage_validation',
+    ].includes(entry.computation_class)
+      ? { ...entry, primitive_status: 'asked' as const }
+      : entry);
+    const input = {
+      purpose: 'Declare the #844 batch-1 primitives.',
+      extraText: 'any_item_field_eq items_where_field_eq sum_of FieldContainsAll required token coverage buckets',
     };
 
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
