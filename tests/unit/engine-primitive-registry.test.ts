@@ -33,8 +33,9 @@ describe('engine-primitive-registry', () => {
     expect(dedup).toMatchObject({
       primitive_index: 3,
       primitive_name: 'keyed_by',
-      primitive_status: 'building',
+      primitive_status: 'landed',
       foundry_enforcement: 'active',
+      since_engine_version: '3.29.0',
     });
 
     expect(primitiveForConstruct('adhoc_validation_throw')).toMatchObject({
@@ -53,7 +54,7 @@ describe('engine-primitive-registry', () => {
     });
 
     expect([...activeEnforcedConstructs()]).toEqual(['compute_dedup']);
-    expect([...refusedConstructs()]).toEqual(['compute_dedup']);
+    expect([...refusedConstructs()]).toEqual([]);
   });
 
   it('derives active and refused construct sets from registry enforcement flags', () => {
@@ -62,7 +63,7 @@ describe('engine-primitive-registry', () => {
       : entry);
 
     expect([...activeEnforcedConstructs(synthetic)]).toEqual(['domain_shape_branch', 'compute_dedup']);
-    expect([...refusedConstructs(synthetic)]).toEqual(['domain_shape_branch', 'compute_dedup']);
+    expect([...refusedConstructs(synthetic)]).toEqual(['domain_shape_branch']);
   });
 
   it('every entry references an existing curator-request doc path', () => {

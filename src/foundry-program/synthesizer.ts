@@ -197,6 +197,11 @@ interface HubSectionArtifactProjection {
   textPath: string;
 }
 
+interface KeyedCollectionSpecDecl {
+  collection: string;
+  key: string;
+}
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -376,6 +381,7 @@ export function synthesizeProgramSpecFromDomain(
     planTransitionActions(effectiveTransitions, effectiveCompletion, firstMode),
     stageClassificationBySlug,
   );
+  const keyedCollections = keyedCollectionsForPersistence(stages, stageClassificationBySlug, reasoningContractsBySlug, domain);
   const exportActions = exportTransitionActions(transitionActions);
   const hasExportDecisionOnly = exportActions.length > 0;
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
@@ -428,7 +434,13 @@ export function synthesizeProgramSpecFromDomain(
     ...(registeredTools.length > 0 ? ['integrations', 'tool_registry'] : []),
     ...(hasExportDecisionOnly ? ['decision_only', 'integrations'] : []),
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
+    ...(keyedCollections.length > 0 ? ['keyed_collection'] : []),
   ]);
+  if (keyedCollections.length > 0) {
+    spec.keyed_collections = keyedCollections;
+  } else {
+    delete spec.keyed_collections;
+  }
   if (hasExportDecisionOnly) {
     spec.pure = false;
   }
@@ -1130,6 +1142,78 @@ function collectFlatMirrorStages(
     }
   }
   return flatMirrorStages;
+}
+
+function keyedCollectionsForPersistence(
+  stages: Stage[],
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+  domain: Record<string, unknown>,
+): KeyedCollectionSpecDecl[] {
+  if (!stages.some((stage) => stageDeclaresPersistence(stage, stageClassificationBySlug))) {
+    return [];
+  }
+  const dedupeKey = persistenceDedupeKeyFromDomain(domain);
+  if (!dedupeKey) {
+    return [];
+  }
+
+  const declarations: KeyedCollectionSpecDecl[] = [];
+  for (const [stage, contract] of reasoningContractsBySlug) {
+    if (stageClassificationBySlug.get(stage)?.archetype !== 'llm-reasoning') {
+      continue;
+    }
+    for (const field of contract.result_schema.fields) {
+      if (
+        field.type === 'record_array' &&
+        field.record_fields !== undefined &&
+        Object.prototype.hasOwnProperty.call(field.record_fields, dedupeKey)
+      ) {
+        declarations.push({
+          collection: `${stage}.result.${field.name}`,
+          key: dedupeKey,
+        });
+      }
+    }
+  }
+
+  return uniqueKeyedCollections(declarations);
+}
+
+function stageDeclaresPersistence(
+  stage: Stage,
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+): boolean {
+  const classification = stageClassificationBySlug.get(stage.slug);
+  return classification?.integration_name === 'persistence' ||
+    classification?.connector_slug === 'persistence';
+}
+
+function persistenceDedupeKeyFromDomain(domain: Record<string, unknown>): string | undefined {
+  const config = optionalRecord(domainValue(domain, 'config'));
+  const persistence = optionalRecord(domainValue(domain, 'persistence'));
+  const configPersistence = optionalRecord(config?.persistence);
+  const candidates = [
+    domainValue(domain, 'dedupe_key'),
+    persistence?.dedupe_key,
+    config?.dedupe_key,
+    configPersistence?.dedupe_key,
+  ];
+  return candidates.find((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0);
+}
+
+function uniqueKeyedCollections(declarations: KeyedCollectionSpecDecl[]): KeyedCollectionSpecDecl[] {
+  const seen = new Set<string>();
+  const uniqueDeclarations: KeyedCollectionSpecDecl[] = [];
+  for (const declaration of declarations) {
+    const key = `${declaration.collection}\0${declaration.key}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueDeclarations.push(declaration);
+  }
+  return uniqueDeclarations;
 }
 
 function applyStageOutputMirrorReactions(

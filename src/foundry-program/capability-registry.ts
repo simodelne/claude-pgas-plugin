@@ -199,10 +199,10 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     status: 'refuses',
     evidence: capabilityEvidence([
       'governable computation is refused only for registry classes with foundry_enforcement=active and no landed primitive',
-      'today that active pending set is compute_dedup -> keyed_by; foundry refuses rather than emit brittle imperative logic',
+      'keyed_by landed in @simodelne/pgas-server 3.29.0, so compute_dedup now synthesizes as a keyed_collections declaration',
     ]),
-    since_version: '3.28.0',
-    gap_note: 'blocked on registry-active pending primitives; today compute_dedup -> keyed_by only',
+    since_version: '3.29.0',
+    gap_note: 'blocked only when a future registry-active construct lacks a landed primitive',
   },
   {
     capability: 'export_html',

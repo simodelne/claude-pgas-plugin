@@ -20,6 +20,8 @@ const VITEST_BIN = new URL('../../node_modules/vitest/vitest.mjs', import.meta.u
 
 interface ParsedSpec {
   action_map: Record<string, { mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }> }>;
+  features?: string[];
+  keyed_collections?: Array<{ collection: string; key: string }>;
   projection: Record<string, { include?: string[] }>;
   prompts: Record<string, string>;
   schema: Record<string, string>;
@@ -64,6 +66,14 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/persistence.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(true);
+      const parentSpec = load(readFileSync(join(tempDir, 'src/programs/lead-research-agent/specs.yml'), 'utf8')) as ParsedSpec;
+      expect(parentSpec.features).toContain('keyed_collection');
+      expect(parentSpec.keyed_collections).toEqual([
+        { collection: 'extract_leads.result.leads', key: 'email' },
+      ]);
+      const persistStage = readFileSync(join(tempDir, 'src/programs/lead-research-agent/stages/persist.ts'), 'utf8');
+      expect(persistStage).toContain('upsert_lead');
+      expect(persistStage).not.toMatch(/\bnew Set\b|connector\.dedupe|\.filter\s*\(|existingIds|newVsExisting\.map|safeRecordId|recordId/u);
       expect(summary.typecheck_output).not.toContain('error TS');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -254,6 +264,9 @@ describe('lead-research-agent hermetic smoke', () => {
         });
         const perSource = arrayAt(domainState, 'work.aggregate.per_source');
         const newVsExisting = arrayAt(domainState, 'work.persist.new_vs_existing');
+        const persistedEmails = newVsExisting
+          .map((entry) => isRecord(entry) ? entry.email : undefined)
+          .filter((entry): entry is string => typeof entry === 'string');
         const audit = arrayAt(domainState, 'work.audit');
         const pdfOutput = resultAt(domainState, 'render_report.output');
         const pdfBytes = Buffer.from(String(pdfOutput.pdf_base64 ?? ''), 'base64');
@@ -263,6 +276,8 @@ describe('lead-research-agent hermetic smoke', () => {
         expect(statusOf(finalSession)).toBe('complete');
         expect(perSource).toHaveLength(config.sources.length);
         expect(newVsExisting.length).toBeGreaterThan(0);
+        expect(persistedEmails).toEqual([...new Set(persistedEmails)]);
+        expect(persistedEmails.length).toBeLessThan(leadFixtures(config).length);
         expect(artifactRecord, 'pdf_report SessionArtifactRecord present').toBeTruthy();
         expect(pdfText).toContain(config.title);
         expect(audit.length).toBeGreaterThan(0);
@@ -372,7 +387,33 @@ function createLeadResearchDriveAuthor(options: {
       if (prompt.includes('complete_extract_leads') && !extractCompleted) {
         extractCompleted = true;
         const leads = leadFixtures(options.config);
-        return JSON.stringify(effect('complete_extract_leads', {
+        return JSON.stringify(effectWithMutations(
+          'complete_extract_leads',
+          [
+            { kind: 'MutationAction', name: 'complete_extract_leads', op: 'MSet', path: 'extract_leads.done', value: true },
+            ...leads.map((lead) => ({
+              kind: 'MutationAction',
+              name: 'complete_extract_leads',
+              op: 'MAppend',
+              path: 'extract_leads.result.leads',
+              value: lead,
+            })),
+            {
+              kind: 'MutationAction',
+              name: 'complete_extract_leads',
+              op: 'MSet',
+              path: 'extract_leads.raw_result_fields.lead_count',
+              value: leads.length,
+            },
+            {
+              kind: 'MutationAction',
+              name: 'complete_extract_leads',
+              op: 'MSet',
+              path: 'extract_leads.raw_result_fields.extraction_notes',
+              value: 'Hermetic extraction from mock navigation items.',
+            },
+          ],
+          {
           result_json: JSON.stringify({
             leads,
             lead_count: leads.length,
@@ -511,7 +552,7 @@ function leadFixtures(config: LeadResearchConfig): Array<Record<string, unknown>
     name: `Lead ${String(index + 1)}`,
     role: 'Engineering leader',
     company: 'Example Co',
-    email: `lead${String(index + 1)}@example.com`,
+    email: index === 1 ? 'lead1@example.com' : `lead${String(index + 1)}@example.com`,
     profile_url: source.url,
     notes: `Derived from ${source.url}`,
     relevance_score: 0.8,
@@ -520,6 +561,15 @@ function leadFixtures(config: LeadResearchConfig): Array<Record<string, unknown>
 
 function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output'): Record<string, unknown> {
   return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function effectWithMutations(
+  name: string,
+  mutations: Array<Record<string, unknown>>,
+  payload: Record<string, unknown>,
+  channel = 'widget_output',
+): Record<string, unknown> {
+  return { actions: [...mutations, { kind: 'EffectAction', name, channel, payload }] };
 }
 
 function modeOf(envelope: unknown): string | null {

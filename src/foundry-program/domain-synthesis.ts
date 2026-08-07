@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { load } from 'js-yaml';
 import ts from 'typescript';
 import { createProviderHandles } from '@simodelne/pgas-server/plugin.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
@@ -125,6 +126,7 @@ interface WebNavigationStageDescriptor {
 interface PersistenceStageDescriptor {
   integration_name: 'persistence';
   connector_slug: 'persistence';
+  keyed_collection_path?: string;
   audit_note?: string;
 }
 
@@ -208,7 +210,7 @@ export async function synthesizeDomainLogic(
     const repoIntegration = integrationForClassification(classification, integrations);
     const exportDescriptor = exportDescriptorForStage(workingArtifact, stage, classification);
     const webNavigationDescriptor = webNavigationDescriptorForStage(classification);
-    const persistenceDescriptor = persistenceDescriptorForStage(classification);
+    const persistenceDescriptor = persistenceDescriptorForStage(classification, workingArtifact);
     const domainSpec = domainSpecForStage(workingArtifact, stage);
     const verificationOptions = {
       stage,
@@ -1506,15 +1508,37 @@ function webNavigationDescriptorForStage(classification: StageClassification): W
   };
 }
 
-function persistenceDescriptorForStage(classification: StageClassification): PersistenceStageDescriptor | undefined {
+function persistenceDescriptorForStage(classification: StageClassification, artifact?: SynthesizedArtifact): PersistenceStageDescriptor | undefined {
   if (classification.integration_name !== 'persistence' && classification.connector_slug !== 'persistence') {
     return undefined;
   }
   return {
     integration_name: 'persistence',
     connector_slug: 'persistence',
+    ...keyedCollectionPathForArtifact(artifact),
     ...(classification.audit_note ? { audit_note: classification.audit_note } : {}),
   };
+}
+
+function keyedCollectionPathForArtifact(artifact: SynthesizedArtifact | undefined): { keyed_collection_path: string } | {} {
+  if (!artifact?.spec_yaml) {
+    return {};
+  }
+  const raw = load(artifact.spec_yaml) as unknown;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+  const keyedCollections = (raw as { keyed_collections?: unknown }).keyed_collections;
+  if (!Array.isArray(keyedCollections)) {
+    return {};
+  }
+  const first = keyedCollections.find((entry): entry is { collection: string } =>
+    !!entry &&
+    typeof entry === 'object' &&
+    !Array.isArray(entry) &&
+    typeof (entry as { collection?: unknown }).collection === 'string' &&
+    (entry as { collection: string }).collection.length > 0);
+  return first ? { keyed_collection_path: first.collection } : {};
 }
 
 function behaviorAuditFields(record: Pick<CacheRecord, 'behavioral_gate' | 'behavioral_fixture' | 'real_call_verified'>): Record<string, unknown> {
@@ -2092,7 +2116,7 @@ async function runPersistenceBehavioralGate(
     },
     async dedupe(records: readonly Record<string, unknown>[], connectorDedupeKey: string) {
       calls.push({ method: 'dedupe', records: records.map((record) => ({ ...record })), dedupe_key: connectorDedupeKey });
-      return persistenceGateDedupe(records, connectorDedupeKey);
+      throw new Error('stage must not call host dedupe directly; keyed_collections handles in-engine dedup');
     },
     async upsert_lead(records: readonly Record<string, unknown>[], connectorDedupeKey: string) {
       calls.push({ method: 'upsert_lead', records: records.map((record) => ({ ...record })), dedupe_key: connectorDedupeKey });
@@ -2216,41 +2240,26 @@ function assertPersistenceStageOutput(
   if (result.inserted !== 1 || result.updated !== 1) {
     return `expected inserted=1 and updated=1; got inserted=${String(result.inserted)} updated=${String(result.updated)}`;
   }
-  if (!Array.isArray(result.new_vs_existing) || result.new_vs_existing.length !== 2) {
-    return 'new_vs_existing must contain the deduped records only';
-  }
-  const statuses = result.new_vs_existing.map((record) => record && typeof record === 'object' && !Array.isArray(record)
-    ? (record as Record<string, unknown>).status
-    : undefined);
-  if (JSON.stringify(statuses) !== JSON.stringify(['existing', 'new'])) {
-    return `new_vs_existing must flag existing then new; got ${JSON.stringify(statuses)}`;
+  if (!Array.isArray(result.new_vs_existing) || result.new_vs_existing.length !== 3) {
+    return 'new_vs_existing must contain the records passed to the host connector without in-stage dedup';
   }
   const items = parseJsonArray(candidate.items_json);
   if (!items.ok || JSON.stringify(items.value) !== JSON.stringify(result.new_vs_existing)) {
     return 'items_json must encode the same new_vs_existing array';
   }
   const methods = expected.calls.map((call) => call.method);
-  const dedupeIndex = methods.indexOf('dedupe');
   const upsertIndex = methods.indexOf('upsert_lead');
-  if (dedupeIndex < 0 || upsertIndex < 0 || dedupeIndex > upsertIndex) {
-    return `expected dedupe before upsert_lead; got ${JSON.stringify(methods)}`;
+  if (JSON.stringify(methods) !== JSON.stringify(['upsert_lead'])) {
+    return `expected a single upsert_lead host call; got ${JSON.stringify(methods)}`;
   }
   if (expected.calls.some((call) => call.dedupe_key !== undefined && call.dedupe_key !== expected.dedupeKey)) {
     return 'connector calls did not use dedupe_key from input.domain';
   }
   const upsert = expected.calls[upsertIndex]!;
-  if (!upsert.records || upsert.records.length !== 2 || upsert.records[0]?.name !== 'A2' || upsert.records[1]?.email !== 'b@x.com') {
-    return `upsert_lead must receive deduped records keeping the last duplicate; got ${JSON.stringify(upsert.records)}`;
+  if (!upsert.records || upsert.records.length !== 3 || upsert.records[0]?.name !== 'A1' || upsert.records[1]?.name !== 'A2' || upsert.records[2]?.email !== 'b@x.com') {
+    return `upsert_lead must receive records without in-stage dedup; got ${JSON.stringify(upsert.records)}`;
   }
   return undefined;
-}
-
-function persistenceGateDedupe(records: readonly Record<string, unknown>[], dedupeKey: string): Record<string, unknown>[] {
-  const collapsed = new Map<string, Record<string, unknown>>();
-  for (const record of records) {
-    collapsed.set(persistenceGateRecordId(record, dedupeKey), { ...record });
-  }
-  return [...collapsed.values()];
 }
 
 function persistenceGateUpsert(
@@ -2258,8 +2267,13 @@ function persistenceGateUpsert(
   dedupeKey: string,
   existingRecords: readonly Record<string, unknown>[],
 ): { inserted: number; updated: number; ids: string[] } {
+  const collapsed = new Map<string, Record<string, unknown>>();
+  for (const record of records) {
+    collapsed.set(persistenceGateRecordId(record, dedupeKey), { ...record });
+  }
+  const dedupedRecords = [...collapsed.values()];
   const existingIds = new Set(existingRecords.map((record) => persistenceGateRecordId(record, dedupeKey)));
-  const ids = records.map((record) => persistenceGateRecordId(record, dedupeKey));
+  const ids = dedupedRecords.map((record) => persistenceGateRecordId(record, dedupeKey));
   return {
     inserted: ids.filter((id) => !existingIds.has(id)).length,
     updated: ids.filter((id) => existingIds.has(id)).length,
@@ -3378,6 +3392,9 @@ function isWebNavigationConnector(value: unknown): value is WebNavigationHostCon
 }
 
 function renderPersistenceStageBody(stage: string, descriptor: PersistenceStageDescriptor): string {
+  const keyedCollectionPath = descriptor.keyed_collection_path
+    ? `const keyedCollectionPath = ${JSON.stringify(descriptor.keyed_collection_path)};\n`
+    : 'const keyedCollectionPath = undefined;\n';
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 import { MockPersistenceConnector, type LeadRecord, type PersistenceHostConnector } from '../connectors/persistence.js';
 
@@ -3389,29 +3406,23 @@ type RuntimeWithPersistence = StageRuntime & {
 type EntityType = 'lead' | 'contact';
 
 const defaultPersistenceConnector = new MockPersistenceConnector();
+${keyedCollectionPath}
 
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = persistenceConnector(input, runtime);
   const domain = stageDomain(input);
   const dedupeKey = dedupeKeyFromDomain(domain);
-  const records = recordsFromDomain(domain);
-  const deduped = await connector.dedupe(records, dedupeKey);
-  const existingRecords = await connector.query({});
-  const existingIds = new Set(existingRecords.map((record) => safeRecordId(record, dedupeKey)).filter((value): value is string => value !== undefined));
+  const records = recordsFromDomain(domain, keyedCollectionPath);
   const upsert = entityTypeFromDomain(domain) === 'contact'
-    ? await connector.upsert_contact(deduped, dedupeKey)
-    : await connector.upsert_lead(deduped, dedupeKey);
-  const newVsExisting = deduped.map((record) => ({
-    ...record,
-    status: existingIds.has(recordId(record, dedupeKey)) ? 'existing' : 'new',
-  }));
+    ? await connector.upsert_contact(records, dedupeKey)
+    : await connector.upsert_lead(records, dedupeKey);
   return {
     result_json: JSON.stringify({
       inserted: upsert.inserted,
       updated: upsert.updated,
-      new_vs_existing: newVsExisting,
+      new_vs_existing: records,
     }),
-    items_json: JSON.stringify(newVsExisting),
+    items_json: JSON.stringify(records),
     digest: '',
     adapter_kind: 'in_memory_mock',
   };
@@ -3465,11 +3476,12 @@ function entityTypeFromDomain(domain: Record<string, unknown>): EntityType {
   return candidate === 'contact' ? 'contact' : 'lead';
 }
 
-function recordsFromDomain(domain: Record<string, unknown>): readonly LeadRecord[] {
+function recordsFromDomain(domain: Record<string, unknown>, keyedPath?: string): readonly LeadRecord[] {
   const work = recordValue(domain.work);
   const aggregate = recordValue(domain.aggregate);
   const workAggregate = recordValue(work.aggregate);
   const candidates = [
+    recordsAtPath(domain, keyedPath),
     domain.records,
     domain.leads,
     domain.contacts,
@@ -3495,6 +3507,54 @@ function recordsFromDomain(domain: Record<string, unknown>): readonly LeadRecord
   throw new Error('persistence stage requires a non-empty records, leads, contacts, or items array in input.domain');
 }
 
+function recordsAtPath(domain: Record<string, unknown>, path: string | undefined): LeadRecord[] {
+  if (!path) {
+    return [];
+  }
+  const direct = leadRecordArray(valueAtPath(domain, path));
+  if (direct.length > 0) {
+    return direct;
+  }
+  const prefix = path + '.';
+  const grouped = new Map<number, Record<string, unknown>>();
+  for (const [key, value] of Object.entries(domain)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const [indexText, ...fieldParts] = key.slice(prefix.length).split('.');
+    const index = Number(indexText);
+    if (!Number.isInteger(index) || index < 0) {
+      continue;
+    }
+    const record = grouped.get(index) ?? {};
+    if (fieldParts.length === 0) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        grouped.set(index, value as LeadRecord);
+      }
+    } else {
+      record[fieldParts.join('.')] = value;
+      grouped.set(index, record);
+    }
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, record]) => record as LeadRecord);
+}
+
+function valueAtPath(domain: Record<string, unknown>, path: string): unknown {
+  if (Object.hasOwn(domain, path)) {
+    return domain[path];
+  }
+  let cursor: unknown = domain;
+  for (const part of path.split('.')) {
+    if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor) || !Object.hasOwn(cursor, part)) {
+      return undefined;
+    }
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  return cursor;
+}
+
 function recordsFromStageOutput(value: unknown): unknown {
   const record = recordValue(value);
   const result = resultJsonRecord(record);
@@ -3517,7 +3577,13 @@ function leadRecordArray(value: unknown): LeadRecord[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((item): item is LeadRecord => !!item && typeof item === 'object' && !Array.isArray(item));
+  const records: LeadRecord[] = [];
+  for (const item of value) {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      records.push(item as LeadRecord);
+    }
+  }
+  return records;
 }
 
 function mergeRecords(defaults: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
@@ -3533,25 +3599,6 @@ function mergeRecords(defaults: Record<string, unknown>, overrides: Record<strin
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function recordId(record: LeadRecord, dedupeKey: string): string {
-  if (!Object.hasOwn(record, dedupeKey)) {
-    throw new Error('record is missing dedupe_key field ' + dedupeKey);
-  }
-  const value = record[dedupeKey];
-  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
-    throw new Error('record dedupe_key field ' + dedupeKey + ' must be a string, number, or boolean');
-  }
-  return dedupeKey + ':' + String(value);
-}
-
-function safeRecordId(record: LeadRecord, dedupeKey: string): string | undefined {
-  try {
-    return recordId(record, dedupeKey);
-  } catch {
-    return undefined;
-  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

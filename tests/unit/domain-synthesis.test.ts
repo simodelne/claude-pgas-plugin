@@ -237,6 +237,22 @@ function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
   };
 }
 
+function persistenceArtifact(): SynthesizedArtifact {
+  return {
+    ...externalArtifact('persist'),
+    stage_classification: [
+      {
+        slug: 'persist',
+        archetype: 'external-adapter',
+        adapter_kind: 'in_memory_mock',
+        integration_name: 'persistence',
+        connector_slug: 'persistence',
+        rationale: 'persist calls PersistenceHostConnector',
+      },
+    ],
+  };
+}
+
 function externalArtifactWithResultSchema(): SynthesizedArtifact {
   return {
     ...artifactWithContext(),
@@ -1512,6 +1528,28 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
         archetype: 'external-adapter',
         adapter_kind: 'in_memory_mock',
+      }));
+    });
+  });
+
+  it('renders persistence stages as thin connector glue with no imperative dedup', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(persistenceArtifact(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => {
+          throw new Error('persistence stages should use the deterministic emitter');
+        },
+      });
+
+      const body = result.stage_sources?.persist ?? '';
+      expect(body).toContain('upsert_lead');
+      expect(body).not.toMatch(/\bnew Set\b|connector\.dedupe|\.filter\s*\(|existingIds|newVsExisting\.map|safeRecordId|recordId/u);
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'persist',
+        archetype: 'external-adapter',
+        behavioral_gate: 'persistence_connector_call',
       }));
     });
   });
