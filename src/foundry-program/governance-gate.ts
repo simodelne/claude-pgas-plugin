@@ -3,12 +3,14 @@ import { primitiveForConstruct } from './engine-primitive-registry.js';
 
 export type GovernedConstructKind =
   | 'domain_shape_branch'
+  | 'iteration_cursor'
   | 'multi_path_fallback'
   | 'compute_dedup'
   | 'compute_aggregate'
   | 'compute_score'
   | 'compute_sort'
   | 'adhoc_validation_throw'
+  | 'recovery_steer'
   | 'silent_catch'
   | 'json_reshape';
 
@@ -36,6 +38,8 @@ type CallbackExpression = ts.ArrowFunction | ts.FunctionExpression;
 export function detectGovernedConstructs(sourceText: string): GovernanceFinding[] {
   const sourceFile = ts.createSourceFile('governance-gate-input.ts', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const setVariables = collectSetVariableNames(sourceFile);
+  const domainCollectionVariables = collectDomainCollectionVariableNames(sourceFile);
+  const typedFlagVariables = collectTypedFlagVariableNames(sourceFile);
   const findings: GovernanceFinding[] = [];
   const emitted = new Set<string>();
   let domainConditionDepth = 0;
@@ -55,6 +59,14 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
   };
 
   const visit = (node: ts.Node): void => {
+    if (ts.isForOfStatement(node) && looksLikeIterationCursor(node, domainCollectionVariables)) {
+      addFinding('iteration_cursor', node);
+    }
+
+    if (looksLikeRecoverySteerDeclaration(node, typedFlagVariables)) {
+      addFinding('recovery_steer', node);
+    }
+
     if (ts.isIfStatement(node)) {
       const governed = expressionContainsDomainRead(node.expression);
       if (governed) {
@@ -187,6 +199,40 @@ function collectSetVariableNames(sourceFile: ts.SourceFile): Set<string> {
   return names;
 }
 
+function collectDomainCollectionVariableNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer
+      && expressionContainsDomainRead(node.initializer)
+    ) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return names;
+}
+
+function collectTypedFlagVariableNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer
+      && expressionContainsTypedFlagRead(node.initializer, new Set())
+    ) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return names;
+}
+
 function isNewSetExpression(node: ts.Expression): boolean {
   const expression = unwrapExpression(node);
   return ts.isNewExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === 'Set';
@@ -225,6 +271,121 @@ function fallbackOperands(node: ts.Expression): ts.Expression[] {
     return [...fallbackOperands(expression.left), ...fallbackOperands(expression.right)];
   }
   return [expression];
+}
+
+function looksLikeIterationCursor(
+  node: ts.ForOfStatement,
+  domainCollectionVariables: ReadonlySet<string>,
+): boolean {
+  const itemName = forOfInitializerName(node.initializer);
+  const iteratedCollection = expressionRootIdentifierName(node.expression);
+  if (!itemName || !iteratedCollection || !domainCollectionVariables.has(iteratedCollection)) {
+    return false;
+  }
+
+  return nodeContains(node.statement, (candidate) => {
+    if (!ts.isCallExpression(candidate)) return false;
+    const methodName = callMethodName(candidate);
+    if (methodName !== 'find' && methodName !== 'some' && methodName !== 'filter') {
+      return false;
+    }
+    const expression = unwrapExpression(candidate.expression);
+    if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+      return false;
+    }
+    const joinedCollection = expressionRootIdentifierName(expression.expression);
+    if (
+      !joinedCollection
+      || joinedCollection === iteratedCollection
+      || !domainCollectionVariables.has(joinedCollection)
+    ) {
+      return false;
+    }
+    const callback = callbackArgument(candidate.arguments[0]);
+    const joinedItemName = callback ? parameterName(callback, 0) : undefined;
+    if (!callback || !joinedItemName) {
+      return false;
+    }
+    return callbackContains(callback, (inner) => isIdJoinComparison(inner, itemName, joinedItemName));
+  });
+}
+
+function forOfInitializerName(initializer: ts.ForInitializer): string | undefined {
+  if (ts.isIdentifier(initializer)) {
+    return initializer.text;
+  }
+  if (ts.isVariableDeclarationList(initializer)) {
+    const first = initializer.declarations[0];
+    return first && ts.isIdentifier(first.name) ? first.name.text : undefined;
+  }
+  return undefined;
+}
+
+function isIdJoinComparison(node: ts.Node, leftRoot: string, rightRoot: string): boolean {
+  if (!ts.isBinaryExpression(node)) {
+    return false;
+  }
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken && node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken) {
+    return false;
+  }
+  return hasIdLikeMemberRead(node.left, leftRoot) && hasIdLikeMemberRead(node.right, rightRoot)
+    || hasIdLikeMemberRead(node.left, rightRoot) && hasIdLikeMemberRead(node.right, leftRoot);
+}
+
+function hasIdLikeMemberRead(node: ts.Expression, rootName: string): boolean {
+  const expression = unwrapExpression(node);
+  if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+    return false;
+  }
+  if (expressionRootIdentifierName(expression) !== rootName) {
+    return false;
+  }
+  const memberName = memberAccessTailName(expression);
+  return Boolean(memberName && isIdLikeFieldName(memberName));
+}
+
+function memberAccessTailName(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): string | undefined {
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.name.text;
+  }
+  return staticExpressionText(node.argumentExpression);
+}
+
+function isIdLikeFieldName(name: string): boolean {
+  return /^(?:id|key|[a-z0-9]+_id|[a-z0-9]+Id|[a-z0-9]+ID|[a-z0-9]+_key)$/u.test(name);
+}
+
+function looksLikeRecoverySteerDeclaration(
+  node: ts.Node,
+  typedFlagVariables: ReadonlySet<string>,
+): boolean {
+  const candidate = recoverySteerCandidate(node);
+  if (!candidate || !isSteerLikeName(candidate.name)) {
+    return false;
+  }
+  return nodeContains(candidate.body, (inner) => isGuidanceStringLiteral(inner))
+    && expressionContainsTypedFlagRead(candidate.body, typedFlagVariables);
+}
+
+function recoverySteerCandidate(node: ts.Node): { name: string; body: ts.Node } | undefined {
+  if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+    return { name: node.name.text, body: node.body };
+  }
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+    const initializer = unwrapExpression(node.initializer);
+    if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+      return { name: node.name.text, body: initializer.body };
+    }
+  }
+  return undefined;
+}
+
+function isSteerLikeName(name: string): boolean {
+  return /^steer/i.test(name) || /guidance/i.test(name);
+}
+
+function isGuidanceStringLiteral(node: ts.Node): boolean {
+  return (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text.trim().length > 0;
 }
 
 function callbackArgument(expression: ts.Expression | undefined): CallbackExpression | undefined {
@@ -393,6 +554,10 @@ function looksLikeSortComparator(callback: CallbackExpression): boolean {
 }
 
 function callbackContains(callback: CallbackExpression, predicate: (node: ts.Node) => boolean): boolean {
+  return nodeContains(callback.body, predicate);
+}
+
+function nodeContains(node: ts.Node, predicate: (node: ts.Node) => boolean): boolean {
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
@@ -402,7 +567,7 @@ function callbackContains(callback: CallbackExpression, predicate: (node: ts.Nod
     }
     ts.forEachChild(node, visit);
   };
-  visit(callback.body);
+  visit(node);
   return found;
 }
 
@@ -411,6 +576,24 @@ function expressionContainsDomainRead(node: ts.Node): boolean {
   const visit = (candidate: ts.Node): void => {
     if (found) return;
     if (ts.isExpression(candidate) && isDomainMemberAccess(candidate)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function expressionContainsTypedFlagRead(node: ts.Node, flagVariables: ReadonlySet<string>): boolean {
+  let found = false;
+  const visit = (candidate: ts.Node): void => {
+    if (found) return;
+    if (ts.isIdentifier(candidate) && flagVariables.has(candidate.text) && isIdentifierReference(candidate)) {
+      found = true;
+      return;
+    }
+    if (ts.isExpression(candidate) && isTypedFlagDomainRead(candidate)) {
       found = true;
       return;
     }
@@ -432,6 +615,23 @@ function isDomainMemberAccess(node: ts.Expression): boolean {
     return isDomainMemberAccess(expression.expression);
   }
   return false;
+}
+
+function isTypedFlagDomainRead(node: ts.Expression): boolean {
+  const expression = unwrapExpression(node);
+  if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+    return false;
+  }
+  if (!isDomainMemberAccess(expression)) {
+    return false;
+  }
+  const memberName = memberAccessTailName(expression);
+  return Boolean(memberName && isFlagLikeFieldName(memberName));
+}
+
+function isFlagLikeFieldName(name: string): boolean {
+  return /^(?:is_[a-z0-9_]+|has_[a-z0-9_]+|needs_[a-z0-9_]+|requires_[a-z0-9_]+|should_[a-z0-9_]+|can_[a-z0-9_]+|blocked|failed|complete|completed|approved|ready|recovery_required|requires_recovery|needs_recovery)$/iu.test(name)
+    || /(?:_flag|_required|_needed|_enabled|_ready|_complete|_approved)$/iu.test(name);
 }
 
 function isInputDomainRoot(node: ts.Expression): boolean {
@@ -596,6 +796,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
   switch (kind) {
     case 'domain_shape_branch':
       return `Governed construct domain_shape_branch must be engine-declared as modes + transition guards + enum_router, not imperative branching.${primitiveReference}`;
+    case 'iteration_cursor':
+      return `Governed construct iteration_cursor must be engine-declared as a first-item cursor primitive, not a manual id-join loop.${primitiveReference}`;
     case 'multi_path_fallback':
       return `Governed construct multi_path_fallback must be engine-declared as a single read path or projection field, not fallback domain navigation.${primitiveReference}`;
     case 'compute_dedup':
@@ -608,6 +810,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct compute_sort requires an engine primitive or refusal; do not emit imperative sort/rank logic.${primitiveReference}`;
     case 'adhoc_validation_throw':
       return `Governed construct adhoc_validation_throw must be engine-declared as GK gates or transition preconditions, not runtime domain-shape throws.${primitiveReference}`;
+    case 'recovery_steer':
+      return `Governed construct recovery_steer must be engine-declared as mode-scoped recovery steering, not a typed-flag guidance emitter.${primitiveReference}`;
     case 'silent_catch':
       return `Governed construct silent_catch must rely on engine gates/preconditions for reachability, not swallowed catch blocks.${primitiveReference}`;
     case 'json_reshape':

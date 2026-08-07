@@ -1,5 +1,9 @@
 import { isRecord } from '../util/guards.js';
-import { ENGINE_PRIMITIVE_REGISTRY, primitiveForConstruct } from './engine-primitive-registry.js';
+import {
+  ENGINE_PRIMITIVE_REGISTRY,
+  refusedConstructs,
+  type EnginePrimitiveEntry,
+} from './engine-primitive-registry.js';
 // pgas-new #166 — foundry capability registry + honest refusal (uplift PR-1).
 //
 // The live 2026-07-14 Codex-driven session for the SimoneOS `contract-revision`
@@ -194,11 +198,11 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     capability: 'governed_compute_pending_primitive',
     status: 'refuses',
     evidence: capabilityEvidence([
-      'governable computation (e.g. keyed dedup/idempotent upsert) has no engine primitive yet',
-      'foundry refuses rather than emit brittle imperative logic; see engine-primitive-registry active asks',
+      'governable computation is refused only for registry classes with foundry_enforcement=active and no landed primitive',
+      'today that active pending set is compute_dedup -> keyed_by; foundry refuses rather than emit brittle imperative logic',
     ]),
     since_version: '3.28.0',
-    gap_note: 'blocked on keyed/idempotent-collection + completion-predicate engine primitives (active asks)',
+    gap_note: 'blocked on registry-active pending primitives; today compute_dedup -> keyed_by only',
   },
   {
     capability: 'export_html',
@@ -385,6 +389,34 @@ const GOVERNED_COMPUTE_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>
     label: 'idempotent collection write computation',
   },
 ] as const;
+const COMPLETION_GUARD_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:completion[-_ ]guard|completion[-_ ]predicate|all_items_field_eq)\b/i,
+    label: 'completion guard computation',
+  },
+  {
+    pattern: /\b(?:all|every) (?:items?|records?|clauses?|tasks?|entries)\b[^.]{0,80}\b(?:status|state|field)\b[^.]{0,40}\b(?:equals?|eq|is|are)\b[^.]{0,40}\b(?:complete|done|approved|accepted|terminal)\b/i,
+    label: 'all-items field equality completion computation',
+  },
+] as const;
+const ITERATION_CURSOR_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:iteration[-_ ]cursor|first_item_where_field_ne|manual id[- ]join|manual join[^.]{0,40}\bby id|loop[^.]{0,40}\bjoin[^.]{0,40}\bid)\b/i,
+    label: 'iteration cursor/manual id-join computation',
+  },
+] as const;
+const CONTENT_INVARIANT_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:content[-_ ]invariant|content_invariant_predicate|finalization predicate|authored-field invariant|authored field invariant)\b/i,
+    label: 'content invariant/finalization predicate computation',
+  },
+] as const;
+const RECOVERY_STEER_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:recovery[-_ ]steer|steer recovery|steer[^.]{0,45}\brecovery|guidance string[^.]{0,45}\b(?:flag|recovery)|typed flag[^.]{0,45}\bguidance)\b/i,
+    label: 'mode-scoped recovery steering computation',
+  },
+] as const;
 
 const KEYED_COLLECTION_SCHEMA_MARKER =
   /\b(?:dedupe_?key|dedupe|deduplicat\w*|de[-_ ]?duplicat\w*|idempotent\w*|upsert\w*|keyed[_ -]?collection|unique_?key|identity_?key|key_?field|record_?key|merge_?key|by_(?:email|id|profile_url|url|domain)|new_?vs_?existing)\b/i;
@@ -473,24 +505,58 @@ function detectDelegationCapabilities(delegation: Record<string, unknown> | unde
 function detectGovernedComputePendingPrimitiveCapabilities(
   haystack: string,
   stages: ReadonlyArray<object> | undefined,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
 ): CapabilityDemand[] {
-  const primitive = primitiveForConstruct('compute_dedup');
-  if (!primitive || primitive.status !== 'active_ask') return [];
-
   const demands: CapabilityDemand[] = [];
-  if (!hasHostBackedPersistenceDescriptor(stages, haystack)) {
-    for (const detector of GOVERNED_COMPUTE_TEXT_DETECTORS) {
-      const match = detector.pattern.exec(haystack);
-      if (!match) continue;
-      demands.push({
-        capability: GOVERNED_COMPUTE_PENDING_CAPABILITY,
-        evidence: governedComputePendingPrimitiveEvidence(
-          `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`,
-          primitive,
-        ),
-      });
-      break;
+  for (const primitive of activePendingPrimitiveEntries(primitiveRegistry)) {
+    switch (primitive.computation_class) {
+      case 'compute_dedup':
+        demands.push(...detectComputeDedupPendingPrimitiveCapabilities(haystack, stages, primitive, primitiveRegistry));
+        break;
+      case 'domain_shape_branch':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, COMPLETION_GUARD_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'iteration_cursor':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, ITERATION_CURSOR_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'adhoc_validation_throw':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, CONTENT_INVARIANT_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'recovery_steer':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, RECOVERY_STEER_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'compute_aggregate':
+      case 'compute_score':
+      case 'compute_sort':
+      case 'json_reshape':
+      case 'multi_path_fallback':
+      case 'silent_catch':
+        break;
     }
+  }
+  return demands;
+}
+
+function activePendingPrimitiveEntries(registry: readonly EnginePrimitiveEntry[]): readonly EnginePrimitiveEntry[] {
+  const activePending = refusedConstructs(registry);
+  return registry.filter((entry) => activePending.has(entry.computation_class));
+}
+
+function detectComputeDedupPendingPrimitiveCapabilities(
+  haystack: string,
+  stages: ReadonlyArray<object> | undefined,
+  primitive: EnginePrimitiveEntry,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
+): CapabilityDemand[] {
+  const demands: CapabilityDemand[] = [];
+
+  if (!hasHostBackedPersistenceDescriptor(stages, haystack)) {
+    demands.push(...detectTextualPendingPrimitiveCapabilities(
+      haystack,
+      GOVERNED_COMPUTE_TEXT_DETECTORS,
+      primitive,
+      primitiveRegistry,
+    ));
   }
 
   for (const stage of stages ?? []) {
@@ -505,6 +571,7 @@ function detectGovernedComputePendingPrimitiveCapabilities(
       evidence: governedComputePendingPrimitiveEvidence(
         `stage ${slug} domain_spec.produces ${schemaSignal}`,
         primitive,
+        primitiveRegistry,
       ),
     });
   }
@@ -512,18 +579,40 @@ function detectGovernedComputePendingPrimitiveCapabilities(
   return demands;
 }
 
-function governedComputePendingPrimitiveEvidence(
-  signal: string,
-  primitive: NonNullable<ReturnType<typeof primitiveForConstruct>>,
-): string {
-  return `${signal}; ${primitive.computation_class} maps to active engine primitive '${primitive.primitive_name}' ` +
-    `(${primitive.request_ref}); active asks: ${activePrimitiveSummary()}`;
+function detectTextualPendingPrimitiveCapabilities(
+  haystack: string,
+  detectors: readonly Omit<TextDetector, 'capability'>[],
+  primitive: EnginePrimitiveEntry,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
+): CapabilityDemand[] {
+  for (const detector of detectors) {
+    const match = detector.pattern.exec(haystack);
+    if (!match) continue;
+    return [{
+      capability: GOVERNED_COMPUTE_PENDING_CAPABILITY,
+      evidence: governedComputePendingPrimitiveEvidence(
+        `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`,
+        primitive,
+        primitiveRegistry,
+      ),
+    }];
+  }
+  return [];
 }
 
-function activePrimitiveSummary(): string {
-  return ENGINE_PRIMITIVE_REGISTRY
-    .filter((entry) => entry.status === 'active_ask')
-    .map((entry) => `${entry.primitive_name} (${entry.request_ref})`)
+function governedComputePendingPrimitiveEvidence(
+  signal: string,
+  primitive: EnginePrimitiveEntry,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
+): string {
+  return `${signal}; ${primitive.computation_class} maps to active foundry enforcement for pgas primitive ` +
+    `'${primitive.primitive_name}' (${primitive.primitive_status}; ${primitive.pgas_ref}; ${primitive.request_ref}); ` +
+    `active pending primitives: ${activePrimitiveSummary(primitiveRegistry)}`;
+}
+
+function activePrimitiveSummary(registry: readonly EnginePrimitiveEntry[]): string {
+  return activePendingPrimitiveEntries(registry)
+    .map((entry) => `${entry.primitive_name} (${entry.primitive_status}; ${entry.request_ref})`)
     .join(', ');
 }
 
@@ -686,6 +775,13 @@ function isPdfUploadType(value: string): boolean {
 }
 
 export function detectRequestedCapabilities(input: CapabilityDetectionInput): CapabilityDemand[] {
+  return detectRequestedCapabilitiesForPrimitiveRegistry(input, ENGINE_PRIMITIVE_REGISTRY);
+}
+
+export function detectRequestedCapabilitiesForPrimitiveRegistry(
+  input: CapabilityDetectionInput,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
+): CapabilityDemand[] {
   // Scan ALL string leaves (deep) of purpose + stages (incl. nested domain_spec
   // rules/invariants) + completion + extra text — not just top-level fields.
   const leaves: string[] = [];
@@ -715,7 +811,7 @@ export function detectRequestedCapabilities(input: CapabilityDetectionInput): Ca
     const match = detector.pattern.exec(haystack);
     if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
-  for (const demand of detectGovernedComputePendingPrimitiveCapabilities(haystack, input.stages)) add(demand.capability, demand.evidence);
+  for (const demand of detectGovernedComputePendingPrimitiveCapabilities(haystack, input.stages, primitiveRegistry)) add(demand.capability, demand.evidence);
   for (const demand of detectConfigDrivenExtractionSchemaCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectPdfReportExportCapabilities(input.stages)) add(demand.capability, demand.evidence);
   for (const demand of detectDocumentsCapabilities(input.documents)) add(demand.capability, demand.evidence);
@@ -775,7 +871,14 @@ export class CapabilityRefusalError extends Error {
  * programs (byte-identical output preserved).
  */
 export function assertSynthesizableCapabilities(input: CapabilityDetectionInput): CapabilityAssessment {
-  const assessment = assessCapabilities(detectRequestedCapabilities(input));
+  return assertSynthesizableCapabilitiesForPrimitiveRegistry(input, ENGINE_PRIMITIVE_REGISTRY);
+}
+
+export function assertSynthesizableCapabilitiesForPrimitiveRegistry(
+  input: CapabilityDetectionInput,
+  primitiveRegistry: readonly EnginePrimitiveEntry[],
+): CapabilityAssessment {
+  const assessment = assessCapabilities(detectRequestedCapabilitiesForPrimitiveRegistry(input, primitiveRegistry));
   const blocking = [...assessment.refuses, ...assessment.unknown];
   if (blocking.length > 0) {
     throw new CapabilityRefusalError(blocking);

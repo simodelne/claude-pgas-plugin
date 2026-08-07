@@ -21,11 +21,12 @@ import {
   fatalGovernanceViolations,
   GovernanceRefusalError,
   type GovernedArtifactKind,
+  type GovernedConstructKind,
 } from './governance-gate.js';
+import { activeEnforcedConstructs } from './engine-primitive-registry.js';
 
 const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
-const PHASE1_ENFORCED_CONSTRUCTS = new Set(['compute_dedup'] as const); // active-ask computation classes; Phase 2 expands
 const EXPORT_DOCX_IMPORT = '../export/docx.js';
 const EXPORT_HTML_IMPORT = '../export/html.js';
 const REPORT_DATA_IMPORT = '../report-data.js';
@@ -537,8 +538,12 @@ function verifyStageBody(
   return runBehavioralGate(body, archetype, options);
 }
 
-export function verifyGovernanceOfStageBody(sourceText: string, artifactKind: GovernedArtifactKind): void {
-  const violations = fatalGovernanceViolations(detectGovernedConstructs(sourceText), artifactKind, PHASE1_ENFORCED_CONSTRUCTS);
+export function verifyGovernanceOfStageBody(
+  sourceText: string,
+  artifactKind: GovernedArtifactKind,
+  enforcedConstructs: ReadonlySet<GovernedConstructKind> = activeEnforcedConstructs(),
+): void {
+  const violations = fatalGovernanceViolations(detectGovernedConstructs(sourceText), artifactKind, enforcedConstructs);
   if (violations.length > 0) throw new GovernanceRefusalError(artifactKind, violations);
 }
 

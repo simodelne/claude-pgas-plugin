@@ -14,6 +14,24 @@ export async function runStage(input, runtime) {
   const bytes = await runtime.connectors.pdf_report.render_report(report);
   return { result_json: JSON.stringify({ pdf_bytes: bytes.length }), items_json: '[]', digest: '' };
 }`;
+const ITERATION_CURSOR_BODY = `
+export async function runStage(input, runtime) {
+  const items = input.domain['work.items'] ?? [];
+  const statuses = input.domain['work.item_statuses'] ?? [];
+  const next = [];
+  for (const item of items) {
+    const status = statuses.find((candidate) => candidate.item_id === item.id);
+    if (!status || status.state !== 'pending') continue;
+    next.push(item);
+  }
+  return { result_json: JSON.stringify({ next }), items_json: '[]', digest: '' };
+}`;
+const RECOVERY_STEER_BODY = `
+export function steerRecoveryGuidance(input) {
+  return input.domain.review.recovery_required
+    ? 'Ask for a corrected answer before retrying.'
+    : 'Continue with the current approval path.';
+}`;
 
 describe('detectGovernedConstructs', () => {
   it('flags a Set-based dedup and a multi-path fallback', () => {
@@ -42,6 +60,14 @@ export async function runStage(input, runtime) {
 }`);
     expect(findings.map((x) => x.kind)).not.toContain('multi_path_fallback');
   });
+  it('flags a conservative manual id-join loop as an iteration cursor', () => {
+    const findings = detectGovernedConstructs(ITERATION_CURSOR_BODY);
+    expect(findings.map((x) => x.kind)).toContain('iteration_cursor');
+  });
+  it('flags a steer/guidance emitter reading a typed recovery flag', () => {
+    const findings = detectGovernedConstructs(RECOVERY_STEER_BODY);
+    expect(findings.map((x) => x.kind)).toContain('recovery_steer');
+  });
 });
 
 describe('fatalGovernanceViolations', () => {
@@ -49,7 +75,7 @@ describe('fatalGovernanceViolations', () => {
     const findings = detectGovernedConstructs(DEDUP_BODY);
     const fatal = fatalGovernanceViolations(findings, 'stage_body', new Set(['compute_dedup']));
     expect(fatal.length).toBeGreaterThan(0);
-    expect(fatal[0].message).toMatch(/dedup|keyed.?idempotent|engine primitive/i);
+    expect(fatal[0].message).toMatch(/dedup|keyed_by|engine primitive/i);
   });
   it('exempts the unavoidable set (byte_generator not policed even with a dedup)', () => {
     const findings = detectGovernedConstructs(DEDUP_BODY);
