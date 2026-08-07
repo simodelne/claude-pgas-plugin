@@ -32,6 +32,33 @@ export async function runStage(input, runtime) {
   const allApproved = items.every((item) => item.status === 'approved');
   return { result_json: JSON.stringify({ allApproved }), items_json: '[]', digest: '' };
 }`;
+const EXISTENTIAL_COMPLETION_BODY = `
+export async function runStage(input, runtime) {
+  const items = input.domain['work.items'] ?? [];
+  const hasProposed = items.some((item) => item.status === 'proposed');
+  return { result_json: JSON.stringify({ hasProposed }), items_json: '[]', digest: '' };
+}`;
+const PARTITION_BY_VERDICT_BODY = `
+export async function runStage(input, runtime) {
+  const items = input.domain['work.items'] ?? [];
+  const accepted = items.filter((item) => item.status === 'accepted');
+  return { result_json: JSON.stringify({ accepted }), items_json: '[]', digest: '' };
+}`;
+const NUMERIC_AGGREGATE_BODY = `
+export async function runStage(input, runtime) {
+  const items = input.domain['work.items'] ?? [];
+  const totalHours = items.reduce((total, item) => total + item.hours, 0);
+  return { result_json: JSON.stringify({ totalHours }), items_json: '[]', digest: '' };
+}`;
+const TOKEN_COVERAGE_BODY = `
+export function validateCoverage(input) {
+  const required = ['venue', 'date'];
+  const text = String(input.domain.draft.text ?? '').toLowerCase();
+  if (!required.every((token) => text.includes(token.toLowerCase()))) {
+    throw new Error('draft is missing required coverage tokens');
+  }
+  return true;
+}`;
 const RECOVERY_STEER_BODY = `
 export function steerRecoveryGuidance(input) {
   return input.domain.review.recovery_required
@@ -89,6 +116,22 @@ export async function runStage(input, runtime) {
     expect(findings.map((x) => x.kind)).toContain('completion_guard');
     expect(findings.map((x) => x.kind)).not.toContain('domain_shape_branch');
   });
+  it('flags an any-item field equality check as an existential completion guard', () => {
+    const findings = detectGovernedConstructs(EXISTENTIAL_COMPLETION_BODY);
+    expect(findings.map((x) => x.kind)).toContain('existential_completion_guard');
+  });
+  it('flags field-equality filters as partition-by-verdict computation', () => {
+    const findings = detectGovernedConstructs(PARTITION_BY_VERDICT_BODY);
+    expect(findings.map((x) => x.kind)).toContain('partition_by_verdict');
+  });
+  it('narrows numeric sum reduce from broad aggregate computation', () => {
+    const kinds = detectGovernedConstructs(NUMERIC_AGGREGATE_BODY).map((x) => x.kind);
+    expect(kinds).toContain('numeric_aggregate');
+    expect(kinds).not.toContain('compute_aggregate');
+  });
+  it('flags required-token coverage throws as token coverage validation', () => {
+    expect(detectGovernedConstructs(TOKEN_COVERAGE_BODY).map((x) => x.kind)).toContain('token_coverage_validation');
+  });
   it('flags a steer/guidance emitter reading a typed recovery flag', () => {
     const findings = detectGovernedConstructs(RECOVERY_STEER_BODY);
     expect(findings.map((x) => x.kind)).toContain('recovery_steer');
@@ -139,5 +182,27 @@ describe('fatalGovernanceViolations', () => {
       'stage_body',
       new Set(['recovery_steer']),
     ).map((v) => v.kind)).toEqual(['recovery_steer']);
+  });
+  it('is fatal for active #844 primitive imperative bodies', () => {
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(EXISTENTIAL_COMPLETION_BODY),
+      'stage_body',
+      new Set(['existential_completion_guard']),
+    ).map((v) => v.kind)).toEqual(['existential_completion_guard']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(PARTITION_BY_VERDICT_BODY),
+      'stage_body',
+      new Set(['partition_by_verdict']),
+    ).map((v) => v.kind)).toEqual(['partition_by_verdict']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(NUMERIC_AGGREGATE_BODY),
+      'stage_body',
+      new Set(['numeric_aggregate']),
+    ).map((v) => v.kind)).toEqual(['numeric_aggregate']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(TOKEN_COVERAGE_BODY),
+      'stage_body',
+      new Set(['token_coverage_validation']),
+    ).map((v) => v.kind)).toEqual(['token_coverage_validation']);
   });
 });

@@ -22,6 +22,7 @@ import {
 } from './reasoning-contract.js';
 import type {
   CollectionLifecycleDescriptor,
+  CollectionLifecycleNumericSumDescriptor,
   CollectionStorageRepresentation,
   Completion,
   ConfirmationLoopDecisionDescriptor,
@@ -31,6 +32,7 @@ import type {
   IntakeTransition,
   Interaction,
   MutableRecord,
+  NumericAggregatePredicateKind,
   PlannedTransitionAction,
   Stage,
   StageArtifactDescriptor,
@@ -482,6 +484,7 @@ export function synthesizeProgramSpecFromDomain(
   applyTransitions(synthesizedModes, transitionActions, modeNames);
   applyDocumentFidelityTransitionGuards(synthesizedModes, documents);
   applyConfirmationLoopTransitionGuards(synthesizedModes, confirmationLoops, completion.collection_lifecycle, transitionActions);
+  applyCollectionNumericAggregateTransitionGuards(synthesizedModes, completion.collection_lifecycle);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
   applyStageOutputChannels(synthesizedModes, transitionActions, reasoningContractsBySlug);
   if (completion.collection_lifecycle) {
@@ -987,15 +990,24 @@ function applyDocumentFidelityTransitionGuards(
 }
 
 function documentUploadedFidelityPredicate(documents: DocumentsDescriptor): MutableRecord | undefined {
+  const predicates: MutableRecord[] = [];
   const minChars = documentMinChars(documents);
-  if (minChars <= 0) {
-    return undefined;
+  if (minChars > 0) {
+    predicates.push({
+      kind: 'FieldGreaterOrEqual',
+      path: `${documents.result_path}.char_count`,
+      value: minChars,
+    });
   }
-  return {
-    kind: 'FieldGreaterOrEqual',
-    path: `${documents.result_path}.char_count`,
-    value: minChars,
-  };
+  const requiredTokens = documentRequiredTokens(documents);
+  if (requiredTokens.length > 0) {
+    predicates.push({
+      kind: 'FieldContainsAll',
+      path: `${documents.result_path}.full_text`,
+      value: requiredTokens,
+    });
+  }
+  return predicates.length === 0 ? undefined : allPredicates(predicates);
 }
 
 function documentSkipRequestedPredicate(): MutableRecord {
@@ -1003,7 +1015,11 @@ function documentSkipRequestedPredicate(): MutableRecord {
 }
 
 function allPredicates(predicates: MutableRecord[]): MutableRecord {
-  return predicates.length === 1 ? predicates[0] as MutableRecord : { kind: 'All', subs: predicates };
+  const flattened = predicates.flatMap((predicate) =>
+    predicate.kind === 'All' && Array.isArray(predicate.subs)
+      ? predicate.subs as MutableRecord[]
+      : [predicate]);
+  return flattened.length === 1 ? flattened[0] as MutableRecord : { kind: 'All', subs: flattened };
 }
 
 function applyConfirmationLoopTransitionGuards(
@@ -1029,6 +1045,60 @@ function applyConfirmationLoopTransitionGuards(
       }
     }
   }
+}
+
+function applyCollectionNumericAggregateTransitionGuards(
+  modes: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor | undefined,
+): void {
+  if (!descriptor) {
+    return;
+  }
+  const predicates = collectionLifecycleNumericAggregatePredicates(descriptor);
+  if (predicates.length === 0) {
+    return;
+  }
+  for (const rawMode of Object.values(modes)) {
+    if (!isRecord(rawMode) || !Array.isArray(rawMode.transitions)) {
+      continue;
+    }
+    for (const transition of rawMode.transitions) {
+      if (!isRecord(transition) || !isRecord(transition.guard)) {
+        continue;
+      }
+      if (!isCollectionLifecycleCompletionGuard(transition.guard, descriptor)) {
+        continue;
+      }
+      transition.guard = allPredicates([transition.guard, ...predicates]);
+    }
+  }
+}
+
+function collectionLifecycleNumericAggregatePredicates(
+  descriptor: CollectionLifecycleDescriptor,
+): MutableRecord[] {
+  return (descriptor.aggregate.numeric_sums ?? [])
+    .flatMap((sum) => sum.predicate
+      ? [{
+          kind: sum.predicate.kind,
+          path: sum.target,
+          value: sum.predicate.value,
+        }]
+      : []);
+}
+
+function isCollectionLifecycleCompletionGuard(
+  guard: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): boolean {
+  return (
+    guard.kind === 'FieldTruthy' &&
+    guard.path === descriptor.aggregate.guard_field
+  ) || (
+    guard.kind === 'AllItemsStatus' &&
+    guard.path === collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path) &&
+    guard.value === true
+  );
 }
 
 function applyModeVocabularies(
@@ -1382,23 +1452,50 @@ function applyCollectionCompletionDerivedPaths(
   const derivedPaths = Array.isArray(spec.derived_paths) ? spec.derived_paths as MutableRecord[] : [];
   if (descriptor?.storage.representation === 'indexed_array') {
     const terminalItemsPath = collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path);
-    appendDerivedPathRule(derivedPaths, {
-      target: descriptor.aggregate.guard_field,
-      when: { always: true },
-      set: {
-        kind: 'all_items_field_eq',
-        params: {
-          collection_path: terminalItemsPath,
-          field: DERIVED_TERMINAL_STATUS_FIELD,
-          value: true,
+    appendFieldEqualityDerivedPathRule(
+      derivedPaths,
+      descriptor.aggregate.guard_field,
+      'all_items_field_eq',
+      terminalItemsPath,
+      DERIVED_TERMINAL_STATUS_FIELD,
+      true,
+    );
+    for (const numericSum of descriptor.aggregate.numeric_sums ?? []) {
+      appendDerivedPathRule(derivedPaths, {
+        target: numericSum.target,
+        when: { always: true },
+        set: {
+          kind: 'sum_of',
+          params: {
+            collection_path: descriptor.storage.items_path,
+            field: numericSum.field,
+          },
         },
-      },
-    });
+      });
+    }
   }
   if (descriptor) {
     for (const loop of loops) {
       if (loop.collection !== descriptor.storage.items_path) {
         continue;
+      }
+      appendFieldEqualityDerivedPathRule(
+        derivedPaths,
+        confirmationLoopHasProposedItemPath(loop),
+        'any_item_field_eq',
+        loop.collection,
+        descriptor.item.status_field,
+        loop.proposed_status,
+      );
+      for (const status of descriptor.statuses) {
+        appendFieldEqualityDerivedPathRule(
+          derivedPaths,
+          confirmationLoopStatusBucketPath(loop, status.name),
+          'items_where_field_eq',
+          loop.collection,
+          descriptor.item.status_field,
+          status.name,
+        );
       }
       appendDerivedPathRule(derivedPaths, {
         target: confirmationLoopActiveItemIdPath(loop),
@@ -1420,6 +1517,28 @@ function applyCollectionCompletionDerivedPaths(
   } else {
     delete spec.derived_paths;
   }
+}
+
+function appendFieldEqualityDerivedPathRule(
+  derivedPaths: MutableRecord[],
+  target: string,
+  kind: 'all_items_field_eq' | 'any_item_field_eq' | 'items_where_field_eq',
+  collectionPath: string,
+  field: string,
+  value: unknown,
+): void {
+  appendDerivedPathRule(derivedPaths, {
+    target,
+    when: { always: true },
+    set: {
+      kind,
+      params: {
+        collection_path: collectionPath,
+        field,
+        value,
+      },
+    },
+  });
 }
 
 function appendDerivedPathRule(derivedPaths: MutableRecord[], rule: MutableRecord): void {
@@ -1484,6 +1603,9 @@ function applyCollectionLifecycleSchema(
   schema[descriptor.storage.event_path] = 'string';
   schema[descriptor.storage.violation_path] = 'string';
   schema[descriptor.aggregate.guard_field] = 'boolean';
+  for (const numericSum of descriptor.aggregate.numeric_sums ?? []) {
+    schema[numericSum.target] = 'number';
+  }
 }
 
 function applyCollectionLifecycleProjection(
@@ -3365,7 +3487,7 @@ function applyConfirmationLoopProjection(
         !path.endsWith('.items_json') &&
         path !== loop.collection &&
         !path.startsWith(`${loop.collection}.`)),
-      ...confirmationLoopApproveProjectionPaths(loop),
+      ...confirmationLoopApproveProjectionPaths(loop, lifecycle),
       ...confirmationLoopActiveItemProjectionPaths(loop, lifecycle),
     ]);
     if (!Array.isArray(modeProjection.exclude)) {
@@ -3391,7 +3513,10 @@ function applyConfirmationLoopProjection(
   }
 }
 
-function confirmationLoopApproveProjectionPaths(loop: ConfirmationLoopDescriptor): string[] {
+function confirmationLoopApproveProjectionPaths(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
   const summaryPath = confirmationLoopSummaryPath(loop);
   return unique([
     'inputs.user_decision.decision',
@@ -3404,12 +3529,21 @@ function confirmationLoopApproveProjectionPaths(loop: ConfirmationLoopDescriptor
     summaryPath,
     `${summaryPath}.active_item`,
     confirmationLoopActiveItemIdPath(loop),
+    confirmationLoopHasProposedItemPath(loop),
+    ...confirmationLoopStatusBucketProjectionPaths(loop, lifecycle),
     `${summaryPath}.total_items`,
     `${summaryPath}.terminal_items`,
     `${summaryPath}.pending_items`,
     `${summaryPath}.proposed_items`,
     `${summaryPath}.current_index`,
   ]);
+}
+
+function confirmationLoopStatusBucketProjectionPaths(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
+  return lifecycle.statuses.map((status) => confirmationLoopStatusBucketPath(loop, status.name));
 }
 
 function confirmationLoopActiveItemProjectionPaths(
@@ -3646,6 +3780,17 @@ function applyConfirmationLoopSchema(
     schema[confirmationLoopSummaryPath(loop)] = 'object';
     schema[`${confirmationLoopSummaryPath(loop)}.active_item`] = 'object';
     schema[confirmationLoopActiveItemIdPath(loop)] = 'any';
+    schema[confirmationLoopHasProposedItemPath(loop)] = 'boolean';
+    schema[confirmationLoopStatusBucketsPath(loop)] = 'object';
+    for (const status of lifecycle.statuses) {
+      const bucketPath = confirmationLoopStatusBucketPath(loop, status.name);
+      schema[bucketPath] = 'array';
+      schema[`${bucketPath}.*`] = 'object';
+      for (const [fieldName, fieldType] of Object.entries(lifecycle.item.schema)) {
+        schema[`${bucketPath}.*.${fieldName}`] = fieldType;
+      }
+      schema[`${bucketPath}.*.${lifecycle.item.status_field}`] = 'string';
+    }
     schema[`${confirmationLoopSummaryPath(loop)}.total_items`] = 'number';
     schema[`${confirmationLoopSummaryPath(loop)}.terminal_items`] = 'number';
     schema[`${confirmationLoopSummaryPath(loop)}.pending_items`] = 'number';
@@ -3761,6 +3906,18 @@ function confirmationLoopSummaryPath(loop: ConfirmationLoopDescriptor): string {
 
 function confirmationLoopActiveItemIdPath(loop: ConfirmationLoopDescriptor): string {
   return `${confirmationLoopSummaryPath(loop)}.active_item_id`;
+}
+
+function confirmationLoopHasProposedItemPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopSummaryPath(loop)}.has_proposed_item`;
+}
+
+function confirmationLoopStatusBucketsPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopSummaryPath(loop)}.status_buckets`;
+}
+
+function confirmationLoopStatusBucketPath(loop: ConfirmationLoopDescriptor, status: string): string {
+  return `${confirmationLoopStatusBucketsPath(loop)}.${safeIdentifier(status)}`;
 }
 
 function confirmationLoopViolationPath(
@@ -5684,6 +5841,22 @@ function isDocumentRecord(value: unknown): value is Record<string, unknown> {
 function documentMinChars(documents: DocumentsDescriptor): number {
   const value = documents.fidelity_floor?.min_chars;
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function documentRequiredTokens(documents: DocumentsDescriptor): string[] {
+  const value = documents.fidelity_floor?.required_tokens;
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('documents.fidelity_floor.required_tokens must be a non-empty array of non-blank strings');
+  }
+  return value.map((token, index) => {
+    if (typeof token !== 'string' || token.trim().length === 0) {
+      throw new Error(`documents.fidelity_floor.required_tokens[${index}] must be a non-blank string`);
+    }
+    return token.trim();
+  });
 }
 
 function stageOutputMirrorReactionHelper(): string {
@@ -12633,6 +12806,7 @@ export function normalizeCollectionLifecycleDescriptor(value: unknown): Collecti
   const storage = requiredRecord(descriptor.storage, 'collection_lifecycle.storage');
   const item = requiredRecord(descriptor.item, 'collection_lifecycle.item');
   const aggregate = requiredRecord(descriptor.aggregate, 'collection_lifecycle.aggregate');
+  const numericSums = normalizeCollectionLifecycleNumericSums(aggregate.numeric_sums);
   const statuses = requiredArray(descriptor.statuses, 'collection_lifecycle.statuses').map((status, index) => {
     const record = requiredRecord(status, `collection_lifecycle.statuses[${index}]`);
     return {
@@ -12680,8 +12854,54 @@ export function normalizeCollectionLifecycleDescriptor(value: unknown): Collecti
       guard_field: requiredString(aggregate.guard_field, 'collection_lifecycle.aggregate.guard_field'),
       terminal_statuses: requiredStringList(aggregate.terminal_statuses, 'collection_lifecycle.aggregate.terminal_statuses'),
       require_non_empty: requiredBoolean(aggregate.require_non_empty, 'collection_lifecycle.aggregate.require_non_empty'),
+      ...(numericSums.length > 0 ? { numeric_sums: numericSums } : {}),
     },
   };
+}
+
+function normalizeCollectionLifecycleNumericSums(
+  value: unknown,
+): CollectionLifecycleNumericSumDescriptor[] {
+  if (value === undefined) {
+    return [];
+  }
+  return requiredArray(value, 'collection_lifecycle.aggregate.numeric_sums').map((raw, index) => {
+    const record = requiredRecord(raw, `collection_lifecycle.aggregate.numeric_sums[${index}]`);
+    const predicateRaw = record.predicate;
+    const predicate = predicateRaw === undefined
+      ? undefined
+      : normalizeCollectionLifecycleNumericPredicate(
+          predicateRaw,
+          `collection_lifecycle.aggregate.numeric_sums[${index}].predicate`,
+        );
+    return {
+      target: requiredString(record.target, `collection_lifecycle.aggregate.numeric_sums[${index}].target`),
+      field: requiredString(record.field, `collection_lifecycle.aggregate.numeric_sums[${index}].field`),
+      ...(predicate ? { predicate } : {}),
+    };
+  });
+}
+
+function normalizeCollectionLifecycleNumericPredicate(
+  value: unknown,
+  label: string,
+): { kind: NumericAggregatePredicateKind; value: number } {
+  const record = requiredRecord(value, label);
+  const kind = requiredString(record.kind, `${label}.kind`);
+  if (!isNumericAggregatePredicateKind(kind)) {
+    throw new Error(`${label}.kind must be a numeric comparison predicate`);
+  }
+  return {
+    kind,
+    value: requiredNumber(record.value, `${label}.value`),
+  };
+}
+
+function isNumericAggregatePredicateKind(kind: string): kind is NumericAggregatePredicateKind {
+  return kind === 'FieldLessThan' ||
+    kind === 'FieldLessOrEqual' ||
+    kind === 'FieldGreaterThan' ||
+    kind === 'FieldGreaterOrEqual';
 }
 
 export function assertCollectionLifecycleDescriptor(descriptor: CollectionLifecycleDescriptor): void {
@@ -12720,6 +12940,29 @@ export function assertCollectionLifecycleDescriptor(descriptor: CollectionLifecy
   }
   if (!normalizeGuardField(descriptor.aggregate.guard_field)) {
     throw new Error('collection_lifecycle.aggregate.guard_field is required');
+  }
+  assertCollectionLifecycleNumericSums(descriptor);
+}
+
+function assertCollectionLifecycleNumericSums(descriptor: CollectionLifecycleDescriptor): void {
+  const sums = descriptor.aggregate.numeric_sums ?? [];
+  if (sums.length === 0) {
+    return;
+  }
+  if (descriptor.storage.representation !== 'indexed_array') {
+    throw new Error('collection_lifecycle.aggregate.numeric_sums requires indexed_array storage');
+  }
+  const targets = sums.map((sum) => sum.target);
+  if (new Set(targets).size !== targets.length) {
+    throw new Error('collection_lifecycle.aggregate.numeric_sums targets must be unique');
+  }
+  for (const sum of sums) {
+    if (!normalizeGuardField(sum.target)) {
+      throw new Error('collection_lifecycle.aggregate.numeric_sums[].target must be a path');
+    }
+    if (descriptor.item.schema[sum.field] !== 'number') {
+      throw new Error(`collection_lifecycle.aggregate.numeric_sums field must reference a numeric item schema field; got ${sum.field}`);
+    }
   }
 }
 
@@ -12885,6 +13128,7 @@ export function assertDocumentsDescriptor(
   ) {
     throw new Error(`documents.result_path must not be under ${DOCUMENT_INTAKE_ROOT}`);
   }
+  documentRequiredTokens(descriptor);
 
   const delegationChildren = Array.isArray(context.delegation?.children)
     ? context.delegation.children

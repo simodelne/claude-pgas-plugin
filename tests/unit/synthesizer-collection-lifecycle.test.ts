@@ -74,7 +74,7 @@ interface ParsedSpec {
   channels: Record<string, { direction: string; sync: string }>;
   modes: Record<string, {
     channels?: string[];
-    transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+    transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
     vocabulary?: string[];
   }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
@@ -234,6 +234,53 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(parsed.reactions).not.toHaveProperty('compute_work_units_all_terminal');
     expect(parsed.schema).not.toHaveProperty('work_units.items_json');
     expect(parsed.projection.review_work.include).toContain('work_units.items');
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('emits sum_of numeric aggregate targets and feeds numeric transition predicates', () => {
+    const lifecycle = clone(indexedArrayLifecycle()) as Record<string, unknown>;
+    const item = lifecycle.item as { schema: Record<string, unknown> };
+    item.schema.hours = 'number';
+    const aggregate = lifecycle.aggregate as Record<string, unknown>;
+    aggregate.numeric_sums = [
+      {
+        target: 'work_units.total_hours',
+        field: 'hours',
+        predicate: { kind: 'FieldGreaterOrEqual', value: 8 },
+      },
+    ];
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(lifecycle));
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.schema).toMatchObject({
+      'work_units.items.*.hours': 'number',
+      'work_units.total_hours': 'number',
+    });
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      {
+        target: 'work_units.total_hours',
+        when: { always: true },
+        set: {
+          kind: 'sum_of',
+          params: {
+            collection_path: 'work_units.items',
+            field: 'hours',
+          },
+        },
+      },
+    ]));
+    expect(parsed.modes.review_work.transitions).toEqual([
+      {
+        target: 'complete',
+        guard: {
+          kind: 'All',
+          subs: [
+            { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
+            { kind: 'FieldGreaterOrEqual', path: 'work_units.total_hours', value: 8 },
+          ],
+        },
+      },
+    ]);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 

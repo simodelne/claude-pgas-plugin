@@ -181,6 +181,14 @@ export interface SynthesisContext {
         guard_field: string;
         terminal_statuses: string[];
         require_non_empty: boolean;
+        numeric_sums?: Array<{
+          target: string;
+          field: string;
+          predicate?: {
+            kind: 'FieldLessThan' | 'FieldLessOrEqual' | 'FieldGreaterThan' | 'FieldGreaterOrEqual';
+            value: number;
+          };
+        }>;
       };
     };
   };

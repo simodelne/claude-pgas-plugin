@@ -4,14 +4,18 @@ import { primitiveForConstruct } from './engine-primitive-registry.js';
 export type GovernedConstructKind =
   | 'domain_shape_branch'
   | 'completion_guard'
+  | 'existential_completion_guard'
   | 'iteration_cursor'
   | 'multi_path_fallback'
   | 'compute_dedup'
+  | 'numeric_aggregate'
   | 'compute_aggregate'
+  | 'partition_by_verdict'
   | 'compute_score'
   | 'compute_sort'
   | 'adhoc_validation_throw'
   | 'numeric_validation'
+  | 'token_coverage_validation'
   | 'recovery_steer'
   | 'silent_catch'
   | 'json_reshape';
@@ -131,14 +135,27 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
       if (methodName === 'every' && callback && looksLikeCompletionGuard(node, callback, domainCollectionVariables)) {
         addFinding('completion_guard', node);
       }
+      if (methodName === 'every' && callback && looksLikeTokenCoverageEvery(callback, domainCollectionVariables)) {
+        addFinding('token_coverage_validation', node);
+      }
+      if (methodName === 'some' && callback && looksLikeCompletionGuard(node, callback, domainCollectionVariables)) {
+        addFinding('existential_completion_guard', node);
+      }
+      if (methodName === 'filter' && callback && looksLikeCompletionGuard(node, callback, domainCollectionVariables)) {
+        addFinding('partition_by_verdict', node);
+      }
       if ((methodName === 'filter' || methodName === 'reduce') && callback) {
         const dedup = callbackReferencesSetMembership(callback, setVariables)
           || (methodName === 'reduce' && looksLikeUniquenessMapReduce(callback));
         if (dedup) {
           addFinding('compute_dedup', node);
         }
-        if (methodName === 'reduce' && !dedup && looksLikeAggregateReduce(node, callback)) {
-          addFinding('compute_aggregate', node);
+        if (methodName === 'reduce' && !dedup) {
+          if (looksLikeNumericSumReduce(node, callback)) {
+            addFinding('numeric_aggregate', node);
+          } else if (looksLikeAggregateReduce(node, callback)) {
+            addFinding('compute_aggregate', node);
+          }
         }
       }
 
@@ -339,6 +356,30 @@ function looksLikeCompletionGuard(
     return false;
   }
   return callbackContains(callback, (candidate) => isItemFieldEquality(candidate, itemName));
+}
+
+function looksLikeTokenCoverageEvery(
+  callback: CallbackExpression,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  const tokenName = parameterName(callback, 0);
+  if (!tokenName) {
+    return false;
+  }
+  return callbackContains(callback, (candidate) => {
+    if (!ts.isCallExpression(candidate) || callMethodName(candidate) !== 'includes') {
+      return false;
+    }
+    const expression = unwrapExpression(candidate.expression);
+    if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+      return false;
+    }
+    const includesReceiver = expression.expression;
+    const includesArgument = candidate.arguments[0];
+    return Boolean(includesArgument) &&
+      expressionContainsIdentifierReference(includesArgument, tokenName) &&
+      expressionContainsDomainReadOrAlias(includesReceiver, domainReadVariables);
+  });
 }
 
 function isItemFieldEquality(node: ts.Node, itemName: string): boolean {
@@ -561,6 +602,35 @@ function looksLikeAggregateReduce(call: ts.CallExpression, callback: CallbackExp
   return false;
 }
 
+function looksLikeNumericSumReduce(call: ts.CallExpression, callback: CallbackExpression): boolean {
+  const initialValue = call.arguments[1];
+  if (!initialValue || !ts.isNumericLiteral(unwrapExpression(initialValue))) {
+    return false;
+  }
+  const accumulatorName = parameterName(callback, 0);
+  const itemName = parameterName(callback, 1);
+  if (!accumulatorName || !itemName) {
+    return false;
+  }
+  return callbackContains(callback, (node) => {
+    if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.PlusToken) {
+      return false;
+    }
+    return isAccumulatorPlusItemField(node.left, node.right, accumulatorName, itemName)
+      || isAccumulatorPlusItemField(node.right, node.left, accumulatorName, itemName);
+  });
+}
+
+function isAccumulatorPlusItemField(
+  left: ts.Expression,
+  right: ts.Expression,
+  accumulatorName: string,
+  itemName: string,
+): boolean {
+  return expressionRootIdentifierName(left) === accumulatorName &&
+    expressionContainsMemberReadRootedAt(right, new Set([itemName]));
+}
+
 function callbackMutatesAccumulator(callback: CallbackExpression): boolean {
   const accumulatorName = parameterName(callback, 0);
   if (!accumulatorName) {
@@ -689,6 +759,20 @@ function expressionContainsDomainReadOrAlias(
       return;
     }
     if (ts.isExpression(candidate) && isDomainMemberAccess(candidate)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function expressionContainsIdentifierReference(node: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (candidate: ts.Node): void => {
+    if (found) return;
+    if (ts.isIdentifier(candidate) && candidate.text === name && isIdentifierReference(candidate)) {
       found = true;
       return;
     }
@@ -911,14 +995,20 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct domain_shape_branch must be engine-declared as modes + transition guards + enum_router, not imperative branching.${primitiveReference}`;
     case 'completion_guard':
       return `Governed construct completion_guard must be engine-declared as an all-items field equality derived path, not imperative every() completion logic.${primitiveReference}`;
+    case 'existential_completion_guard':
+      return `Governed construct existential_completion_guard must be engine-declared as an any-item field equality derived path, not imperative some() completion logic.${primitiveReference}`;
     case 'iteration_cursor':
       return `Governed construct iteration_cursor must be engine-declared as a first-item cursor primitive, not a manual id-join loop.${primitiveReference}`;
     case 'multi_path_fallback':
       return `Governed construct multi_path_fallback must be engine-declared as a single read path or projection field, not fallback domain navigation.${primitiveReference}`;
     case 'compute_dedup':
       return `Governed construct compute_dedup requires a keyed/idempotent collection engine primitive or refusal; do not emit imperative dedup logic.${primitiveReference}`;
+    case 'numeric_aggregate':
+      return `Governed construct numeric_aggregate must be engine-declared as a sum_of derived path feeding numeric predicates, not imperative sum reducers.${primitiveReference}`;
     case 'compute_aggregate':
       return `Governed construct compute_aggregate requires an engine primitive or refusal; do not emit imperative aggregate/group logic.${primitiveReference}`;
+    case 'partition_by_verdict':
+      return `Governed construct partition_by_verdict must be engine-declared as items_where_field_eq derived buckets, not imperative field-equality filters.${primitiveReference}`;
     case 'compute_score':
       return `Governed construct compute_score requires an engine primitive or refusal; do not emit imperative score/rank logic.${primitiveReference}`;
     case 'compute_sort':
@@ -927,6 +1017,8 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct adhoc_validation_throw must be engine-declared as GK gates or transition preconditions, not runtime domain-shape throws.${primitiveReference}`;
     case 'numeric_validation':
       return `Governed construct numeric_validation must be engine-declared as numeric-comparison predicates, not imperative threshold validation.${primitiveReference}`;
+    case 'token_coverage_validation':
+      return `Governed construct token_coverage_validation must be engine-declared as FieldContainsAll, not imperative required-token includes checks.${primitiveReference}`;
     case 'recovery_steer':
       return `Governed construct recovery_steer must be engine-declared as mode-scoped recovery steering, not a typed-flag guidance emitter.${primitiveReference}`;
     case 'silent_catch':

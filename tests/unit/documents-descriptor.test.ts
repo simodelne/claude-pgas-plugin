@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { load } from 'js-yaml';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { CapabilityRefusalError, capabilityStatus, detectRequestedCapabilities } from '../../src/foundry-program/capability-registry.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import {
@@ -250,6 +254,44 @@ describe('documents descriptor capability routing', () => {
     ]);
     expect(artifact.handlers_ts).not.toContain('charCount < 40');
   });
+
+  it('emits FieldContainsAll for required document token coverage', () => {
+    const artifact = synthesizeProgramSpecFromDomain(linearDomain({
+      'intake.documents_json': JSON.stringify(validDocuments({
+        fidelity_floor: { min_chars: 40, required_tokens: ['Acme', 'renewal'] },
+      })),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      modes: Record<string, {
+        transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+      }>;
+    };
+
+    expect(parsed.modes.ingest_source.transitions).toEqual([
+      {
+        target: 'complete',
+        guard: {
+          kind: 'All',
+          subs: [
+            { kind: 'FieldTruthy', path: 'work.source_ready' },
+            { kind: 'FieldGreaterOrEqual', path: 'work.source.char_count', value: 40 },
+            { kind: 'FieldContainsAll', path: 'work.source.full_text', value: ['Acme', 'renewal'] },
+          ],
+        },
+      },
+    ]);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('rejects blank document token coverage entries fail-closed', () => {
+    expect(() =>
+      synthesizeProgramSpecFromDomain(linearDomain({
+        'intake.documents_json': JSON.stringify(validDocuments({
+          fidelity_floor: { required_tokens: ['Acme', ' '] },
+        })),
+      })),
+    ).toThrow(/required_tokens.*non-blank/u);
+  });
 });
 
 describe('documents descriptor intake capture', () => {
@@ -279,3 +321,11 @@ describe('documents descriptor intake capture', () => {
     });
   });
 });
+
+function writeTempSpec(specYaml: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'pgas-new-documents-load-'));
+  const specPath = join(dir, 'specs.yml');
+  writeFileSync(specPath, specYaml);
+  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+  return specPath;
+}

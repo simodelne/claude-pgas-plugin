@@ -7,8 +7,8 @@ import {
 } from '../../src/foundry-program/engine-primitive-registry.js';
 
 describe('engine-primitive-registry', () => {
-  it('models all five convergence primitives as landed active, with numeric validation narrowed', () => {
-    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5]);
+  it('models convergence primitives including #844 batch-1 as landed active, with validation narrowed', () => {
+    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
     const cursor = primitiveForConstruct('iteration_cursor');
     expect(cursor).toMatchObject({
@@ -57,6 +57,38 @@ describe('engine-primitive-registry', () => {
       foundry_enforcement: 'active',
       since_engine_version: '3.30.0',
     });
+    expect(primitiveForConstruct('existential_completion_guard')).toMatchObject({
+      primitive_index: 6,
+      primitive_name: 'any_item_field_eq',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#844',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.32.0',
+    });
+    expect(primitiveForConstruct('partition_by_verdict')).toMatchObject({
+      primitive_index: 7,
+      primitive_name: 'items_where_field_eq',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#844',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.32.0',
+    });
+    expect(primitiveForConstruct('numeric_aggregate')).toMatchObject({
+      primitive_index: 8,
+      primitive_name: 'sum_of',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#844',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.32.0',
+    });
+    expect(primitiveForConstruct('token_coverage_validation')).toMatchObject({
+      primitive_index: 9,
+      primitive_name: 'FieldContainsAll',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#844',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.32.0',
+    });
 
     expect(primitiveForConstruct('domain_shape_branch')).toBeUndefined();
     expect(primitiveForConstruct('adhoc_validation_throw')).toBeUndefined();
@@ -66,6 +98,10 @@ describe('engine-primitive-registry', () => {
       'compute_dedup',
       'numeric_validation',
       'recovery_steer',
+      'existential_completion_guard',
+      'partition_by_verdict',
+      'numeric_aggregate',
+      'token_coverage_validation',
     ]);
     expect([...refusedConstructs()]).toEqual([]);
   });
@@ -81,6 +117,10 @@ describe('engine-primitive-registry', () => {
       'compute_dedup',
       'numeric_validation',
       'recovery_steer',
+      'existential_completion_guard',
+      'partition_by_verdict',
+      'numeric_aggregate',
+      'token_coverage_validation',
     ]);
     expect([...refusedConstructs(synthetic)]).toEqual(['numeric_validation']);
   });

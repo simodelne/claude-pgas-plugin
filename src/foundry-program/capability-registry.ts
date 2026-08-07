@@ -418,6 +418,30 @@ const RECOVERY_STEER_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[]
     label: 'mode-scoped recovery steering computation',
   },
 ] as const;
+const EXISTENTIAL_COMPLETION_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:any_item_field_eq|any item|at least one|exists?|existential)[^.]{0,80}\b(?:status|state|field)\b[^.]{0,40}\b(?:equals?|eq|is)\b/i,
+    label: 'any-item field equality completion computation',
+  },
+] as const;
+const PARTITION_BY_VERDICT_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:items_where_field_eq|partition[^.]{0,40}(?:verdict|status|state)|(?:accepted|rejected|skipped|approved)[-_ ]buckets?|bucket[^.]{0,40}(?:accepted|rejected|skipped|approved))\b/i,
+    label: 'field-equality partition bucket computation',
+  },
+] as const;
+const NUMERIC_AGGREGATE_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:sum_of|sum of|sum[-_ ]?of|total[^.]{0,40}(?:amount|cost|hours|score|weight|count|value)|numeric aggregate|numeric aggregation)\b/i,
+    label: 'numeric sum aggregation computation',
+  },
+] as const;
+const TOKEN_COVERAGE_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:FieldContainsAll|required tokens?|token coverage|contains all(?: required)? tokens?|required-token coverage)\b/i,
+    label: 'required-token coverage validation computation',
+  },
+] as const;
 
 const KEYED_COLLECTION_SCHEMA_MARKER =
   /\b(?:dedupe_?key|dedupe|deduplicat\w*|de[-_ ]?duplicat\w*|idempotent\w*|upsert\w*|keyed[_ -]?collection|unique_?key|identity_?key|key_?field|record_?key|merge_?key|by_(?:email|id|profile_url|url|domain)|new_?vs_?existing)\b/i;
@@ -525,6 +549,18 @@ function detectGovernedComputePendingPrimitiveCapabilities(
         break;
       case 'recovery_steer':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, RECOVERY_STEER_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'existential_completion_guard':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, EXISTENTIAL_COMPLETION_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'partition_by_verdict':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, PARTITION_BY_VERDICT_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'numeric_aggregate':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, NUMERIC_AGGREGATE_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'token_coverage_validation':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, TOKEN_COVERAGE_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
       case 'adhoc_validation_throw':
       case 'compute_aggregate':
