@@ -7,8 +7,8 @@ import {
 } from '../../src/foundry-program/engine-primitive-registry.js';
 
 describe('engine-primitive-registry', () => {
-  it('models convergence primitives including #844 batch-1 as landed active, with validation narrowed', () => {
-    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  it('models convergence primitives including #844 as landed, with narrow active enforcement', () => {
+    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
     const cursor = primitiveForConstruct('iteration_cursor');
     expect(cursor).toMatchObject({
@@ -89,6 +89,15 @@ describe('engine-primitive-registry', () => {
       foundry_enforcement: 'active',
       since_engine_version: '3.32.0',
     });
+    expect(primitiveForConstruct('content_key_merge')).toMatchObject({
+      primitive_index: 10,
+      primitive_name: 'merge_collections',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#844',
+      foundry_enforcement: 'pending',
+      since_engine_version: '3.32.0',
+    });
+    expect(primitiveForConstruct('content_key_merge')?.build_order_note).toMatch(/register-only.*no foundry content-key merge emitter/i);
 
     expect(primitiveForConstruct('domain_shape_branch')).toBeUndefined();
     expect(primitiveForConstruct('adhoc_validation_throw')).toBeUndefined();

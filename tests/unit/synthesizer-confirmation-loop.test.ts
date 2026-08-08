@@ -120,7 +120,9 @@ interface ParsedSpec {
   recovery_steers?: Array<{
     mode: string;
     when: Record<string, unknown>;
-    guidance: string;
+    guidance?: string;
+    set?: { path: string; value: unknown };
+    template_paths?: string[];
   }>;
   derived_paths?: Array<{
     target: string;
@@ -190,15 +192,42 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(parsed.prompts.review_work).toContain('call complete_review_work exactly once to advance downstream');
     expect(parsed.features).toEqual(expect.arrayContaining(['recovery_steer']));
     expect(parsed.recovery_steers).toEqual(expect.arrayContaining([
-      {
+      expect.objectContaining({
         mode: 'review_work',
         when: { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
         guidance: 'When work_units.all_terminal is true, all items are resolved; call complete_review_work exactly once to advance downstream, and do not call propose_item again or open another confirmation prompt.',
-      },
+      }),
     ]));
     expect(parsed.guidance.review_work).not.toEqual(expect.arrayContaining([
       expect.stringContaining('When work_units.all_terminal is true'),
     ]));
+  });
+
+  it('emits richer recovery steers for completion guard arming and active-item templating', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.recovery_steers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        mode: 'review_work',
+        when: { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
+        guidance: 'When work_units.all_terminal is true, all items are resolved; call complete_review_work exactly once to advance downstream, and do not call propose_item again or open another confirmation prompt.',
+        set: { path: 'work_units.all_terminal', value: true },
+      }),
+      {
+        mode: 'review_work',
+        when: {
+          kind: 'All',
+          subs: [
+            { kind: 'FieldTruthy', path: 'summary.confirmation_loop.active_item_id' },
+            { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
+          ],
+        },
+        guidance: 'Handle {{summary.confirmation_loop.active_item_id}} next with propose_item; use summary.confirmation_loop.active_item as the bounded work unit view and do not inspect work_units.items.',
+        template_paths: ['summary.confirmation_loop.active_item_id'],
+      },
+    ]));
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 
   it('emits engine-derived completion and cursor paths for confirmation loops', () => {

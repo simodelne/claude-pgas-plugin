@@ -148,6 +148,44 @@ describe('template renderer', () => {
     }
   });
 
+  it('allows engine path templates in synthesized specs while rejecting foundry tokens', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-engine-template-'));
+    const blockedDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-foundry-token-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'path-template',
+        name: 'Path Template',
+        synthesizedSpecYaml: [
+          'name: path-template',
+          'recovery_steers:',
+          '  - mode: review',
+          '    guidance: "Handle {{summary.confirmation_loop.active_item_id}} next."',
+          '    template_paths: [summary.confirmation_loop.active_item_id]',
+          '',
+        ].join('\n'),
+        synthesizedHandlersTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedHandlersIndexTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+      });
+
+      expect(readFileSync(join(outDir, 'src/programs/path-template/specs.yml'), 'utf8'))
+        .toContain('{{summary.confirmation_loop.active_item_id}}');
+      expect(() => renderStandaloneScaffold({
+        outDir: blockedDir,
+        slug: 'blocked-token',
+        name: 'Blocked Token',
+        synthesizedSpecYaml: 'name: {{SLUG}}\n',
+        synthesizedHandlersTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedHandlersIndexTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+      })).toThrow(/foundry program source must not contain template tokens/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(blockedDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects generated handler directory indexes that duplicate handlers.ts top-level bodies', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-duplicate-handlers-'));
     const handlers = [
