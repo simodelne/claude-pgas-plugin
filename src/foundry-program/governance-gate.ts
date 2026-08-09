@@ -17,6 +17,8 @@ export type GovernedConstructKind =
   | 'adhoc_validation_throw'
   | 'numeric_validation'
   | 'token_coverage_validation'
+  | 'regex_validation'
+  | 'source_grounding_validation'
   | 'recovery_steer'
   | 'silent_catch'
   | 'json_reshape';
@@ -78,6 +80,12 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
       const governed = expressionContainsDomainRead(node.expression);
       if (looksLikeNumericValidationIf(node, domainCollectionVariables)) {
         addFinding('numeric_validation', node);
+      }
+      if (looksLikeRegexValidationIf(node, domainCollectionVariables)) {
+        addFinding('regex_validation', node);
+      }
+      if (looksLikeSourceGroundingValidationIf(node, domainCollectionVariables)) {
+        addFinding('source_grounding_validation', node);
       }
       if (governed) {
         addFinding('domain_shape_branch', node);
@@ -494,6 +502,100 @@ function looksLikeNumericValidationIf(
 ): boolean {
   return expressionContainsNumericComparison(node.expression, domainReadVariables)
     && (statementContainsThrow(node.thenStatement) || Boolean(node.elseStatement && statementContainsThrow(node.elseStatement)));
+}
+
+function looksLikeRegexValidationIf(
+  node: ts.IfStatement,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  if (!statementContainsThrow(node.thenStatement) && !Boolean(node.elseStatement && statementContainsThrow(node.elseStatement))) {
+    return false;
+  }
+  return nodeContains(node.expression, (candidate) => isRegexValidationCall(candidate, domainReadVariables));
+}
+
+function isRegexValidationCall(
+  node: ts.Node,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  if (!ts.isCallExpression(node)) {
+    return false;
+  }
+  const methodName = callMethodName(node);
+  const expression = unwrapExpression(node.expression);
+  if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+    return false;
+  }
+  const receiver = expression.expression;
+  if (methodName === 'test') {
+    const tested = node.arguments[0];
+    return Boolean(tested) &&
+      isRegexPatternExpression(receiver) &&
+      expressionContainsDomainReadOrAlias(tested, domainReadVariables);
+  }
+  if (methodName === 'match' || methodName === 'search') {
+    const pattern = node.arguments[0];
+    return Boolean(pattern) &&
+      isRegexPatternExpression(pattern) &&
+      expressionContainsDomainReadOrAlias(receiver, domainReadVariables);
+  }
+  return false;
+}
+
+function isRegexPatternExpression(node: ts.Node): boolean {
+  if (!ts.isExpression(node)) {
+    return false;
+  }
+  const expression = unwrapExpression(node);
+  if (ts.isRegularExpressionLiteral(expression)) {
+    return true;
+  }
+  return ts.isNewExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === 'RegExp';
+}
+
+function looksLikeSourceGroundingValidationIf(
+  node: ts.IfStatement,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  if (!statementContainsThrow(node.thenStatement) && !Boolean(node.elseStatement && statementContainsThrow(node.elseStatement))) {
+    return false;
+  }
+  return nodeContains(node.expression, (candidate) => isSourceGroundingIncludesCall(candidate, domainReadVariables));
+}
+
+function isSourceGroundingIncludesCall(
+  node: ts.Node,
+  domainReadVariables: ReadonlySet<string>,
+): boolean {
+  if (!ts.isCallExpression(node) || callMethodName(node) !== 'includes') {
+    return false;
+  }
+  const expression = unwrapExpression(node.expression);
+  if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
+    return false;
+  }
+  const sourceExpression = expression.expression;
+  const extractedValue = node.arguments[0];
+  if (!extractedValue || isPrimitiveComparisonValue(extractedValue)) {
+    return false;
+  }
+  return expressionContainsDomainReadOrAlias(sourceExpression, domainReadVariables) &&
+    expressionLooksLikeSourceText(sourceExpression);
+}
+
+function expressionLooksLikeSourceText(node: ts.Node): boolean {
+  const root = expressionRootIdentifierName(node);
+  if (root && /(?:source|full_?text)/iu.test(root)) {
+    return true;
+  }
+  return nodeContains(node, (candidate) => {
+    if (!ts.isStringLiteral(candidate) && !ts.isNoSubstitutionTemplateLiteral(candidate)) {
+      return false;
+    }
+    return /(?:source|full_?text)/iu.test(candidate.text);
+  });
 }
 
 function expressionContainsNumericComparison(
@@ -1022,6 +1124,10 @@ function messageForGovernedConstruct(kind: GovernedConstructKind): string {
       return `Governed construct numeric_validation must be engine-declared as numeric-comparison predicates, not imperative threshold validation.${primitiveReference}`;
     case 'token_coverage_validation':
       return `Governed construct token_coverage_validation must be engine-declared as FieldContainsAll, not imperative required-token includes checks.${primitiveReference}`;
+    case 'regex_validation':
+      return `Governed construct regex_validation must be engine-declared as FieldMatchesPattern/FieldNotMatchesPattern schema invariants, not imperative RegExp checks.${primitiveReference}`;
+    case 'source_grounding_validation':
+      return `Governed construct source_grounding_validation must be engine-declared as FieldSourceGrounded schema invariants, not imperative source includes anti-fabrication checks.${primitiveReference}`;
     case 'recovery_steer':
       return `Governed construct recovery_steer must be engine-declared as mode-scoped recovery steering, not a typed-flag guidance emitter.${primitiveReference}`;
     case 'silent_catch':

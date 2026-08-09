@@ -201,6 +201,7 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
       'governable computation is refused only for registry classes with foundry_enforcement=active and no landed primitive',
       'keyed_by landed in @simodelne/pgas-server 3.29.0, so compute_dedup now synthesizes as a keyed_collections declaration',
       'numeric-comparison predicates and recovery_steers landed in @simodelne/pgas-server 3.30.0, so numeric_validation and recovery_steer no longer route to pending-primitive refusal',
+      'regex-pattern and source-grounding validation predicates landed in @simodelne/pgas-server 3.34.0, so regex_validation and source_grounding_validation no longer route to pending-primitive refusal',
       'merge_collections landed in @simodelne/pgas-server 3.32.0, but foundry has no content-key merge emitter today, so content_key_merge remains pending enforcement and register-only',
     ]),
     since_version: '3.30.0',
@@ -443,6 +444,18 @@ const TOKEN_COVERAGE_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[]
     label: 'required-token coverage validation computation',
   },
 ] as const;
+const REGEX_VALIDATION_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:FieldMatchesPattern|FieldNotMatchesPattern|regex(?:[-_ ]?pattern)? validation|pattern check|must match(?:es)? pattern|must not match(?:es)? pattern|email format pattern)\b/i,
+    label: 'regex-pattern validation computation',
+  },
+] as const;
+const SOURCE_GROUNDING_TEXT_DETECTORS: readonly Omit<TextDetector, 'capability'>[] = [
+  {
+    pattern: /\b(?:FieldSourceGrounded|source[-_ ]ground(?:ed|ing)|anti[-_ ]fabrication|not fabricat\w+|extracted [^.]{0,45}(?:appear|present|grounded)[^.]{0,45}source text|must appear in (?:the )?source)\b/i,
+    label: 'source-grounding anti-fabrication validation computation',
+  },
+] as const;
 
 const KEYED_COLLECTION_SCHEMA_MARKER =
   /\b(?:dedupe_?key|dedupe|deduplicat\w*|de[-_ ]?duplicat\w*|idempotent\w*|upsert\w*|keyed[_ -]?collection|unique_?key|identity_?key|key_?field|record_?key|merge_?key|by_(?:email|id|profile_url|url|domain)|new_?vs_?existing)\b/i;
@@ -564,6 +577,12 @@ function detectGovernedComputePendingPrimitiveCapabilities(
         break;
       case 'token_coverage_validation':
         demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, TOKEN_COVERAGE_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'regex_validation':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, REGEX_VALIDATION_TEXT_DETECTORS, primitive, primitiveRegistry));
+        break;
+      case 'source_grounding_validation':
+        demands.push(...detectTextualPendingPrimitiveCapabilities(haystack, SOURCE_GROUNDING_TEXT_DETECTORS, primitive, primitiveRegistry));
         break;
       case 'adhoc_validation_throw':
       case 'compute_aggregate':

@@ -75,6 +75,30 @@ describe('governance refusal for not-yet-landed primitives', () => {
     expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
     expect(() => assertSynthesizableCapabilitiesForPrimitiveRegistry(input, synthetic)).toThrow();
   });
+  it('does not refuse landed #862 regex and source-grounding primitive requests', () => {
+    const input = {
+      purpose: 'Declare regex validation and anti-fabrication source grounding for extracted document fields.',
+      extraText: 'FieldMatchesPattern FieldNotMatchesPattern email format pattern source grounded FieldSourceGrounded anti-fabrication extracted names must appear in source text',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(detectRequestedCapabilities(input).map((d) => d.capability)).not.toContain('governed_compute_pending_primitive');
+  });
+  it('derives #862 pending-primitive refusal from the active registry set via a test seam', () => {
+    const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => [
+      'regex_validation',
+      'source_grounding_validation',
+    ].includes(entry.computation_class)
+      ? { ...entry, primitive_status: 'asked' as const }
+      : entry);
+    const input = {
+      purpose: 'Declare the #862 validation predicates.',
+      extraText: 'FieldMatchesPattern FieldNotMatchesPattern regex pattern validation FieldSourceGrounded source grounded anti-fabrication',
+    };
+
+    expect(() => assertSynthesizableCapabilities(input)).not.toThrow();
+    expect(() => assertSynthesizableCapabilitiesForPrimitiveRegistry(input, synthetic)).toThrow();
+  });
   it('derives recovery-steer pending-primitive refusal from the active registry set via a test seam', () => {
     const synthetic = ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.computation_class === 'recovery_steer'
       ? { ...entry, primitive_status: 'asked' as const }
