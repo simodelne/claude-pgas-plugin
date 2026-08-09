@@ -7,7 +7,7 @@ import { dump, load } from 'js-yaml';
 import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SourceGroundedExtractor, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
@@ -233,6 +233,11 @@ const FORBIDDEN_LEAD_RESEARCH_WEB_IO_NAMES = [
   'credential',
   'password',
 ] as const;
+const SOURCE_GROUNDED_EXTRACTORS: readonly SourceGroundedExtractor[] = [
+  'capitalized_names',
+  'citation_ids',
+  'figure_refs',
+] as const;
 
 export function synthesizeProgramSpecFromDomain(
   domain: Record<string, unknown>,
@@ -391,6 +396,7 @@ export function synthesizeProgramSpecFromDomain(
     completion.collection_lifecycle,
     transitionActions,
   );
+  const documentSchemaInvariants = documentSchemaInvariantsFor(documents);
   const exportActions = exportTransitionActions(transitionActions);
   const hasExportDecisionOnly = exportActions.length > 0;
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
@@ -445,6 +451,7 @@ export function synthesizeProgramSpecFromDomain(
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
     ...(keyedCollections.length > 0 ? ['keyed_collection'] : []),
     ...(recoverySteers.length > 0 ? ['recovery_steer'] : []),
+    ...(documentSchemaInvariants.length > 0 ? ['schema_invariants'] : []),
   ]);
   if (keyedCollections.length > 0) {
     spec.keyed_collections = keyedCollections;
@@ -455,6 +462,11 @@ export function synthesizeProgramSpecFromDomain(
     spec.recovery_steers = recoverySteers;
   } else {
     delete spec.recovery_steers;
+  }
+  if (documentSchemaInvariants.length > 0) {
+    spec.schema_invariants = documentSchemaInvariants;
+  } else {
+    delete spec.schema_invariants;
   }
   if (hasExportDecisionOnly) {
     spec.pure = false;
@@ -1008,6 +1020,39 @@ function documentUploadedFidelityPredicate(documents: DocumentsDescriptor): Muta
     });
   }
   return predicates.length === 0 ? undefined : allPredicates(predicates);
+}
+
+function documentSchemaInvariantsFor(documents: DocumentsDescriptor | undefined): MutableRecord[] {
+  if (!documents) {
+    return [];
+  }
+  const invariants: MutableRecord[] = [];
+  for (const pattern of documentRequiredPatterns(documents)) {
+    invariants.push({
+      kind: 'FieldMatchesPattern',
+      path: 'text',
+      pattern,
+    });
+  }
+  for (const pattern of documentForbiddenPatterns(documents)) {
+    invariants.push({
+      kind: 'FieldNotMatchesPattern',
+      path: 'text',
+      pattern,
+    });
+  }
+  for (const extractor of documentSourceGroundedExtractors(documents)) {
+    invariants.push({
+      kind: 'FieldSourceGrounded',
+      path: 'text',
+      extractor,
+      source_path: `${DOCUMENT_INTAKE_ROOT}.documents`,
+      source_item_path: 'content_text',
+    });
+  }
+  return invariants.length === 0
+    ? []
+    : [{ collection: documentsCollectionPath(documents), invariants }];
 }
 
 function documentSkipRequestedPredicate(): MutableRecord {
@@ -2351,6 +2396,13 @@ function applyDocumentsSchema(
   schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.mimeType`] = 'string';
   schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.size`] = 'number';
   schema[`${DOCUMENT_INTAKE_ROOT}.documents`] = 'array';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*`] = 'object';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.fileId`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.name`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.mimeType`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.size`] = 'number';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.content_text`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents.*.content_base64`] = 'string';
   schema[`${DOCUMENT_INTAKE_ROOT}.status`] = 'string';
   schema[`${DOCUMENT_INTAKE_ROOT}.source`] = 'string';
   schema[`${DOCUMENT_INTAKE_ROOT}.completed`] = 'boolean';
@@ -5873,6 +5925,42 @@ function documentRequiredTokens(documents: DocumentsDescriptor): string[] {
       throw new Error(`documents.fidelity_floor.required_tokens[${index}] must be a non-blank string`);
     }
     return token.trim();
+  });
+}
+
+function documentRequiredPatterns(documents: DocumentsDescriptor): string[] {
+  return documentStringListFidelityFloor(documents, 'required_patterns');
+}
+
+function documentForbiddenPatterns(documents: DocumentsDescriptor): string[] {
+  return documentStringListFidelityFloor(documents, 'forbidden_patterns');
+}
+
+function documentSourceGroundedExtractors(documents: DocumentsDescriptor): SourceGroundedExtractor[] {
+  const raw = documentStringListFidelityFloor(documents, 'source_grounded_extractors');
+  return raw.map((extractor, index) => {
+    if (!SOURCE_GROUNDED_EXTRACTORS.includes(extractor as SourceGroundedExtractor)) {
+      throw new Error(
+        `documents.fidelity_floor.source_grounded_extractors[${index}] must be one of: ${SOURCE_GROUNDED_EXTRACTORS.join(', ')}`,
+      );
+    }
+    return extractor as SourceGroundedExtractor;
+  });
+}
+
+function documentStringListFidelityFloor(documents: DocumentsDescriptor, field: string): string[] {
+  const value = documents.fidelity_floor?.[field];
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`documents.fidelity_floor.${field} must be a non-empty array of non-blank strings`);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || item.trim().length === 0) {
+      throw new Error(`documents.fidelity_floor.${field}[${index}] must be a non-blank string`);
+    }
+    return item.trim();
   });
 }
 

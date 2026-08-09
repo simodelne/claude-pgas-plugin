@@ -283,6 +283,46 @@ describe('documents descriptor capability routing', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 
+  it('emits #862 regex and source-grounding predicates as document schema invariants', () => {
+    const artifact = synthesizeProgramSpecFromDomain(linearDomain({
+      'intake.documents_json': JSON.stringify(validDocuments({
+        fidelity_floor: {
+          required_patterns: ['ACME-[0-9]{4}'],
+          forbidden_patterns: ['DRAFT ONLY'],
+          source_grounded_extractors: ['capitalized_names'],
+        },
+      })),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      features?: string[];
+      schema?: Record<string, string>;
+      schema_invariants?: Array<{
+        collection: string;
+        invariants: Array<Record<string, unknown>>;
+      }>;
+    };
+
+    expect(parsed.features).toContain('schema_invariants');
+    expect(parsed.schema?.['inputs.document_intake.documents.*.content_text']).toBe('string');
+    expect(parsed.schema_invariants).toEqual([
+      {
+        collection: 'work.source.documents',
+        invariants: [
+          { kind: 'FieldMatchesPattern', path: 'text', pattern: 'ACME-[0-9]{4}' },
+          { kind: 'FieldNotMatchesPattern', path: 'text', pattern: 'DRAFT ONLY' },
+          {
+            kind: 'FieldSourceGrounded',
+            path: 'text',
+            extractor: 'capitalized_names',
+            source_path: 'inputs.document_intake.documents',
+            source_item_path: 'content_text',
+          },
+        ],
+      },
+    ]);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
   it('rejects blank document token coverage entries fail-closed', () => {
     expect(() =>
       synthesizeProgramSpecFromDomain(linearDomain({
@@ -291,6 +331,24 @@ describe('documents descriptor capability routing', () => {
         })),
       })),
     ).toThrow(/required_tokens.*non-blank/u);
+  });
+
+  it('rejects blank #862 document regex and grounding entries fail-closed', () => {
+    expect(() =>
+      synthesizeProgramSpecFromDomain(linearDomain({
+        'intake.documents_json': JSON.stringify(validDocuments({
+          fidelity_floor: { required_patterns: [' '] },
+        })),
+      })),
+    ).toThrow(/required_patterns.*non-blank/u);
+
+    expect(() =>
+      synthesizeProgramSpecFromDomain(linearDomain({
+        'intake.documents_json': JSON.stringify(validDocuments({
+          fidelity_floor: { source_grounded_extractors: ['names'] },
+        })),
+      })),
+    ).toThrow(/source_grounded_extractors.*capitalized_names/u);
   });
 });
 

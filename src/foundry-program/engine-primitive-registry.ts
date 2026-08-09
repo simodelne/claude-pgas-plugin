@@ -1,6 +1,6 @@
 import type { GovernedConstructKind } from './governance-gate.js';
 
-export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 export type PrimitiveStatus = 'landed' | 'shipped' | 'building' | 'asked';
 export type FoundryEnforcement = 'active' | 'pending';
 
@@ -129,6 +129,28 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     foundry_enforcement: 'pending',
     since_engine_version: '3.32.0',
     build_order_note: 'Register-only adoption: no foundry content-key merge emitter exists today; keyed persistence continues to use keyed_collections, so merge_collections enforcement stays pending until a content-key reducer emitter is introduced.',
+  },
+  {
+    computation_class: 'regex_validation',
+    primitive_index: 11,
+    primitive_name: 'FieldMatchesPattern/FieldNotMatchesPattern',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#862',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.34.0',
+    build_order_note: 'Narrow regex-pattern validation over extracted document record text; foundry emits FieldMatchesPattern/FieldNotMatchesPattern in schema_invariants and refuses imperative RegExp validation in stage bodies.',
+  },
+  {
+    computation_class: 'source_grounding_validation',
+    primitive_index: 12,
+    primitive_name: 'FieldSourceGrounded',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#862',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '3.34.0',
+    build_order_note: 'Narrow anti-fabrication validation for extracted document records; foundry emits FieldSourceGrounded in schema_invariants with engine-owned token extractors and source allowlist paths.',
   },
 ] as const;
 

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { detectGovernedConstructs, fatalGovernanceViolations, UNAVOIDABLE_ARTIFACT_KINDS } from '../../src/foundry-program/governance-gate.js';
+import {
+  detectGovernedConstructs,
+  fatalGovernanceViolations,
+  UNAVOIDABLE_ARTIFACT_KINDS,
+  type GovernedConstructKind,
+} from '../../src/foundry-program/governance-gate.js';
 
 const DEDUP_BODY = `
 export async function runStage(input, runtime) {
@@ -56,6 +61,28 @@ export function validateCoverage(input) {
   const text = String(input.domain.draft.text ?? '').toLowerCase();
   if (!required.every((token) => text.includes(token.toLowerCase()))) {
     throw new Error('draft is missing required coverage tokens');
+  }
+  return true;
+}`;
+const REGEX_VALIDATION_BODY = `
+export function validateEmail(input) {
+  const email = String(input.domain['lead.email'] ?? '');
+  if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/u.test(email)) {
+    throw new Error('lead email must match the email format');
+  }
+  if (/\\btest-only\\b/u.test(email)) {
+    throw new Error('lead email must not contain test-only markers');
+  }
+  return true;
+}`;
+const SOURCE_GROUNDING_BODY = `
+export function validateGrounding(input) {
+  const source = String(input.domain['work.source.full_text'] ?? '').toLowerCase();
+  const names = input.domain['lead.names'] ?? [];
+  for (const name of names) {
+    if (!source.includes(String(name).toLowerCase())) {
+      throw new Error('extracted name is not grounded in the source text');
+    }
   }
   return true;
 }`;
@@ -132,6 +159,16 @@ export async function runStage(input, runtime) {
   it('flags required-token coverage throws as token coverage validation', () => {
     expect(detectGovernedConstructs(TOKEN_COVERAGE_BODY).map((x) => x.kind)).toContain('token_coverage_validation');
   });
+  it('flags regex pattern validation separately from broad structural validation', () => {
+    const kinds = detectGovernedConstructs(REGEX_VALIDATION_BODY).map((x) => x.kind);
+    expect(kinds).toContain('regex_validation');
+    expect(kinds).not.toContain('adhoc_validation_throw');
+  });
+  it('flags source-grounding validation separately from required-token coverage', () => {
+    const kinds = detectGovernedConstructs(SOURCE_GROUNDING_BODY).map((x) => x.kind);
+    expect(kinds).toContain('source_grounding_validation');
+    expect(kinds).not.toContain('token_coverage_validation');
+  });
   it('flags a steer/guidance emitter reading a typed recovery flag', () => {
     const findings = detectGovernedConstructs(RECOVERY_STEER_BODY);
     expect(findings.map((x) => x.kind)).toContain('recovery_steer');
@@ -204,5 +241,15 @@ describe('fatalGovernanceViolations', () => {
       'stage_body',
       new Set(['token_coverage_validation']),
     ).map((v) => v.kind)).toEqual(['token_coverage_validation']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(REGEX_VALIDATION_BODY),
+      'stage_body',
+      new Set(['regex_validation' as GovernedConstructKind]),
+    ).map((v) => v.kind)).toEqual(['regex_validation', 'regex_validation']);
+    expect(fatalGovernanceViolations(
+      detectGovernedConstructs(SOURCE_GROUNDING_BODY),
+      'stage_body',
+      new Set(['source_grounding_validation' as GovernedConstructKind]),
+    ).map((v) => v.kind)).toEqual(['source_grounding_validation']);
   });
 });

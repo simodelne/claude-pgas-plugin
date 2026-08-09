@@ -10,6 +10,8 @@ const EXISTENTIAL_COMPLETION_BODY = `export async function runStage(input, runti
 const PARTITION_BODY = `export async function runStage(input, runtime){ const items=input.domain['review.items']??[]; const accepted=items.filter((item)=>item.status==='accepted'); return { result_json: JSON.stringify({ accepted }), items_json: '[]', digest: '' }; }`;
 const NUMERIC_AGGREGATE_BODY = `export async function runStage(input, runtime){ const items=input.domain['review.items']??[]; const hours=items.reduce((total,item)=>total+item.hours,0); return { result_json: JSON.stringify({ hours }), items_json: '[]', digest: '' }; }`;
 const TOKEN_COVERAGE_BODY = `export function validateCoverage(input){ const tokens=['venue','date']; const text=String(input.domain.draft.text??'').toLowerCase(); if(!tokens.every((token)=>text.includes(token.toLowerCase()))){ throw new Error('missing token'); } return true; }`;
+const REGEX_VALIDATION_BODY = `export function validatePattern(input){ const text=String(input.domain.draft.email??''); if(!/^[^@]+@[^@]+$/.test(text)){ throw new Error('bad email'); } return true; }`;
+const SOURCE_GROUNDING_BODY = `export function validateGrounding(input){ const source=String(input.domain.source.text??''); const extracted=String(input.domain.draft.name??''); if(!source.includes(extracted)){ throw new Error('not grounded'); } return true; }`;
 const ORDINARY_DOMAIN_BRANCH = `export async function runStage(input, runtime){ if (input.domain['review.kind'] === 'fast') { return { result_json: JSON.stringify({ queue: 'fast' }), items_json: '[]', digest: '' }; } return { result_json: JSON.stringify({ queue: 'normal' }), items_json: '[]', digest: '' }; }`;
 const NUMERIC_VALIDATION_BRANCH = `export async function runStage(input, runtime){ if (input.domain.work.source.char_count < 40) { throw new Error('low fidelity source'); } return { result_json: JSON.stringify({ ok: true }), items_json: '[]', digest: '' }; }`;
 const RECOVERY_STEER_BODY = `export function steerRecoveryGuidance(input){ return input.domain.review.recovery_required ? 'Ask for a corrected answer before retrying.' : 'Continue.'; }`;
@@ -38,6 +40,8 @@ describe('governance gate in synthesis (fail-closed)', () => {
       'partition_by_verdict',
       'numeric_aggregate',
       'token_coverage_validation',
+      'regex_validation',
+      'source_grounding_validation',
     ]);
     expect(() => verifyGovernanceOfStageBody(ORDINARY_DOMAIN_BRANCH, 'stage_body')).not.toThrow();
   });
@@ -55,5 +59,9 @@ describe('governance gate in synthesis (fail-closed)', () => {
     expect(() => verifyGovernanceOfStageBody(PARTITION_BODY, 'stage_body')).toThrow(GovernanceRefusalError);
     expect(() => verifyGovernanceOfStageBody(NUMERIC_AGGREGATE_BODY, 'stage_body')).toThrow(GovernanceRefusalError);
     expect(() => verifyGovernanceOfStageBody(TOKEN_COVERAGE_BODY, 'stage_body')).toThrow(GovernanceRefusalError);
+  });
+  it('KILL TEST: active #862 predicates refuse their imperative equivalents', () => {
+    expect(() => verifyGovernanceOfStageBody(REGEX_VALIDATION_BODY, 'stage_body')).toThrow(GovernanceRefusalError);
+    expect(() => verifyGovernanceOfStageBody(SOURCE_GROUNDING_BODY, 'stage_body')).toThrow(GovernanceRefusalError);
   });
 });

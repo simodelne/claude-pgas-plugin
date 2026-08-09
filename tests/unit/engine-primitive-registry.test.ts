@@ -8,7 +8,7 @@ import {
 
 describe('engine-primitive-registry', () => {
   it('models convergence primitives including #844 as landed, with narrow active enforcement', () => {
-    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
     const cursor = primitiveForConstruct('iteration_cursor');
     expect(cursor).toMatchObject({
@@ -98,6 +98,22 @@ describe('engine-primitive-registry', () => {
       since_engine_version: '3.32.0',
     });
     expect(primitiveForConstruct('content_key_merge')?.build_order_note).toMatch(/register-only.*no foundry content-key merge emitter/i);
+    expect(primitiveForConstruct('regex_validation')).toMatchObject({
+      primitive_index: 11,
+      primitive_name: 'FieldMatchesPattern/FieldNotMatchesPattern',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#862',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.34.0',
+    });
+    expect(primitiveForConstruct('source_grounding_validation')).toMatchObject({
+      primitive_index: 12,
+      primitive_name: 'FieldSourceGrounded',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#862',
+      foundry_enforcement: 'active',
+      since_engine_version: '3.34.0',
+    });
 
     expect(primitiveForConstruct('domain_shape_branch')).toBeUndefined();
     expect(primitiveForConstruct('adhoc_validation_throw')).toBeUndefined();
@@ -111,6 +127,8 @@ describe('engine-primitive-registry', () => {
       'partition_by_verdict',
       'numeric_aggregate',
       'token_coverage_validation',
+      'regex_validation',
+      'source_grounding_validation',
     ]);
     expect([...refusedConstructs()]).toEqual([]);
   });
@@ -130,6 +148,8 @@ describe('engine-primitive-registry', () => {
       'partition_by_verdict',
       'numeric_aggregate',
       'token_coverage_validation',
+      'regex_validation',
+      'source_grounding_validation',
     ]);
     expect([...refusedConstructs(synthetic)]).toEqual(['numeric_validation']);
   });

@@ -54,6 +54,8 @@ export interface DocumentsDescriptor {
   artifact_shape?: Record<string, unknown>;
 }
 
+export type SourceGroundedExtractor = 'capitalized_names' | 'citation_ids' | 'figure_refs';
+
 export interface ExportSurfaces {
   docx?: boolean;
   html?: boolean;
