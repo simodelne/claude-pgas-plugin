@@ -34,7 +34,10 @@ describe('{{SLUG}} API black-box contract', () => {
       const httpPrograms = await httpClient.programs.list();
       const session = await client.sessions.create({
         program: '{{SLUG}}',
-        domain_context: { query: 'static black-box verification' },
+        initial_trigger: {
+          channel: 'seed',
+          payload: { 'inputs.domain_context.query': 'static black-box verification' },
+        },
       });
       const envelope = await client.sessions.get(session.sessionId);
       const httpEnvelope = await httpClient.sessions.get(session.sessionId);
@@ -45,8 +48,7 @@ describe('{{SLUG}} API black-box contract', () => {
       expect(JSON.stringify(httpPrograms)).toContain('{{SLUG}}');
       expect(envelope.sessionId).toBe(session.sessionId);
       expect(httpEnvelope.sessionId).toBe(session.sessionId);
-      expect(normalized).toHaveProperty('inputs.domain_context');
-      expect(normalized['inputs.domain_context']).toMatchObject({ query: 'static black-box verification' });
+      expect(normalized).toHaveProperty('inputs.domain_context.query', 'static black-box verification');
     } finally {
       await server.close();
     }

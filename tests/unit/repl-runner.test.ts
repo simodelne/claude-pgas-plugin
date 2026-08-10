@@ -50,7 +50,13 @@ describe('runRepl', () => {
           expect.objectContaining({
             method: 'POST',
             path: '/sessions',
-            body: { program: 'pgas-new', domain_context: { query: 'hello foundry' } },
+            body: {
+              program: 'pgas-new',
+              initial_trigger: {
+                channel: 'seed',
+                payload: { 'inputs.domain_context.query': 'hello foundry' },
+              },
+            },
           }),
           expect.objectContaining({
             method: 'POST',

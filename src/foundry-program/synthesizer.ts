@@ -590,6 +590,7 @@ export function synthesizeProgramSpecFromDomain(
   spec.prompts = prompts;
 
   spec.ingestion = {
+    seed: ['inputs.domain_context', 'inputs.domain_context.query'],
     [entryChannel]: [`inputs.${entryChannel}`],
     system_mode_entry: ['inputs.mode_entry'],
   };
@@ -618,6 +619,7 @@ export function synthesizeProgramSpecFromDomain(
 
   spec.channels = {
     ...recordField(spec, 'channels'),
+    seed: { direction: 'In', sync: 'Async' },
     [entryChannel]: {
       direction: 'In',
       sync: 'Async',
@@ -670,6 +672,8 @@ export function synthesizeProgramSpecFromDomain(
   delete schema['work.example_items_json'];
   schema[`inputs.${entryChannel}`] = 'string';
   schema[initialEntryPath] = 'string';
+  schema['inputs.domain_context'] = 'object';
+  schema['inputs.domain_context.query'] = 'string';
   delete schema['notebook.entries'];
   delete schema['notebook.pins'];
   schema['notebook.*'] = 'string';

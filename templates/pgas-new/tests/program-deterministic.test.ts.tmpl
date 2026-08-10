@@ -146,10 +146,18 @@ function preconditionsFor(mode: DeterministicMode, actionName: string): readonly
 }
 
 function firstInputChannel(spec: Specification): string {
+  let fallback: string | undefined;
   for (const [id, channel] of spec.schannels) {
-    if (channel.direction === 'In') {
+    if (channel.direction !== 'In') {
+      continue;
+    }
+    fallback ??= id;
+    if (id !== 'seed' && id !== 'system_mode_entry') {
       return id;
     }
+  }
+  if (fallback) {
+    return fallback;
   }
   throw new Error(`program ${spec.name} declares no input channel`);
 }

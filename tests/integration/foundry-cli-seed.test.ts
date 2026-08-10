@@ -17,7 +17,7 @@ function effect(name: string, payload: Record<string, unknown>) {
 }
 
 describe('foundry CLI initial state seed', () => {
-  it('rewrites REPL session creation so CLI seeds become PATCH /domain calls', async () => {
+  it('rewrites REPL session creation so CLI seeds become an initial trigger', async () => {
     const requests: Array<{ method: string; path: string; auth: string | null; body: unknown }> = [];
     const fakeFetch: typeof fetch = async (input) => {
       const request = input instanceof Request ? input : new Request(input);
@@ -32,9 +32,6 @@ describe('foundry CLI initial state seed', () => {
 
       if (request.method === 'POST' && url.pathname === '/sessions') {
         return json({ sessionId: 'session-1' }, 201);
-      }
-      if (request.method === 'PATCH' && url.pathname === '/sessions/session-1/domain') {
-        return json({ applied: 4 });
       }
       return json({ error: 'not found' }, 404);
     };
@@ -53,11 +50,11 @@ describe('foundry CLI initial state seed', () => {
       },
       body: JSON.stringify({
         program: 'pgas-new',
-        domain_context: {
-          'program.slug': 'foo',
-          'program.name': 'Foo',
-          'program.target_dir': '/tmp/foo',
-          query: 'Create Foo.',
+        initial_trigger: {
+          channel: 'seed',
+          payload: {
+            'inputs.domain_context.query': 'Create Foo.',
+          },
         },
       }),
     }));
@@ -69,26 +66,22 @@ describe('foundry CLI initial state seed', () => {
         auth: 'Bearer dev-token',
         body: {
           program: 'pgas-new',
-          domain_context: { query: 'Create Foo.' },
-        },
-      },
-      {
-        method: 'PATCH',
-        path: '/sessions/session-1/domain',
-        auth: 'Bearer dev-token',
-        body: {
-          patches: [
-            { path: 'program.slug', value: 'foo' },
-            { path: 'program.name', value: 'Foo' },
-            { path: 'program.target_dir', value: '/tmp/foo' },
-            { path: 'program.target_dir_confirmed', value: true },
-          ],
+          initial_trigger: {
+            channel: 'seed',
+            payload: {
+              'program.slug': 'foo',
+              'program.name': 'Foo',
+              'program.target_dir': '/tmp/foo',
+              'program.target_dir_confirmed': true,
+              'inputs.domain_context.query': 'Create Foo.',
+            },
+          },
         },
       },
     ]);
   });
 
-  it('routes slug/name/target_dir seeds to governed state before the first LLM round', async () => {
+  it('routes slug/name/target_dir seeds through a governed create-time round', async () => {
     const authorActions: string[] = [];
     const { client, close } = await startRouteHarness({
       programs: [{ name: 'pgas-new', entry: createPgasNewFoundryProgramEntry() }],
@@ -118,14 +111,7 @@ describe('foundry CLI initial state seed', () => {
       expect(seededWorld.domain['program.name']).toBe('Foo');
       expect(seededWorld.domain['program.target_dir']).toBe('/tmp/foo');
       expect(seededWorld.domain['program.target_dir_confirmed']).toBe(true);
-      expect(seededWorld.domain['inputs.domain_context']).toBeUndefined();
-
-      const firstRound = await client.sessions.trigger(created.sessionId, {
-        channel: 'user_text',
-        payload: 'Use the default skeleton.',
-      });
-
-      expect(firstRound.result).toMatchObject({ name: 'choose_design_path' });
+      expect(seededWorld.domain['inputs.domain_context.query']).toBe('Create Foo.');
       expect(authorActions).toEqual(['choose_design_path']);
     } finally {
       await close();

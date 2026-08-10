@@ -1,14 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
+import type { PgasClient } from '@simodelne/pgas-server/client.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startFoundryServer, type StartedFoundryServer } from '../../src/foundry-server.js';
+import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { startRouteHarness, type RouteHarness } from './foundry-test-utils.js';
 
 const PROGRAM = 'pgas-new';
 const GAP4_NOTES_PATH = '/tmp/codex-gap4-notes.md';
-const canOpenLoopbackListener = await canBindLoopbackListener();
 
 const DURABLE_STATE = {
   'notebook.entries': [
@@ -74,7 +73,7 @@ describe('foundry notebook and session durability', () => {
     PGAS_ENABLE_MOCK_PROVIDER: process.env.PGAS_ENABLE_MOCK_PROVIDER,
   };
   let rootDir: string;
-  let server: StartedFoundryServer | null = null;
+  let harness: RouteHarness | null = null;
 
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-durability-'));
@@ -88,9 +87,9 @@ describe('foundry notebook and session durability', () => {
   });
 
   afterEach(async () => {
-    if (server) {
-      await server.kill();
-      server = null;
+    if (harness) {
+      await harness.close();
+      harness = null;
     }
     restoreEnv('HOME', originalEnv.HOME);
     restoreEnv('PGAS_DB', originalEnv.PGAS_DB);
@@ -102,23 +101,27 @@ describe('foundry notebook and session durability', () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  (canOpenLoopbackListener ? it : it.skip)('resumes a file-backed session with notebook, intake, and artifact state intact after restart', async () => {
-    server = await startFoundryServer({ port: 0 });
-    const firstClient = createPgasClient(fetchTransport({ baseUrl: server.url, token: 'dev-token' }));
+  it('resumes a file-backed session with notebook, intake, and artifact state intact after restart', async () => {
+    const dbPath = join(rootDir, 'foundry.db');
+    harness = await startDurableHarness(dbPath);
+    const firstClient = harness.client;
     const created = await firstClient.sessions.create({
       program: PROGRAM,
-      domain_context: { query: 'Create the durability check foundry session.' },
-    });
-    await firstClient.sessions.patchDomain(created.sessionId, {
-      patches: Object.entries(DURABLE_STATE).map(([path, value]) => ({ path, value })),
+      initial_trigger: {
+        channel: 'seed',
+        payload: {
+          'inputs.domain_context.query': 'Create the durability check foundry session.',
+          ...DURABLE_STATE,
+        },
+      },
     });
     const beforeRestart = await durableState(firstClient, created.sessionId);
 
-    await server.kill();
-    server = null;
+    await harness.close();
+    harness = null;
 
-    server = await startFoundryServer({ port: 0 });
-    const restartedClient = createPgasClient(fetchTransport({ baseUrl: server.url, token: 'dev-token' }));
+    harness = await startDurableHarness(dbPath);
+    const restartedClient = harness.client;
     // Durability under test = persisted state is retrievable by sessionId after a
     // cold restart. Bare sessions.resume() resumes the in-memory LIVE active
     // session; a cold restart has none, so it legitimately does not re-select the
@@ -139,7 +142,7 @@ describe('foundry notebook and session durability', () => {
 });
 
 async function durableState(
-  client: ReturnType<typeof createPgasClient>,
+  client: PgasClient,
   sessionId: string,
 ): Promise<Record<keyof typeof DURABLE_STATE, unknown>> {
   await client.sessions.get(sessionId);
@@ -172,18 +175,31 @@ function writeDurabilityFinding(
   );
 }
 
-async function canBindLoopbackListener(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once('error', () => {
-      resolve(false);
-    });
-    probe.listen(0, '127.0.0.1', () => {
-      probe.close(() => {
-        resolve(true);
-      });
-    });
+function startDurableHarness(dbPath: string): Promise<RouteHarness> {
+  return startRouteHarness({
+    programs: [{ name: PROGRAM, entry: createPgasNewFoundryProgramEntry() }],
+    storage: { dbPath },
+    authorHandle: {
+      modelId: 'pgas-new-durability-test-author',
+      async complete() {
+        return JSON.stringify(effect('session_status', {}));
+      },
+    },
+    observerModelId: 'pgas-new-durability-test-observer',
   });
+}
+
+function effect(name: string, payload: Record<string, unknown>) {
+  return {
+    actions: [
+      {
+        kind: 'EffectAction',
+        name,
+        channel: 'widget_output',
+        payload,
+      },
+    ],
+  };
 }
 
 function restoreEnv(name: string, value: string | undefined): void {

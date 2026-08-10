@@ -1266,7 +1266,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -2286,7 +2289,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -2455,7 +2461,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -2804,7 +2813,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -3361,7 +3373,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -3772,7 +3787,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 
@@ -4175,7 +4193,10 @@ async function main(): Promise<void> {
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
     program: '${slug}',
-    domain_context: { query: INITIAL_TEXT },
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
   });
   const sessionId = created.sessionId;
 

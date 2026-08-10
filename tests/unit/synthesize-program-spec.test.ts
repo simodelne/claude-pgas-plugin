@@ -129,8 +129,10 @@ describe('synthesize_program_spec handler', () => {
       name: string;
       initial: string;
       terminal: string[];
+      channels: Record<string, { direction: string; sync: string }>;
       modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
       projection: Record<string, { include: string[]; exclude: string[] }>;
+      ingestion: Record<string, string[]>;
       schema: Record<string, string>;
       action_map: Record<string, {
         channel?: string;
@@ -145,8 +147,10 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.name).toBe('incident-triage');
     expect(parsed.initial).toBe('intake');
     expect(parsed.terminal).toEqual(['resolved']);
+    expect(parsed.channels.seed).toEqual({ direction: 'In', sync: 'Async' });
+    expect(parsed.ingestion.seed).toEqual(['inputs.domain_context', 'inputs.domain_context.query']);
     expect(Object.keys(parsed.modes)).toEqual(['intake', 'triage', 'resolved']);
-    expect(parsed.modes.intake.channels).toEqual(expect.arrayContaining(['user_text']));
+    expect(parsed.modes.intake.channels).toEqual(expect.arrayContaining(['seed', 'user_text']));
     expect(parsed.modes.intake.transitions).toEqual([
       { target: 'triage', guard: { kind: 'FieldTruthy', path: 'intake.started' } },
     ]);
@@ -155,6 +159,8 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(parsed.schema).toMatchObject({
       'intake.started': 'boolean',
+      'inputs.domain_context': 'object',
+      'inputs.domain_context.query': 'string',
       'inputs.initial_user_text': 'string',
       'triage.summary_ready': 'boolean',
       'triage.output': 'object',

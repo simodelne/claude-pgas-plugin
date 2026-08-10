@@ -11,7 +11,7 @@ import type {
   ProgramEntry,
   UnifiedAuthorDriverOptions,
 } from '@simodelne/pgas-server/plugin.js';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
@@ -36,7 +36,9 @@ const SECTION_TWO_TEXT = 'TASK4_SECTION_TWO_TEXT_QUERY_ONLY_SENTINEL';
 describe('hub selective section-artifact projection falsifier', () => {
   it('projects only document summary and section index while full section text is query-only', { timeout: 120_000 }, async () => {
     const artifact = synthesizeProgramSpecFromDomain(sectionArtifactHubDomain());
-    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const sectionState = sectionArtifactsState();
+    const specYaml = withSeedIngestionPaths(artifact.spec_yaml, Object.keys(sectionState));
+    const parsed = load(specYaml) as ParsedSpec;
     const hubProjection = parsed.projection[HUB_STAGE];
 
     expect(parsed.features).toContain('inline_world_query');
@@ -56,7 +58,7 @@ describe('hub selective section-artifact projection falsifier', () => {
         slug: PROGRAM_SLUG,
         name: PROGRAM_NAME,
         outDir: targetDir,
-        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedSpecYaml: specYaml,
         synthesizedRegistrationTs: artifact.registration_ts,
         synthesizedContractsTs: artifact.contracts_ts,
         synthesizedHandlersTs: artifact.handlers_ts,
@@ -98,9 +100,10 @@ describe('hub selective section-artifact projection falsifier', () => {
       const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
 
       try {
-        const created = await client.sessions.create({ program: PROGRAM_SLUG });
-        await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: 'start finalization hub' });
-        await seedSectionArtifacts(client, created.sessionId);
+        const created = await client.sessions.create({
+          program: PROGRAM_SLUG,
+          initial_trigger: { channel: 'seed', payload: sectionState },
+        });
         await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: `read ${SECTION_TWO_ID} text` });
       } finally {
         await server.close();
@@ -125,21 +128,14 @@ describe('hub selective section-artifact projection falsifier', () => {
 
 interface ParsedSpec {
   features: string[];
+  ingestion: Record<string, string[]>;
+  modes: Record<string, { channels?: string[] }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
 }
 
 interface Capture {
   prompt: string;
   toolNames: string[];
-}
-
-interface PatchableClient {
-  sessions: {
-    patchDomain: (
-      id: string,
-      body: { patches: Array<{ path: string; value: unknown }> },
-    ) => Promise<unknown>;
-  };
 }
 
 function sectionArtifactHubDomain(): Record<string, unknown> {
@@ -203,20 +199,24 @@ function scriptedAuthor(captures: Capture[]): UnifiedAuthorDriverOptions['comple
   };
 }
 
-async function seedSectionArtifacts(client: PatchableClient, sessionId: string): Promise<void> {
-  await client.sessions.patchDomain(sessionId, {
-    patches: [
-      { path: SUMMARY_PATH, value: SUMMARY_SENTINEL },
-      { path: `${SECTIONS_PATH}.section_alpha.id`, value: 'section-alpha' },
-      { path: `${SECTIONS_PATH}.section_alpha.heading`, value: 'Background' },
-      { path: `${SECTIONS_PATH}.section_alpha.status`, value: 'approved' },
-      { path: `${SECTIONS_PATH}.section_alpha.text`, value: SECTION_ONE_TEXT },
-      { path: `${SECTIONS_PATH}.${SECTION_TWO_KEY}.id`, value: SECTION_TWO_ID },
-      { path: `${SECTIONS_PATH}.${SECTION_TWO_KEY}.heading`, value: SECTION_TWO_HEADING },
-      { path: `${SECTIONS_PATH}.${SECTION_TWO_KEY}.status`, value: SECTION_TWO_STATUS },
-      { path: SECTION_TWO_TEXT_PATH, value: SECTION_TWO_TEXT },
-    ],
-  });
+function sectionArtifactsState(): Record<string, unknown> {
+  return {
+    [SUMMARY_PATH]: SUMMARY_SENTINEL,
+    [`${SECTIONS_PATH}.section_alpha.id`]: 'section-alpha',
+    [`${SECTIONS_PATH}.section_alpha.heading`]: 'Background',
+    [`${SECTIONS_PATH}.section_alpha.status`]: 'approved',
+    [`${SECTIONS_PATH}.section_alpha.text`]: SECTION_ONE_TEXT,
+    [`${SECTIONS_PATH}.${SECTION_TWO_KEY}.id`]: SECTION_TWO_ID,
+    [`${SECTIONS_PATH}.${SECTION_TWO_KEY}.heading`]: SECTION_TWO_HEADING,
+    [`${SECTIONS_PATH}.${SECTION_TWO_KEY}.status`]: SECTION_TWO_STATUS,
+    [SECTION_TWO_TEXT_PATH]: SECTION_TWO_TEXT,
+  };
+}
+
+function withSeedIngestionPaths(specYaml: string, paths: string[]): string {
+  const spec = load(specYaml) as ParsedSpec;
+  spec.ingestion.seed = [...new Set([...(spec.ingestion.seed ?? []), ...paths])];
+  return dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
 }
 
 function hasTool(tools: OpenAIToolDefinition[], name: string): boolean {

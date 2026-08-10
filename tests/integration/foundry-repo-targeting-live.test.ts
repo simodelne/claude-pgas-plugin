@@ -132,7 +132,10 @@ async function runRepoTargetingAttempt(env: LiveRepoTargetingEnv, attempt: numbe
 
     const created = await client.sessions.create({
       program: PROGRAM,
-      domain_context: { query: existingRepoMandate(targetDir) },
+      initial_trigger: {
+        channel: 'seed',
+        payload: { 'inputs.domain_context.query': existingRepoMandate(targetDir) },
+      },
     });
     const sessionId = created.sessionId;
 

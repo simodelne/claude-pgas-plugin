@@ -17,6 +17,7 @@ features:
   - inline_world_query
 
 channels:
+  seed: { direction: In, sync: Async }
   user_text: { direction: In, sync: Async }
   system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
@@ -24,7 +25,7 @@ channels:
 modes:
   start:
     vocabulary: [begin_work, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, system_mode_entry, widget_output]
+    channels: [seed, user_text, system_mode_entry, widget_output]
     transitions:
       - target: working
         guard: { kind: FieldTruthy, path: work.started }
@@ -72,6 +73,9 @@ prompts:
   complete: "Terminal mode after the work is complete."
 
 ingestion:
+  seed:
+    - inputs.domain_context
+    - inputs.domain_context.query
   user_text:
     - inputs.user_text
   system_mode_entry:
@@ -133,6 +137,7 @@ schema:
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
   inputs.domain_context: object
+  inputs.domain_context.query: string
   governance.round_counter: number
   notebook.*: string
   notebook_pins: array
@@ -189,8 +194,6 @@ control_plane:
         - op: create_session
           as: session
           program: "{{SLUG}}"
-          domain_context:
-            query: "$args.query"
         - op: trigger
           session: "$session.id"
           channel: user_text

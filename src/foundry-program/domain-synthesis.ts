@@ -207,6 +207,16 @@ export async function synthesizeDomainLogic(
       providerUrl,
     });
     const cachePath = join(cacheDir, `${cacheKey}.json`);
+    const legacyWorldWritePrompt = legacyWorldWriteCachePrompt(prompt);
+    const legacyWorldWriteCachePath = legacyWorldWritePrompt
+      ? join(cacheDir, `${cacheKeyFor({
+          stage,
+          contract: workingArtifact.contracts_ts,
+          prompt: legacyWorldWritePrompt,
+          model,
+          providerUrl,
+        })}.json`)
+      : undefined;
     const repoIntegration = integrationForClassification(classification, integrations);
     const exportDescriptor = exportDescriptorForStage(workingArtifact, stage, classification);
     const webNavigationDescriptor = webNavigationDescriptorForStage(classification);
@@ -236,7 +246,9 @@ export async function synthesizeDomainLogic(
       ...(domainSpec ? { domainSpec } : {}),
       reasoningContracts,
     };
-    const cached = exportDescriptor || webNavigationDescriptor || persistenceDescriptor ? undefined : readCache(cachePath);
+    const cached = exportDescriptor || webNavigationDescriptor || persistenceDescriptor
+      ? undefined
+      : readCache(cachePath) ?? (legacyWorldWriteCachePath ? readCache(legacyWorldWriteCachePath) : undefined);
     if (cached) {
       let behaviorFields = behaviorAuditFields(cached);
       if (classification.adapter_kind === 'repo_integration' && repoIntegration?.kind === 'http_api') {
@@ -4443,6 +4455,29 @@ function cacheKeyFor(input: { stage: string; contract: string; prompt: string; m
     input.model,
     input.providerUrl,
   ].join('\n---\n'));
+}
+
+function legacyWorldWriteCachePrompt(prompt: string): string | undefined {
+  // Keep pre-v4 stage-body cache entries reusable when only bootstrap write
+  // surfaces changed; generated bodies do not depend on seed/control-plane syntax.
+  let normalized = prompt
+    .replace(
+      /\nchannels:\n  seed:\n    direction: In\n    sync: Async\n  user_text:/u,
+      '\nchannels:\n  user_text:',
+    )
+    .replace(/\n      - seed(?=\n)/gu, '')
+    .replace(
+      /\ningestion:\n  seed:\n    - inputs\.domain_context\n    - inputs\.domain_context\.query\n  user_text:/u,
+      '\ningestion:\n  user_text:',
+    )
+    .replace(/\n  inputs\.domain_context\.query: string(?=\n)/u, '');
+
+  normalized = normalized.replace(
+    /(\n        - op: create_session\n          as: session\n          program: [^\n]+\n)(        - op: trigger\n          session: \$session\.id\n          channel: )/u,
+    '$1          domain_context:\n            query: $args.query\n$2',
+  );
+
+  return normalized === prompt ? undefined : normalized;
 }
 
 function readCache(path: string): CacheRecord | undefined {

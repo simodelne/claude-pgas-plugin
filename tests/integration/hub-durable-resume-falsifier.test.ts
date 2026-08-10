@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
@@ -25,6 +25,7 @@ const AMENDMENT_RESULT_PATH = 'amend_approval.result_json';
 const AMENDMENT_ITEMS_PATH = 'amend_approval.items_json';
 const AMENDMENT_GUARD_PATH = `${HUB_STAGE}.amend_requested`;
 const NOTE_PATH = 'notebook.resume_note';
+const TEST_STATE_CHANNEL = 'test_state';
 
 const CHECKPOINT_STATE = {
   [SUMMARY_PATH]: 'TASK5_SUMMARY_CHECKPOINT_SENTINEL',
@@ -52,7 +53,11 @@ const MUTATED_STATE = {
 describe('hub durable checkpoint/resume falsifier', () => {
   it('synthesizes a durable conversation channel and resumes hub state from checkpoint', { timeout: 120_000 }, async () => {
     const artifact = synthesizeProgramSpecFromDomain(hubDomain());
-    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const specYaml = withTestStateChannel(artifact.spec_yaml, [
+      ...Object.keys(CHECKPOINT_STATE),
+      ...Object.keys(MUTATED_STATE),
+    ]);
+    const parsed = load(specYaml) as ParsedSpec;
 
     expect.soft(parsed.features).toContain('durable_channel');
     expect.soft(parsed.channels[ENTRY_CHANNEL]).toMatchObject({
@@ -68,7 +73,7 @@ describe('hub durable checkpoint/resume falsifier', () => {
         slug: PROGRAM_SLUG,
         name: PROGRAM_NAME,
         outDir: targetDir,
-        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedSpecYaml: specYaml,
         synthesizedRegistrationTs: artifact.registration_ts,
         synthesizedContractsTs: artifact.contracts_ts,
         synthesizedHandlersTs: artifact.handlers_ts,
@@ -93,6 +98,8 @@ describe('hub durable checkpoint/resume falsifier', () => {
       const dbPath = join(targetDir, 'hub-resume.sqlite');
       const firstAuthor = scriptedAuthor([
         effect('begin_work', {}, channelForAction(parsed, 'begin_work')),
+        effect('session_status', {}, channelForAction(parsed, 'session_status')),
+        effect('session_status', {}, channelForAction(parsed, 'session_status')),
       ]);
       const first = await startRouteHarness({
         programs: [{ name: PROGRAM_SLUG, entry }],
@@ -272,9 +279,7 @@ async function patchState(
   sessionId: string,
   state: Record<string, unknown>,
 ): Promise<void> {
-  await client.sessions.patchDomain(sessionId, {
-    patches: Object.entries(state).map(([path, value]) => ({ path, value })),
-  });
+  await client.sessions.trigger(sessionId, { channel: TEST_STATE_CHANNEL, payload: state });
 }
 
 async function readState(
@@ -294,6 +299,19 @@ function checkpointIdFrom(value: unknown): string {
     return value.checkpoint.checkpointId;
   }
   throw new Error(`checkpoint response missing checkpointId: ${JSON.stringify(value)}`);
+}
+
+function withTestStateChannel(specYaml: string, paths: string[]): string {
+  const spec = load(specYaml) as ParsedSpec & {
+    ingestion: Record<string, string[]>;
+    modes: Record<string, { channels?: string[] }>;
+  };
+  spec.channels[TEST_STATE_CHANNEL] = { direction: 'In', sync: 'Async' };
+  spec.ingestion[TEST_STATE_CHANNEL] = [...new Set(paths)];
+  for (const mode of Object.values(spec.modes)) {
+    mode.channels = [...new Set([...(mode.channels ?? []), TEST_STATE_CHANNEL])];
+  }
+  return dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
 }
 
 function channelForAction(spec: ParsedSpec, actionName: string): string {

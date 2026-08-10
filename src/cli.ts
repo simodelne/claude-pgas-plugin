@@ -51,16 +51,15 @@ interface AgentArgs {
   nonInteractive?: boolean;
 }
 
-interface DomainPatch {
-  path: string;
-  value: unknown;
-}
-
 interface SeededSessionClient {
   sessions: {
-    create(body: { program: string; domain_context?: unknown }): Promise<{ sessionId: string }>;
-    patchDomain(sessionId: string, body: { patches: DomainPatch[] }): Promise<unknown>;
+    create(body: { program: string; initial_trigger?: InitialTriggerSeed }): Promise<{ sessionId: string }>;
   };
+}
+
+interface InitialTriggerSeed {
+  channel: string;
+  payload: unknown;
 }
 
 export interface CreateSessionWithInitialStateOptions {
@@ -164,31 +163,38 @@ export async function createSessionWithInitialState(
   client: SeededSessionClient,
   options: CreateSessionWithInitialStateOptions,
 ): Promise<{ sessionId: string }> {
-  const created = await client.sessions.create({
+  return await client.sessions.create({
     program: options.program,
-    ...(options.domainContext !== undefined ? { domain_context: options.domainContext } : {}),
+    initial_trigger: {
+      channel: 'seed',
+      payload: initialTriggerPayloadFromSeedInputs(options.initialState, options.domainContext),
+    },
   });
-  const patches = initialStatePatchesFromDomain(options.initialState);
-  if (patches.length > 0) {
-    await client.sessions.patchDomain(created.sessionId, { patches });
-  }
-  return created;
 }
 
-export function initialStatePatchesFromDomain(initialState: Record<string, unknown>): DomainPatch[] {
-  const patches: DomainPatch[] = [];
+export function initialTriggerPayloadFromSeedInputs(
+  initialState: Record<string, unknown>,
+  domainContext?: unknown,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
   const slug = stringValue(initialState['program.slug']);
   const name = stringValue(initialState['program.name']);
   const targetDir = stringValue(initialState['program.target_dir']);
 
-  if (slug !== undefined) patches.push({ path: 'program.slug', value: slug });
-  if (name !== undefined) patches.push({ path: 'program.name', value: name });
-  if (targetDir !== undefined) patches.push({ path: 'program.target_dir', value: targetDir });
+  if (slug !== undefined) payload['program.slug'] = slug;
+  if (name !== undefined) payload['program.name'] = name;
+  if (targetDir !== undefined) payload['program.target_dir'] = targetDir;
   if (slug !== undefined && name !== undefined && targetDir !== undefined) {
-    patches.push({ path: 'program.target_dir_confirmed', value: true });
+    payload['program.target_dir_confirmed'] = true;
   }
 
-  return patches;
+  if (domainContext !== undefined) {
+    for (const [path, value] of domainContextSeedEntries(domainContext)) {
+      payload[path] = value;
+    }
+  }
+
+  return payload;
 }
 
 function installInitialStateSessionCreateInterceptor(initialState: Record<string, unknown>): () => void {
@@ -206,8 +212,8 @@ export function createInitialStateSessionCreateFetch(
   originalFetch: typeof fetch,
   initialState: Record<string, unknown>,
 ): typeof fetch {
-  const patches = initialStatePatchesFromDomain(initialState);
-  if (patches.length === 0) return originalFetch;
+  const initialPayload = initialTriggerPayloadFromSeedInputs(initialState);
+  if (Object.keys(initialPayload).length === 0) return originalFetch;
 
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -221,26 +227,10 @@ export function createInitialStateSessionCreateFetch(
       return originalFetch(request);
     }
 
-    const createResponse = await originalFetch(new Request(request, {
-      body: JSON.stringify(stripInitialStateFromCreateBody(body, initialState)),
+    return await originalFetch(new Request(request, {
+      body: JSON.stringify(addInitialStateToCreateBody(body, initialPayload)),
       headers: jsonHeaders(request.headers),
     }));
-    if (!createResponse.ok) return createResponse;
-
-    const created = await readJsonObject(createResponse.clone());
-    const sessionId = typeof created?.sessionId === 'string' ? created.sessionId : '';
-    if (sessionId.length > 0) {
-      const patchResponse = await originalFetch(new Request(sessionDomainUrl(url, sessionId), {
-        method: 'PATCH',
-        headers: jsonHeaders(request.headers),
-        body: JSON.stringify({ patches }),
-      }));
-      if (!patchResponse.ok) {
-        throw new Error(`initial state patch failed (${String(patchResponse.status)}): ${await patchResponse.text()}`);
-      }
-    }
-
-    return createResponse;
   };
 }
 
@@ -670,27 +660,49 @@ async function readJsonObject(requestOrResponse: Request | Response): Promise<Re
   }
 }
 
-function stripInitialStateFromCreateBody(
+function addInitialStateToCreateBody(
   body: Record<string, unknown>,
-  initialState: Record<string, unknown>,
+  initialPayload: Record<string, unknown>,
 ): Record<string, unknown> {
-  const domainContext = body.domain_context;
+  const trigger = isInitialTriggerSeed(body.initial_trigger)
+    ? body.initial_trigger
+    : { channel: 'seed', payload: {} };
+  return {
+    ...body,
+    initial_trigger: {
+      ...trigger,
+      channel: 'seed',
+      payload: {
+        ...pathPayloadFromTriggerPayload(trigger.payload),
+        ...initialPayload,
+      },
+    },
+  };
+}
+
+function pathPayloadFromTriggerPayload(payload: unknown): Record<string, unknown> {
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    ? { ...payload as Record<string, unknown> }
+    : {};
+}
+
+function isInitialTriggerSeed(value: unknown): value is InitialTriggerSeed {
+  return value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof (value as { channel?: unknown }).channel === 'string';
+}
+
+function domainContextSeedEntries(domainContext: unknown): Array<[string, unknown]> {
   if (domainContext === null || typeof domainContext !== 'object' || Array.isArray(domainContext)) {
-    return body;
+    return [['inputs.domain_context.value', domainContext]];
   }
 
-  const strippedContext: Record<string, unknown> = { ...domainContext };
-  for (const key of Object.keys(initialState)) {
-    delete strippedContext[key];
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(domainContext)) {
+    entries.push([key.startsWith('inputs.domain_context.') ? key : `inputs.domain_context.${key}`, value]);
   }
-
-  const strippedBody = { ...body };
-  if (Object.keys(strippedContext).length === 0) {
-    delete strippedBody.domain_context;
-  } else {
-    strippedBody.domain_context = strippedContext;
-  }
-  return strippedBody;
+  return entries;
 }
 
 function jsonHeaders(headers: Headers): Headers {
@@ -698,11 +710,6 @@ function jsonHeaders(headers: Headers): Headers {
   next.set('content-type', 'application/json');
   next.delete('content-length');
   return next;
-}
-
-function sessionDomainUrl(createUrl: URL, sessionId: string): string {
-  const patchPath = createUrl.pathname.replace(/\/sessions$/u, `/sessions/${encodeURIComponent(sessionId)}/domain`);
-  return `${createUrl.origin}${patchPath}`;
 }
 
 function deriveNameFromSlug(slug: string): string {
