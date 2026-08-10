@@ -9,6 +9,13 @@ import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SourceGroundedExtractor, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
+import { activeEnforcedConstructs } from './engine-primitive-registry.js';
+import {
+  detectGovernedConstructs,
+  fatalGovernanceViolations,
+  GovernanceRefusalError,
+  type GovernedArtifactKind,
+} from './governance-gate.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
@@ -771,28 +778,33 @@ export function synthesizeProgramSpecFromDomain(
     renderContractsSource(stages, stageClassification, transitionActions, reasoningContractsBySlug),
     documentExtractionGaps,
   );
+  const handlersTs = renderHandlersSource(transitionActions, {
+    includeReactionHandlers: true,
+    resolverImport: './handlers/_resolver.js',
+    contractsImport: './contracts.js',
+    stageImportPrefix: './stages',
+    initialEntryPath,
+    entryPath: `inputs.${entryChannel}`,
+    flatMirrorStages: stageOutputMirrorStages,
+    collectionLifecycle: completion.collection_lifecycle,
+    confirmationLoops,
+    delegationChildren,
+    documents,
+    docxExtractorImport: './extract/docx.js',
+  }, reasoningContractsBySlug);
+  const toolsTs = renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents, registeredTools);
+
+  verifyGeneratedSourceGovernance(handlersTs, 'reaction_handler', 'handlers_ts');
+  verifyGeneratedSourceGovernance(toolsTs, 'resolver', 'tools_ts');
 
   return {
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     contracts_ts: contractsTs,
-    handlers_ts: renderHandlersSource(transitionActions, {
-      includeReactionHandlers: true,
-      resolverImport: './handlers/_resolver.js',
-      contractsImport: './contracts.js',
-      stageImportPrefix: './stages',
-      initialEntryPath,
-      entryPath: `inputs.${entryChannel}`,
-      flatMirrorStages: stageOutputMirrorStages,
-      collectionLifecycle: completion.collection_lifecycle,
-      confirmationLoops,
-      delegationChildren,
-      documents,
-      docxExtractorImport: './extract/docx.js',
-    }, reasoningContractsBySlug),
+    handlers_ts: handlersTs,
     handlers_index_ts: renderHandlersIndexBarrelSource(),
-    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents, registeredTools),
+    tools_ts: toolsTs,
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     registration_ts: renderRegistrationSource(toPascalCase(slug), {
@@ -910,6 +922,21 @@ export function resynthesizeWithReasoningContracts(
     ...(context.interaction ? { 'intake.interaction_json': JSON.stringify(context.interaction) } : {}),
     ...(context.skills ? { 'intake.skills_json': JSON.stringify(context.skills) } : {}),
   }, { ...options, reasoningContracts: contracts });
+}
+
+function verifyGeneratedSourceGovernance(
+  sourceText: string,
+  artifactKind: GovernedArtifactKind,
+  artifactName: string,
+): void {
+  const violations = fatalGovernanceViolations(
+    detectGovernedConstructs(sourceText),
+    artifactKind,
+    activeEnforcedConstructs(),
+  );
+  if (violations.length > 0) {
+    throw new GovernanceRefusalError(artifactName, violations);
+  }
 }
 
 export function refreshStaleTransitionsForStages(
