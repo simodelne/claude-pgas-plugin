@@ -387,7 +387,13 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     if (!state.sessionId) {
       const created = await client.sessions.create({
         program,
-        domain_context: { ...(options.initialDomain ?? {}), query: userText },
+        initial_trigger: {
+          channel: 'seed',
+          payload: {
+            ...(options.initialDomain ?? {}),
+            'inputs.domain_context.query': userText,
+          },
+        },
       });
       state.sessionId = created.sessionId;
     }

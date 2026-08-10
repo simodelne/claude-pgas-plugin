@@ -18,6 +18,7 @@ features:
   - runtime_control
 
 channels:
+  seed: { direction: In, sync: Async }
   user_text: { direction: In, sync: Async }
   user_confirmation: { direction: In, sync: Async, structured_decision: true }
   system_mode_entry: { direction: In, sync: Async }
@@ -29,7 +30,7 @@ channels:
 modes:
   intake_intelligence:
     vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_documents_descriptor, record_q6_completion, record_skill_catalog, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    channels: [seed, user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
         - { kind: FieldFalsy, path: program.target_dir_confirmed }
@@ -485,6 +486,34 @@ prompts:
   curator_request: "Prepare a curator request for missing repo wiring."
 
 ingestion:
+  seed:
+    - program.slug
+    - program.name
+    - program.design_path
+    - program.target_dir
+    - program.target_dir_confirmed
+    - inputs.domain_context
+    - notebook.entries
+    - notebook.pins
+    - intake.purpose
+    - intake.entry_channel
+    - intake.stages_json
+    - intake.transitions_json
+    - intake.delegation_json
+    - intake.completion_json
+    - intake.q1_recorded
+    - intake.q2_recorded
+    - intake.q3_recorded
+    - intake.q4_recorded
+    - intake.q5_recorded
+    - intake.q6_recorded
+    - intake.program_intake_finalized
+    - artifact_plan.status
+    - artifact_plan.approved
+    - artifact_plan.write_authorized
+    - artifact_plan.artifacts
+    - artifacts.written
+    - artifacts.generated_paths
   user_text: [inputs.user_text]
   user_confirmation:
     - inputs.user_decision
@@ -1145,6 +1174,9 @@ schema:
   inputs.mode_entry.mode: string
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
+  inputs.domain_context: object
+  inputs.domain_context.query: string
+  inputs.domain_context.value: any
   intake.mandate: string
   intake.last_question_asked: number
   intake.last_question_text: string
@@ -1311,8 +1343,6 @@ control_plane:
         - op: create_session
           as: session
           program: "pgas-new"
-          domain_context:
-            query: "$args.query"
         - op: trigger
           session: "$session.id"
           channel: user_text

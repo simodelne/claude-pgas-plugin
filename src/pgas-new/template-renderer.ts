@@ -1453,15 +1453,18 @@ function actionChannelsFor(specs: Specification[]): Map<string, string> {
 }
 
 function firstInputChannel(spec: Specification): string {
+  let fallback: string | undefined;
   for (const [id, channel] of spec.schannels) {
-    if (channel.direction === 'In' && id !== 'system_query_result' && id !== 'system_mode_entry') {
+    if (channel.direction !== 'In') {
+      continue;
+    }
+    fallback ??= id;
+    if (id !== 'seed' && id !== 'system_query_result' && id !== 'system_mode_entry') {
       return id;
     }
   }
-  for (const [id, channel] of spec.schannels) {
-    if (channel.direction === 'In') {
-      return id;
-    }
+  if (fallback) {
+    return fallback;
   }
   throw new Error(\`program \${spec.name} declares no input channel\`);
 }

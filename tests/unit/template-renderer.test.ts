@@ -355,7 +355,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^3.34.0"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.0.0-rc.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
@@ -381,13 +381,17 @@ describe('template renderer', () => {
       expect(apiTest).toContain('await server.close()');
       expect(apiTest).toContain('await client.programs.list()');
       expect(apiTest).toContain('await client.sessions.create');
+      expect(apiTest).toContain('initial_trigger');
+      expect(apiTest).toContain("'inputs.domain_context.query': 'static black-box verification'");
       expect(apiTest).toContain('await client.sessions.get');
       expect(apiTest).toContain('await client.sessions.world');
-      expect(apiTest).toContain("expect(normalized).toHaveProperty('inputs.domain_context')");
+      expect(apiTest).toContain("expect(normalized).toHaveProperty('inputs.domain_context.query'");
+      expect(apiTest).not.toContain(['domain_context', ': { query'].join(''));
       expect(apiTest).not.toContain("expect(normalized).toHaveProperty('inputs.initial_user_text')");
       expect(apiTest).not.toContain("baseUrl: 'http://127.0.0.1:0'");
       expect(apiTest).not.toContain('expect(httpClient).toBeDefined()');
       expect(liveTest).toContain('await client.sessions.create');
+      expect(liveTest).toContain('initial_trigger');
       expect(liveTest).toContain('await client.sessions.trigger');
       expect(liveTest).toContain('await client.sessions.get');
       expect(liveTest).toContain('await client.sessions.rounds');
@@ -396,6 +400,7 @@ describe('template renderer', () => {
       expect(liveTest).toContain('expect(missingLiveProviderEnv.length).toBeGreaterThan(0)');
       expect(liveTest).toContain("expect(liveProviderTestMode).toBe('skip')");
       expect(liveTest).not.toContain('expect(liveIt).toBe(it.skip)');
+      expect(liveTest).not.toContain(['domain_context', ':'].join(''));
       expect(liveTest).not.toContain('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation');
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
@@ -715,6 +720,7 @@ describe('template renderer', () => {
     expect(parsed.schema).toMatchObject({
       'inputs.user_text': 'string',
       'inputs.domain_context': 'object',
+      'inputs.domain_context.query': 'string',
       'notebook.*': 'string',
       notebook_pins: 'array',
       'work.started': 'boolean',
@@ -1386,7 +1392,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     }
   });
 
-  it('declares the internal system_mode_entry continuation channel in generated specs', () => {
+  it('declares the internal seed and system_mode_entry continuation channels in generated specs', () => {
     for (const template of ['pgas-new-foundry'] as const) {
       const outDir = mkdtempSync(join(tmpdir(), `pgas-new-mode-entry-${template}-`));
       try {
@@ -1405,11 +1411,14 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
           schema: Record<string, string>;
         };
 
+        expect(parsed.channels.seed).toEqual({ direction: 'In', sync: 'Async' });
+        expect(parsed.ingestion.seed).toEqual(['inputs.domain_context', 'inputs.domain_context.query']);
         expect(parsed.channels.system_mode_entry).toEqual({ direction: 'In', sync: 'Async' });
         expect(parsed.ingestion.system_mode_entry).toEqual(['inputs.mode_entry']);
         expect(parsed.schema['inputs.mode_entry']).toBe('object');
         const firstMode = Object.keys(parsed.modes)[0];
         expect(firstMode).toBeDefined();
+        expect(parsed.modes[firstMode as string]?.channels).toContain('seed');
         expect(parsed.modes[firstMode as string]?.channels).toContain('system_mode_entry');
       } finally {
         rmSync(outDir, { recursive: true, force: true });

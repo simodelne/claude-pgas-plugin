@@ -34,8 +34,8 @@ describe('upload route-level engine falsifier', () => {
     const failures: Error[] = [];
 
     await recordFalsifier('F-2', failures, async () => {
-      const refs = required.afterUploadDomain[DOCUMENT_REFS_PATH];
-      const indexedRef = required.afterUploadDomain[`${DOCUMENT_REFS_PATH}.0`];
+      const refs = documentRefsFromDomain(required.afterUploadDomain);
+      const indexedRef = firstDocumentRefFromDomain(required.afterUploadDomain);
       expect(Array.isArray(refs)).toBe(true);
       expect(isRecord(indexedRef)).toBe(true);
       expect((refs as Array<Record<string, unknown>>)[0]?.fileId).toBe(required.fileRef.fileId);
@@ -348,7 +348,12 @@ async function runSkipScenario(): Promise<SkipEvidence> {
       const created = await client.sessions.create({ program: OPTIONAL_PROGRAM });
       await client.sessions.trigger(created.sessionId, {
         channel: 'document_upload',
-        payload: { [DOCUMENT_STATUS_PATH]: 'no_documents_available' },
+        payload: {
+          [DOCUMENT_STATUS_PATH]: 'no_documents_available',
+          'inputs.document_intake.completed': true,
+          'inputs.document_intake.documents_requested': true,
+          'inputs.document_intake.source': NO_DOCS_SOURCE,
+        },
       });
       const [session, world] = await Promise.all([
         client.sessions.get(created.sessionId),
@@ -357,7 +362,7 @@ async function runSkipScenario(): Promise<SkipEvidence> {
       const domain = world.domain;
       const source = resultAt(domain, SOURCE_PATH);
       return {
-        no_docs_record: domain[DOCUMENT_ROOT_PATH],
+        no_docs_record: documentIntakeFromDomain(domain),
         source_status: source.status,
         source_ready: domain[SOURCE_READY_PATH],
         final_mode: modeOf(session),
@@ -704,6 +709,7 @@ ingestion:
     - inputs.user_text
   document_upload:
     - ${DOCUMENT_ROOT_PATH}
+    - ${DOCUMENT_REFS_PATH}
 
 action_map:
   enter_upload:
@@ -874,6 +880,10 @@ prompts:
 
 ingestion:
   document_upload:
+    - ${DOCUMENT_STATUS_PATH}
+    - inputs.document_intake.completed
+    - inputs.document_intake.documents_requested
+    - inputs.document_intake.source
     - inputs.document_intake.normalized_message
 
 action_map:
@@ -899,7 +909,7 @@ schema:
 reactions:
   settle_optional_skip:
     event: AfterIngestion
-    watch: [inputs.document_intake.normalized_message]
+    watch: [${DOCUMENT_STATUS_PATH}]
     write_scope: [${SOURCE_PATH}.status, ${SOURCE_READY_PATH}]
 
 repair_bound: 2
@@ -974,6 +984,7 @@ ingestion:
     - inputs.user_text
   document_upload:
     - ${DOCUMENT_ROOT_PATH}
+    - ${DOCUMENT_REFS_PATH}
 
 action_map:
   request_documents:
@@ -1076,6 +1087,7 @@ prompts:
 ingestion:
   document_upload:
     - ${DOCUMENT_ROOT_PATH}
+    - ${DOCUMENT_REFS_PATH}
 
 action_map:
   ingest_documents:
@@ -1212,6 +1224,34 @@ function documentRefPayload(fileRef: FileRef): Record<string, unknown> {
       { fileId: fileRef.fileId, name: fileRef.name },
     ],
   };
+}
+
+function documentRefsFromDomain(domain: Record<string, unknown>): unknown[] {
+  const direct = domain[DOCUMENT_REFS_PATH];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+  const root = domain[DOCUMENT_ROOT_PATH];
+  if (isRecord(root) && Array.isArray(root.file_refs)) {
+    return root.file_refs;
+  }
+  return [];
+}
+
+function firstDocumentRefFromDomain(domain: Record<string, unknown>): unknown {
+  const direct = domain[`${DOCUMENT_REFS_PATH}.0`];
+  if (isRecord(direct)) {
+    return direct;
+  }
+  return documentRefsFromDomain(domain)[0];
+}
+
+function documentIntakeFromDomain(domain: Record<string, unknown>): Record<string, unknown> {
+  const root = domain[DOCUMENT_ROOT_PATH];
+  if (isRecord(root)) {
+    return root;
+  }
+  return resultAt(domain, DOCUMENT_ROOT_PATH);
 }
 
 function refsFromResponse(response: unknown): FileRef[] {

@@ -156,7 +156,10 @@ async function runGraduationAttempt(env: LiveGraduationEnv, attempt: number): Pr
 
     const created = await client.sessions.create({
       program: PROGRAM,
-      domain_context: { query: graduationMandate(targetDir) },
+      initial_trigger: {
+        channel: 'seed',
+        payload: { 'inputs.domain_context.query': graduationMandate(targetDir) },
+      },
     });
     const sessionId = created.sessionId;
 

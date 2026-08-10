@@ -52,7 +52,7 @@ export function normalizeGuardField(field: string | undefined): string | undefin
 }
 
 export function channelsForBootstrap(entryChannel: string): string[] {
-  return unique([entryChannel, 'system_mode_entry', 'widget_output']);
+  return unique([entryChannel, 'seed', 'system_mode_entry', 'widget_output']);
 }
 
 export function initialInputPath(entryChannel: string): string {

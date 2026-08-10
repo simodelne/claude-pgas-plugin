@@ -39,8 +39,6 @@ export function renderControlPlaneControlsYaml(program: string): string {
     '        - op: create_session',
     '          as: session',
     `          program: "${program}"`,
-    '          domain_context:',
-    '            query: "$args.query"',
     '        - op: trigger',
     '          session: "$session.id"',
     '          channel: user_text',

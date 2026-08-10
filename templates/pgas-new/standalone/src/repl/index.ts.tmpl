@@ -347,7 +347,10 @@ async function handleText(userText: string): Promise<void> {
   if (!state.sessionId) {
     const created = await client.sessions.create({
       program: PROGRAM,
-      domain_context: { query: userText },
+      initial_trigger: {
+        channel: 'seed',
+        payload: { 'inputs.domain_context.query': userText },
+      },
     });
     state.sessionId = created.sessionId;
   }
