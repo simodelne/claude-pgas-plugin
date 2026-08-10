@@ -46,7 +46,7 @@ type CallbackExpression = ts.ArrowFunction | ts.FunctionExpression;
 
 export function detectGovernedConstructs(sourceText: string): GovernanceFinding[] {
   const sourceFile = ts.createSourceFile('governance-gate-input.ts', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const setVariables = collectSetVariableNames(sourceFile);
+  const setOrMapVariables = collectSetOrMapVariableNames(sourceFile);
   const domainCollectionVariables = collectDomainCollectionVariableNames(sourceFile);
   const typedFlagVariables = collectTypedFlagVariableNames(sourceFile);
   const findings: GovernanceFinding[] = [];
@@ -126,6 +126,10 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
       addFinding('silent_catch', node);
     }
 
+    if (ts.isArrayLiteralExpression(node) && looksLikeSetSpreadDedup(node)) {
+      addFinding('compute_dedup', node);
+    }
+
     if (ts.isBinaryExpression(node) && isFallbackOperator(node.operatorToken.kind) && !isNestedFallbackExpression(node)) {
       const operands = fallbackOperands(node);
       const domainOperandCount = operands.filter((operand) => isDomainMemberAccess(operand)).length;
@@ -137,6 +141,9 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
     if (ts.isCallExpression(node)) {
       if (isJsonParseCall(node) && node.arguments[0] && expressionContainsDomainRead(node.arguments[0])) {
         addFinding('json_reshape', node);
+      }
+      if (looksLikeArrayFromSetDedup(node)) {
+        addFinding('compute_dedup', node);
       }
 
       const methodName = callMethodName(node);
@@ -154,7 +161,8 @@ export function detectGovernedConstructs(sourceText: string): GovernanceFinding[
         addFinding('partition_by_verdict', node);
       }
       if ((methodName === 'filter' || methodName === 'reduce') && callback) {
-        const dedup = callbackReferencesSetMembership(callback, setVariables)
+        const dedup = callbackReferencesSetOrMapMembershipAndMutation(callback, setOrMapVariables)
+          || (methodName === 'filter' && looksLikeSelfIndexDedupFilter(callback))
           || (methodName === 'reduce' && looksLikeUniquenessMapReduce(callback));
         if (dedup) {
           addFinding('compute_dedup', node);
@@ -216,14 +224,14 @@ export class GovernanceRefusalError extends Error {
   }
 }
 
-function collectSetVariableNames(sourceFile: ts.SourceFile): Set<string> {
+function collectSetOrMapVariableNames(sourceFile: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   const visit = (node: ts.Node): void => {
     if (
       ts.isVariableDeclaration(node)
       && ts.isIdentifier(node.name)
       && node.initializer
-      && isNewSetExpression(node.initializer)
+      && isNewSetOrMapExpression(node.initializer)
     ) {
       names.add(node.name.text);
     }
@@ -267,9 +275,11 @@ function collectTypedFlagVariableNames(sourceFile: ts.SourceFile): Set<string> {
   return names;
 }
 
-function isNewSetExpression(node: ts.Expression): boolean {
+function isNewSetOrMapExpression(node: ts.Expression): boolean {
   const expression = unwrapExpression(node);
-  return ts.isNewExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === 'Set';
+  return ts.isNewExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && (expression.expression.text === 'Set' || expression.expression.text === 'Map');
 }
 
 function snippetForNode(sourceText: string, sourceFile: ts.SourceFile, node: ts.Node): string {
@@ -652,8 +662,34 @@ function isJsonParseCall(node: ts.CallExpression): boolean {
     && expression.expression.text === 'JSON';
 }
 
-function callbackReferencesSetMembership(callback: CallbackExpression, setVariables: ReadonlySet<string>): boolean {
-  return callbackContains(callback, (node) => {
+function looksLikeSetSpreadDedup(node: ts.ArrayLiteralExpression): boolean {
+  return node.elements.some((element) =>
+    ts.isSpreadElement(element) && isNewNamedCollectionExpression(element.expression, 'Set'));
+}
+
+function looksLikeArrayFromSetDedup(node: ts.CallExpression): boolean {
+  const expression = unwrapExpression(node.expression);
+  return ts.isPropertyAccessExpression(expression)
+    && expression.name.text === 'from'
+    && ts.isIdentifier(expression.expression)
+    && expression.expression.text === 'Array'
+    && Boolean(node.arguments[0] && isNewNamedCollectionExpression(node.arguments[0], 'Set'));
+}
+
+function isNewNamedCollectionExpression(node: ts.Expression, collectionName: 'Set' | 'Map'): boolean {
+  const expression = unwrapExpression(node);
+  return ts.isNewExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.expression.text === collectionName;
+}
+
+function callbackReferencesSetOrMapMethod(
+  callback: CallbackExpression,
+  setOrMapVariables: ReadonlySet<string>,
+  methods: ReadonlySet<string>,
+): Set<string> {
+  const receivers = new Set<string>();
+  callbackContains(callback, (node) => {
     if (!ts.isCallExpression(node)) return false;
     const expression = unwrapExpression(node.expression);
     if (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) {
@@ -662,12 +698,65 @@ function callbackReferencesSetMembership(callback: CallbackExpression, setVariab
     const methodName = ts.isPropertyAccessExpression(expression)
       ? expression.name.text
       : staticExpressionText(expression.argumentExpression);
-    if (methodName !== 'has' && methodName !== 'add') {
+    if (!methodName || !methods.has(methodName)) {
       return false;
     }
     const receiver = unwrapExpression(expression.expression);
-    return ts.isIdentifier(receiver) && setVariables.has(receiver.text);
+    if (!ts.isIdentifier(receiver) || !setOrMapVariables.has(receiver.text)) {
+      return false;
+    }
+    receivers.add(receiver.text);
+    return false;
   });
+  return receivers;
+}
+
+function callbackReferencesSetOrMapMembershipAndMutation(
+  callback: CallbackExpression,
+  setOrMapVariables: ReadonlySet<string>,
+): boolean {
+  const membershipReceivers = callbackReferencesSetOrMapMethod(callback, setOrMapVariables, new Set(['has']));
+  const mutationReceivers = callbackReferencesSetOrMapMethod(callback, setOrMapVariables, new Set(['add', 'set']));
+  return [...membershipReceivers].some((receiver) => mutationReceivers.has(receiver));
+}
+
+function looksLikeSelfIndexDedupFilter(callback: CallbackExpression): boolean {
+  const indexName = parameterName(callback, 1);
+  const collectionName = parameterName(callback, 2);
+  if (!indexName || !collectionName) {
+    return false;
+  }
+  return callbackContains(callback, (node) => {
+    if (!ts.isBinaryExpression(node)) {
+      return false;
+    }
+    if (node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken && node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken) {
+      return false;
+    }
+    return isIndexIdentifier(node.left, indexName) && isSelfIndexLookup(node.right, collectionName)
+      || isIndexIdentifier(node.right, indexName) && isSelfIndexLookup(node.left, collectionName);
+  });
+}
+
+function isIndexIdentifier(node: ts.Expression, indexName: string): boolean {
+  const expression = unwrapExpression(node);
+  return ts.isIdentifier(expression) && expression.text === indexName;
+}
+
+function isSelfIndexLookup(node: ts.Expression, collectionName: string): boolean {
+  const expression = unwrapExpression(node);
+  if (!ts.isCallExpression(expression)) {
+    return false;
+  }
+  const methodName = callMethodName(expression);
+  if (methodName !== 'indexOf' && methodName !== 'findIndex') {
+    return false;
+  }
+  const callee = unwrapExpression(expression.expression);
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) {
+    return false;
+  }
+  return expressionRootIdentifierName(callee.expression) === collectionName;
 }
 
 function looksLikeUniquenessMapReduce(callback: CallbackExpression): boolean {

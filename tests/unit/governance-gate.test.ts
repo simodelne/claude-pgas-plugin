@@ -114,6 +114,31 @@ describe('detectGovernedConstructs', () => {
     expect(kinds).toContain('compute_dedup');
     expect(kinds).toContain('multi_path_fallback');
   });
+  it('does not treat Set membership filters used for routing or status plumbing as dedup', () => {
+    const findings = detectGovernedConstructs(`
+export function selectAllowed() {
+  const allowedSet = new Set(['ready', 'pending']);
+  const rows = [{ status: 'ready' }, { status: 'blocked' }];
+  const allowed = rows.filter((row) => allowedSet.has(row.status));
+  const terminalSet = new Set(['accepted', 'skipped']);
+  const terminal = rows.filter((item) => terminalSet.has(item.status));
+  return { allowed, terminal };
+}`);
+
+    expect(findings.map((x) => x.kind)).not.toContain('compute_dedup');
+  });
+  it('flags spread-of-Set, seen-set accumulation, and self-index filters as dedup', () => {
+    const kinds = detectGovernedConstructs(`
+export function dedup(items) {
+  const uniqueItems = [...new Set(items)];
+  const seen = new Set();
+  const uniqueByEmail = items.filter((item) => seen.has(item.email) ? false : (seen.add(item.email), true));
+  const uniqueById = items.filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index);
+  return { uniqueItems, uniqueByEmail, uniqueById };
+}`).map((x) => x.kind);
+
+    expect(kinds.filter((kind) => kind === 'compute_dedup')).toHaveLength(3);
+  });
   it('finds nothing governable in a thin-glue pass-through body', () => {
     expect(detectGovernedConstructs(THIN_GLUE_BODY)).toEqual([]);
   });
