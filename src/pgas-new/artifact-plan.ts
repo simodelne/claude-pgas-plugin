@@ -369,7 +369,7 @@ function standaloneHostConnectorArtifacts(
             'typecheck',
             'program-deterministic',
           ]),
-          artifact('export', `src/programs/${slug}/report-data.ts`, 'Provide pure structured report-data assembly for PDF report rendering.', 'branch_write', [
+          artifact('projection', `src/programs/${slug}/report-data.ts`, 'Provide pure structured report-data assembly for PDF report rendering.', 'branch_write', [
             'typecheck',
             'program-deterministic',
           ]),
@@ -547,6 +547,7 @@ function reconcileExistingRepoRequestedPath(path: string, programPath: string): 
 
 function isProgramRelativeArtifactPath(path: string): boolean {
   return path === 'projection.ts'
+    || path === 'report-data.ts'
     || path === 'frontend.spec.yml'
     || path === 'specs.yml'
     || path === 'registration.ts'
@@ -568,9 +569,11 @@ function uniqueArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
   });
 }
 
-function kindForRequestedArtifact(path: string): ArtifactKind {
+export function kindForRequestedArtifact(path: string): ArtifactKind {
+  if (path.endsWith('report-data.ts')) return 'projection';
   if (path.includes('/projection.') || path.endsWith('/projection.ts')) return 'projection';
   if (path.includes('frontend')) return 'frontend';
+  if (path.includes('/connectors/')) return 'connector';
   if (path.includes('/extract/')) return 'extract';
   if (path.includes('/export/') || path.includes('docx') || path.includes('html')) return 'export';
   if (path.startsWith('qc/')) return 'qc';

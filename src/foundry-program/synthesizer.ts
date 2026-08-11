@@ -9,13 +9,13 @@ import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SourceGroundedExtractor, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
-import { activeEnforcedConstructs } from './engine-primitive-registry.js';
 import {
   detectGovernedConstructs,
   fatalGovernanceViolations,
   GovernanceRefusalError,
   type GovernedArtifactKind,
 } from './governance-gate.js';
+import { enforcedConstructsForArtifact } from './program-purity.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
@@ -932,7 +932,7 @@ function verifyGeneratedSourceGovernance(
   const violations = fatalGovernanceViolations(
     detectGovernedConstructs(sourceText),
     artifactKind,
-    activeEnforcedConstructs(),
+    enforcedConstructsForArtifact(artifactKind),
   );
   if (violations.length > 0) {
     throw new GovernanceRefusalError(artifactName, violations);
