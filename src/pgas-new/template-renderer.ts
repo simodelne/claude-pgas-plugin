@@ -6,6 +6,11 @@ import { dump, load } from 'js-yaml';
 import ts from 'typescript';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import {
+  assertGeneratedProgramSourceGovernance,
+  assertProgramDirPurity,
+  type ProgramSourceGovernanceExemption,
+} from '../foundry-program/program-purity.js';
+import {
   createExistingRepoArtifactPlan,
   createStandaloneArtifactPlan,
   type ArtifactPlan,
@@ -60,6 +65,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   stageSlugs?: string[];
   template?: ProgramTemplate;
   mandate?: string;
+  requestedArtifactPaths?: string[];
   targetProfile?: ExistingRepoTargetProfile;
   governedAttachFrontendMode?: SimoneOsGovernedAttachFrontendMode;
   synthesizedSpecYaml?: string;
@@ -207,6 +213,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
       stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
+      requestedArtifactPaths: options.requestedArtifactPaths,
     },
   );
   assertSupportedTemplate(options.template);
@@ -402,6 +409,8 @@ function renderPlan(options: {
   const written: string[] = [];
   const renderedArtifacts: RenderedArtifact[] = [];
 
+  assertProgramDirPurity(options.plan.artifacts);
+
   for (const artifact of options.plan.artifacts) {
     const templatePath = options.templateForArtifact(artifact);
     if (!templatePath) {
@@ -423,6 +432,14 @@ function renderPlan(options: {
   }
 
   assertNoDuplicateRenderedHandlerBodies(renderedArtifacts);
+  assertGeneratedProgramSourceGovernance(
+    renderedArtifacts.map(({ artifact, output }) => ({
+      path: artifact.path,
+      kind: artifact.kind,
+      sourceText: output,
+    })),
+    { onUnavoidableExemption: logUnavoidableGovernanceExemption },
+  );
 
   for (const { artifact, outPath, output } of renderedArtifacts) {
     mkdirSync(dirname(outPath), { recursive: true });
@@ -431,6 +448,12 @@ function renderPlan(options: {
   }
 
   return { plan: options.plan, written };
+}
+
+function logUnavoidableGovernanceExemption(exemption: ProgramSourceGovernanceExemption): void {
+  console.warn(
+    `[program-governance] exempted ${exemption.governedArtifactKind} findings in ${exemption.path}: ${exemption.findingKinds.join(', ')}`,
+  );
 }
 
 function templateForExistingArtifact(
