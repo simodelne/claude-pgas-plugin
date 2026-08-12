@@ -213,6 +213,20 @@ interface KeyedCollectionSpecDecl {
   key: string;
 }
 
+interface NoActionEscapePlan {
+  mode: string;
+  counter: string;
+  cap: number;
+  arm: string;
+  guidance: string;
+  aggregateGuard: string;
+  blockedMode: string;
+  blockedAction: string;
+  proposeAction: string;
+}
+
+const NO_ACTION_ESCAPE_CAP = 3;
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -365,8 +379,14 @@ export function synthesizeProgramSpecFromDomain(
   );
   const flatMirrorStages = collectFlatMirrorStages(stages, stageClassificationBySlug);
 
-  const modeNames = stages.map((stage) => stage.slug);
-  const firstMode = modeNames[0] as string;
+  const baseModeNames = stages.map((stage) => stage.slug);
+  const noActionEscapePlans = noActionEscapePlansForConfirmationLoops(
+    confirmationLoops,
+    completion.collection_lifecycle,
+    baseModeNames,
+  );
+  const modeNames = unique([...baseModeNames, ...noActionEscapePlans.map((plan) => plan.blockedMode)]);
+  const firstMode = baseModeNames[0] as string;
   const modeNameSet = new Set(modeNames);
   if (!modeNameSet.has(completion.final_stage)) {
     throw new Error(`completion.final_stage must reference a named stage; got ${completion.final_stage}`);
@@ -458,6 +478,7 @@ export function synthesizeProgramSpecFromDomain(
     ...(delegationChildren.length > 0 ? ['delegation'] : []),
     ...(keyedCollections.length > 0 ? ['keyed_collection'] : []),
     ...(recoverySteers.length > 0 ? ['recovery_steer'] : []),
+    ...(noActionEscapePlans.length > 0 ? ['no_action_escape'] : []),
     ...(documentSchemaInvariants.length > 0 ? ['schema_invariants'] : []),
   ]);
   if (keyedCollections.length > 0) {
@@ -469,6 +490,17 @@ export function synthesizeProgramSpecFromDomain(
     spec.recovery_steers = recoverySteers;
   } else {
     delete spec.recovery_steers;
+  }
+  if (noActionEscapePlans.length > 0) {
+    spec.no_action_escapes = noActionEscapePlans.map((plan) => ({
+      mode: plan.mode,
+      counter: plan.counter,
+      cap: plan.cap,
+      arm: plan.arm,
+      guidance: plan.guidance,
+    }));
+  } else {
+    delete spec.no_action_escapes;
   }
   if (documentSchemaInvariants.length > 0) {
     spec.schema_invariants = documentSchemaInvariants;
@@ -513,6 +545,7 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsModeWiring(synthesizedModes, documents);
   applyDelegationModeWiring(synthesizedModes, delegationChildren);
   applyExportDecisionOnlyModeWiring(synthesizedModes, exportActions);
+  applyNoActionEscapeModeWiring(synthesizedModes, noActionEscapePlans);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = Object.fromEntries(
@@ -522,6 +555,7 @@ export function synthesizeProgramSpecFromDomain(
   );
   applyDocumentsProceedTo(recordField(spec, 'proceed_to'), documents, transitionActionsBySource);
   applyConfirmationLoopCompletionProceedTo(recordField(spec, 'proceed_to'), confirmationLoops, transitionActions);
+  applyNoActionEscapeProceedTo(recordField(spec, 'proceed_to'), noActionEscapePlans);
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
@@ -569,6 +603,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleProjection(projection, completion.collection_lifecycle);
   }
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle, modeNames);
+  applyNoActionEscapeProjection(projection, noActionEscapePlans);
   applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames, documents);
   applyRegisteredToolProjection(projection, registeredTools);
@@ -590,6 +625,7 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
+  applyNoActionEscapePrompts(prompts, noActionEscapePlans);
   applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren, documents);
   applyRegisteredToolPrompts(prompts, registeredTools);
@@ -663,6 +699,7 @@ export function synthesizeProgramSpecFromDomain(
   }
   applyConfirmationLoopIntentActions(actionMap, confirmationLoops, completion.collection_lifecycle);
   applyConfirmationLoopCompletionActions(actionMap, confirmationLoops, completion.collection_lifecycle, transitionActions);
+  applyNoActionEscapeActions(actionMap, noActionEscapePlans);
   applyDocumentsActions(actionMap, documents);
   applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
@@ -740,6 +777,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
+  applyNoActionEscapeSchema(schema, noActionEscapePlans);
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
   applyRegisteredToolSchema(schema, registeredTools);
@@ -751,6 +789,7 @@ export function synthesizeProgramSpecFromDomain(
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyTerminalActionGuidance(recordField(spec, 'guidance'), transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle, transitionActions);
+  applyNoActionEscapeGuidance(recordField(spec, 'guidance'), noActionEscapePlans);
   applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren, documents);
   applyRegisteredToolGuidance(recordField(spec, 'guidance'), registeredTools);
@@ -1121,6 +1160,158 @@ function applyConfirmationLoopTransitionGuards(
       }
     }
   }
+}
+
+function noActionEscapePlansForConfirmationLoops(
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor | undefined,
+  existingModeNames: string[],
+): NoActionEscapePlan[] {
+  if (!lifecycle) {
+    return [];
+  }
+  const usedModeNames = new Set(existingModeNames);
+  const usedEscapeBases = new Set<string>();
+  return loops.map((loop, index) => {
+    const escapedCollection = safeIdentifier(loop.collection);
+    const escapeBase = uniqueSuffixedName(
+      `${loop.stage}.no_action_escape.${escapedCollection}`,
+      usedEscapeBases,
+    );
+    const blockedMode = uniqueSuffixedName(
+      `${safeIdentifier(loop.stage)}_no_action_blocked`,
+      usedModeNames,
+    );
+    const blockedAction = `route_${safeIdentifier(blockedMode)}`;
+    const proposeAction = confirmationLoopProposeActionName(loop, index, loops.length);
+    return {
+      mode: loop.stage,
+      counter: `${escapeBase}.counter`,
+      cap: NO_ACTION_ESCAPE_CAP,
+      arm: `${escapeBase}.arm`,
+      aggregateGuard: loop.aggregate.guard_field,
+      blockedMode,
+      blockedAction,
+      proposeAction,
+      guidance: `No admissible confirmation-loop action was emitted; ${loop.stage} is waiting for ${proposeAction} while ${loop.aggregate.guard_field} is false. Emit ${proposeAction} with the active ${lifecycle.item_label} content, or call ${blockedAction} after the no-action escape arms if the work cannot be completed soundly.`,
+    };
+  });
+}
+
+function applyNoActionEscapeModeWiring(
+  modes: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    const mode = recordField(modes, plan.mode);
+    const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
+    mode.transitions = [
+      ...transitions,
+      { target: plan.blockedMode, guard: noActionEscapeBlockedPredicate(plan) },
+    ];
+    const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
+    mode.vocabulary = unique([...vocabulary, plan.blockedAction]);
+    const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+    mode.channels = unique([...channels, 'widget_output']);
+    appendModePrecondition(mode, plan.blockedAction, { kind: 'FieldTruthy', path: plan.arm });
+    appendModePrecondition(mode, plan.blockedAction, { kind: 'FieldFalsy', path: plan.aggregateGuard });
+    appendModePrecondition(mode, plan.proposeAction, { kind: 'FieldFalsy', path: plan.arm });
+  }
+}
+
+function applyNoActionEscapeProceedTo(
+  proceedTo: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    const existing = proceedTo[plan.blockedAction];
+    if (existing !== undefined && existing !== plan.blockedMode) {
+      throw new Error(`no_action_escape blocked action ${plan.blockedAction} has conflicting proceed_to target`);
+    }
+    proceedTo[plan.blockedAction] = plan.blockedMode;
+  }
+}
+
+function applyNoActionEscapeProjection(
+  projection: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    for (const modeName of [plan.mode, plan.blockedMode]) {
+      const modeProjection = recordField(projection, modeName);
+      const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+      modeProjection.include = unique([...include, plan.arm, plan.aggregateGuard]);
+    }
+  }
+}
+
+function applyNoActionEscapePrompts(
+  prompts: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    prompts[plan.blockedMode] = `Terminal blocked sink reached after ${plan.mode} emitted repeated fallback rounds without an admissible confirmation-loop action.`;
+  }
+}
+
+function applyNoActionEscapeGuidance(
+  guidance: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    const existing = Array.isArray(guidance[plan.blockedMode]) ? guidance[plan.blockedMode] as string[] : [];
+    guidance[plan.blockedMode] = [
+      ...existing,
+      `No-action escape from ${plan.mode} armed ${plan.arm}; unresolved work was routed here instead of being auto-approved.`,
+    ];
+  }
+}
+
+function applyNoActionEscapeActions(
+  actionMap: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    if (Object.prototype.hasOwnProperty.call(actionMap, plan.blockedAction)) {
+      throw new Error(`no_action_escape blocked action collides with generated action_map: ${plan.blockedAction}`);
+    }
+    actionMap[plan.blockedAction] = {
+      description: `Route ${plan.mode} to blocked terminal handling after the no-action escape arms ${plan.arm}. This action does not approve unresolved confirmation items and writes no domain state.`,
+      mutations: [],
+      channel: 'widget_output',
+    };
+  }
+}
+
+function applyNoActionEscapeSchema(
+  schema: MutableRecord,
+  plans: NoActionEscapePlan[],
+): void {
+  for (const plan of plans) {
+    schema[plan.counter] = 'number';
+    schema[plan.arm] = 'boolean';
+  }
+}
+
+function noActionEscapeBlockedPredicate(plan: NoActionEscapePlan): MutableRecord {
+  return allPredicates([
+    { kind: 'FieldTruthy', path: plan.arm },
+    { kind: 'FieldFalsy', path: plan.aggregateGuard },
+  ]);
+}
+
+function uniqueSuffixedName(base: string, used: Set<string>): string {
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  let suffix = 2;
+  while (used.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  const value = `${base}_${suffix}`;
+  used.add(value);
+  return value;
 }
 
 function applyCollectionNumericAggregateTransitionGuards(

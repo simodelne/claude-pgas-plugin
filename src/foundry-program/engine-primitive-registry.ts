@@ -1,10 +1,10 @@
 import type { GovernedConstructKind } from './governance-gate.js';
 
-export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 export type PrimitiveStatus = 'landed' | 'shipped' | 'building' | 'asked';
 export type FoundryEnforcement = 'active' | 'pending';
 export type EngineDeclarationAwarenessStatus = 'emitted' | 'available_unused' | 'held' | 'adopt_backlog';
-export type EnginePrimitiveConstructKind = GovernedConstructKind | 'arg_schema';
+export type EnginePrimitiveConstructKind = GovernedConstructKind | 'arg_schema' | 'no_action_escape';
 
 export interface EnginePrimitiveEntry {
   readonly computation_class: EnginePrimitiveConstructKind;
@@ -58,7 +58,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'Specification.keyed_collections', status: 'emitted', note: 'Persistence-oriented generated programs emit keyed_collections for engine-owned upsert dedupe.' },
   { construct: 'Specification.recovery_steers', status: 'emitted', note: 'Confirmation loops emit recovery steers, including set/template_paths variants.' },
   { construct: 'Specification.merge_collections', status: 'available_unused', note: 'Registered as primitive index 10, but no content-key reducer emitter exists yet.' },
-  { construct: 'Specification.no_action_escapes', status: 'adopt_backlog', note: 'NEW-v4.2.0 via pgas#889; adoption is scoped to PR3 no_action_escapes.' },
+  { construct: 'Specification.no_action_escapes', status: 'emitted', note: 'Confirmation-loop synthesis emits no_action_escapes at src/foundry-program/synthesizer.ts with engine-owned counter/arm paths, no_action_escape feature flag, and blocked-route guards/preconditions.' },
   { construct: 'Specification.confirmation_pairing', status: 'emitted', note: 'Confirmation loops emit pairing prefixes, policy, and terminal actions.' },
   { construct: 'Specification.proceed_to', status: 'emitted', note: 'Generated transition actions emit proceed_to targets.' },
   { construct: 'Specification.notice_terminal_exemptions', status: 'available_unused', note: 'No generated action currently needs notice-terminal rewrite exemption.' },
@@ -303,6 +303,17 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     since_engine_version: '4.2.0',
     build_order_note: 'Generated contracted reasoning actions, notebook pin/unpin actions, and confirmation-loop proposal actions emit action_map.arg_schema from existing contract/lifecycle/sentinel arg constraints; free-form reasoning and wildcard notebook actions remain unconstrained.',
   },
+  {
+    computation_class: 'no_action_escape',
+    primitive_index: 14,
+    primitive_name: 'no_action_escapes',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#889',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '4.2.0',
+    build_order_note: 'Confirmation-loop authoring modes emit no_action_escapes with engine-owned counter/arm paths; the arm gates a blocked terminal route and disables further proposal attempts rather than auto-approving unresolved items. Complements recovery_steers: recovery_steers arm on predicates, no_action_escapes arm on fallback-round count, both arm-only.',
+  },
 ] as const;
 
 export function primitiveForConstruct(kind: EnginePrimitiveConstructKind): EnginePrimitiveEntry | undefined {
@@ -334,5 +345,5 @@ export function refusedConstructs(
 }
 
 function isGovernedConstructKind(kind: EnginePrimitiveConstructKind): kind is GovernedConstructKind {
-  return kind !== 'arg_schema';
+  return kind !== 'arg_schema' && kind !== 'no_action_escape';
 }

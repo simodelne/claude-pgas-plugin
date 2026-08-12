@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { loadSpecWithPatterns, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { assertConfirmationPairingTerminals } from '../../src/foundry-program/composite-checks.js';
@@ -96,6 +96,7 @@ const confirmationLoop = {
 
 interface ParsedSpec {
   features?: string[];
+  terminal: string[];
   channels: Record<string, {
     direction: string;
     sync: string;
@@ -124,6 +125,13 @@ interface ParsedSpec {
     set?: { path: string; value: unknown };
     template_paths?: string[];
   }>;
+  no_action_escapes?: Array<{
+    mode: string;
+    counter: string;
+    cap: number;
+    arm: string;
+    guidance?: string;
+  }>;
   derived_paths?: Array<{
     target: string;
     when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
@@ -143,6 +151,7 @@ interface ParsedSpec {
   action_map: Record<string, {
     channel?: string;
     description?: string;
+    result_path?: string;
     awaits_user_decision?: { channel: string; intent?: string };
     arg_schema?: Record<string, { type?: string; required?: boolean }>;
     mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
@@ -154,9 +163,9 @@ describe('confirmation_loop descriptor synthesis', () => {
     const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
 
-    expect(parsed.modes.review_work.transitions).toEqual([
+    expect(parsed.modes.review_work.transitions).toEqual(expect.arrayContaining([
       { target: 'assemble_work', guard: { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true } },
-    ]);
+    ]));
     expect(parsed.action_map.propose_item.awaits_user_decision).toEqual({
       channel: 'user_confirmation',
       intent: 'present_for_approval',
@@ -186,6 +195,7 @@ describe('confirmation_loop descriptor synthesis', () => {
           },
         ],
       },
+      { kind: 'FieldFalsy', path: 'review_work.no_action_escape.work_units_items.arm' },
     ]);
     expect(parsed.modes.review_work.preconditions?.complete_review_work).toEqual([
       { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true },
@@ -229,6 +239,73 @@ describe('confirmation_loop descriptor synthesis', () => {
       },
     ]));
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('emits no_action_escapes for confirmation-loop author stalls and wires the arm to a blocked transition', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const escape = {
+      mode: 'review_work',
+      counter: 'review_work.no_action_escape.work_units_items.counter',
+      cap: 3,
+      arm: 'review_work.no_action_escape.work_units_items.arm',
+    };
+    const blockedMode = 'review_work_no_action_blocked';
+    const blockedAction = 'route_review_work_no_action_blocked';
+    const blockedPredicate = {
+      kind: 'All',
+      subs: [
+        { kind: 'FieldTruthy', path: escape.arm },
+        { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
+      ],
+    };
+
+    expect(parsed.features).toEqual(expect.arrayContaining(['no_action_escape']));
+    expect(parsed.no_action_escapes).toEqual([
+      expect.objectContaining({
+        ...escape,
+        guidance: expect.stringContaining('review_work is waiting for propose_item'),
+      }),
+    ]);
+    expect(parsed.schema[escape.counter]).toBe('number');
+    expect(parsed.schema[escape.arm]).toBe('boolean');
+    expect(parsed.terminal).toEqual(expect.arrayContaining([blockedMode]));
+    expect(parsed.modes[blockedMode]).toMatchObject({
+      transitions: [],
+    });
+    expect(parsed.modes.review_work.transitions).toEqual(expect.arrayContaining([
+      { target: blockedMode, guard: blockedPredicate },
+    ]));
+    expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining([blockedAction]));
+    expect(parsed.modes.review_work.preconditions?.[blockedAction]).toEqual([
+      { kind: 'FieldTruthy', path: escape.arm },
+      { kind: 'FieldFalsy', path: 'work_units.all_terminal' },
+    ]);
+    expect(parsed.modes.review_work.preconditions?.propose_item).toEqual(expect.arrayContaining([
+      { kind: 'FieldFalsy', path: escape.arm },
+    ]));
+    expect(parsed.action_map[blockedAction]).toMatchObject({
+      channel: 'widget_output',
+      mutations: [],
+    });
+    expect(parsed.proceed_to[blockedAction]).toBe(blockedMode);
+    expect(declaredWriterCount(parsed, escape.counter)).toBe(1);
+    expect(declaredWriterCount(parsed, escape.arm)).toBe(1);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('KILL TEST: no_action_escape counter and arm fail 4.2.0 load when another surface writes them', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLoopThenDownstream());
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+    const escape = parsed.no_action_escapes?.[0];
+    if (!escape) throw new Error('expected confirmation-loop no_action_escape');
+    parsed.action_map.propose_item.mutations = [
+      ...(parsed.action_map.propose_item.mutations ?? []),
+      { op: 'MSet', path: escape.arm, value: false },
+    ];
+
+    expect(() => loadSpecWithPatterns(writeTempSpec(dump(parsed, { lineWidth: -1, noRefs: true, sortKeys: false }))))
+      .toThrow(/NA-4: no_action_escapes\[0\]\.arm/u);
   });
 
   it('emits engine-derived completion and cursor paths for confirmation loops', () => {
@@ -407,6 +484,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       'session_history',
       'session_resume',
       'session_help',
+      'route_review_work_no_action_blocked',
     ]);
     expect(parsed.modes.review_work.channels).toEqual(expect.arrayContaining(['user_confirmation', 'widget_output']));
     expect(parsed.projection.review_work.include).toEqual(expect.arrayContaining([
@@ -1180,6 +1258,20 @@ function applyMutations(snapshot: ReadonlyMap<string, unknown>, result: Reaction
     }
   }
   return next;
+}
+
+function declaredWriterCount(spec: ParsedSpec, path: string): number {
+  return [
+    ...(spec.no_action_escapes ?? []).flatMap((escape) => [escape.counter, escape.arm]),
+    ...Object.values(spec.action_map).flatMap((semantics) => [
+      ...(semantics.result_path ? [semantics.result_path] : []),
+      ...(semantics.mutations ?? []).map((mutation) => mutation.path),
+    ]),
+    ...Object.values(spec.reactions).flatMap((reaction) => reaction.write_scope),
+    ...(spec.derived_paths ?? []).map((rule) => rule.target),
+    ...Object.values(spec.ingestion).flat(),
+    ...(spec.recovery_steers ?? []).flatMap((steer) => steer.set ? [steer.set.path] : []),
+  ].filter((writer) => writer === path).length;
 }
 
 function hashArtifact(artifact: SynthesizedSpec): Record<string, string> {
