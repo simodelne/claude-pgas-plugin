@@ -1,6 +1,6 @@
 import { isRecord } from '../util/guards.js';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -207,16 +207,15 @@ export async function synthesizeDomainLogic(
       providerUrl,
     });
     const cachePath = join(cacheDir, `${cacheKey}.json`);
-    const legacyWorldWritePrompt = legacyWorldWriteCachePrompt(prompt);
-    const legacyWorldWriteCachePath = legacyWorldWritePrompt
-      ? join(cacheDir, `${cacheKeyFor({
-          stage,
-          contract: workingArtifact.contracts_ts,
-          prompt: legacyWorldWritePrompt,
-          model,
-          providerUrl,
-        })}.json`)
-      : undefined;
+    const hasArgSchemaCacheOverlay = legacyArgSchemaCachePrompt(prompt) !== undefined;
+    const legacyCachePaths = legacyStageBodyCachePaths({
+      cacheDir,
+      stage,
+      contract: workingArtifact.contracts_ts,
+      prompt,
+      model,
+      providerUrl,
+    });
     const repoIntegration = integrationForClassification(classification, integrations);
     const exportDescriptor = exportDescriptorForStage(workingArtifact, stage, classification);
     const webNavigationDescriptor = webNavigationDescriptorForStage(classification);
@@ -248,7 +247,9 @@ export async function synthesizeDomainLogic(
     };
     const cached = exportDescriptor || webNavigationDescriptor || persistenceDescriptor
       ? undefined
-      : readCache(cachePath) ?? (legacyWorldWriteCachePath ? readCache(legacyWorldWriteCachePath) : undefined);
+      : readCache(cachePath)
+        ?? readFirstCache(legacyCachePaths)
+        ?? (hasArgSchemaCacheOverlay ? readCompatibleStageCache(cacheDir, stage, domainSpec) : undefined);
     if (cached) {
       let behaviorFields = behaviorAuditFields(cached);
       if (classification.adapter_kind === 'repo_integration' && repoIntegration?.kind === 'http_api') {
@@ -4457,6 +4458,35 @@ function cacheKeyFor(input: { stage: string; contract: string; prompt: string; m
   ].join('\n---\n'));
 }
 
+function legacyStageBodyCachePaths(input: {
+  cacheDir: string;
+  stage: string;
+  contract: string;
+  prompt: string;
+  model: string;
+  providerUrl: string;
+}): string[] {
+  const prompts = new Set<string>();
+  const worldWritePrompt = legacyWorldWriteCachePrompt(input.prompt);
+  if (worldWritePrompt) {
+    prompts.add(worldWritePrompt);
+  }
+  for (const prompt of [input.prompt, ...(worldWritePrompt ? [worldWritePrompt] : [])]) {
+    const argSchemaPrompt = legacyArgSchemaCachePrompt(prompt);
+    if (argSchemaPrompt) {
+      prompts.add(argSchemaPrompt);
+    }
+  }
+  return [...prompts].map((prompt) =>
+    join(input.cacheDir, `${cacheKeyFor({
+      stage: input.stage,
+      contract: input.contract,
+      prompt,
+      model: input.model,
+      providerUrl: input.providerUrl,
+    })}.json`));
+}
+
 function legacyWorldWriteCachePrompt(prompt: string): string | undefined {
   // Keep pre-v4 stage-body cache entries reusable when only bootstrap write
   // surfaces changed; generated bodies do not depend on seed/control-plane syntax.
@@ -4478,6 +4508,62 @@ function legacyWorldWriteCachePrompt(prompt: string): string | undefined {
   );
 
   return normalized === prompt ? undefined : normalized;
+}
+
+function legacyArgSchemaCachePrompt(prompt: string): string | undefined {
+  // action_map.arg_schema only changes model-facing tool declarations. Stage
+  // body implementations are governed by stage contracts, domain_spec, and
+  // result paths, so declaration-only overlays should not invalidate replay
+  // body caches.
+  const normalized = prompt.replace(/\n    arg_schema:\n(?:      [^\n]*\n|        [^\n]*\n|          [^\n]*\n|            [^\n]*\n)+/gu, '\n');
+  return normalized === prompt ? undefined : normalized;
+}
+
+function readFirstCache(paths: readonly string[]): CacheRecord | undefined {
+  for (const path of paths) {
+    const cached = readCache(path);
+    if (cached) {
+      return cached;
+    }
+  }
+  return undefined;
+}
+
+function readCompatibleStageCache(cacheDir: string, stage: string, domainSpec: StageDomainSpec | undefined): CacheRecord | undefined {
+  if (!existsSync(cacheDir)) {
+    return undefined;
+  }
+  const candidates = readdirSync(cacheDir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readCache(join(cacheDir, name)))
+    .filter((record): record is CacheRecord => !!record && cacheRecordMatchesStage(record, stage, domainSpec));
+  candidates.sort((left, right) => Number(isFallbackCacheRecord(left)) - Number(isFallbackCacheRecord(right)));
+  return candidates[0];
+}
+
+function cacheRecordMatchesStage(record: CacheRecord, stage: string, domainSpec: StageDomainSpec | undefined): boolean {
+  const fixture = record.behavioral_fixture;
+  if (!fixture || fixture.input_stage !== stage || fixture.expected_result_stage !== stage) {
+    return false;
+  }
+  if (domainSpec?.reads && fixture.domain_spec_reads && !stringArraysEqual(domainSpec.reads, fixture.domain_spec_reads)) {
+    return false;
+  }
+  const itemTemplates = Array.isArray(domainSpec?.produces.items_json)
+    ? domainSpec.produces.items_json.filter((item): item is string => typeof item === 'string')
+    : undefined;
+  if (itemTemplates && fixture.expected_items_templates && !stringArraysEqual(itemTemplates, fixture.expected_items_templates)) {
+    return false;
+  }
+  return true;
+}
+
+function isFallbackCacheRecord(record: CacheRecord): boolean {
+  return record.body.includes('Deterministic mechanical stage body synthesized by pgas-new after LLM');
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function readCache(path: string): CacheRecord | undefined {

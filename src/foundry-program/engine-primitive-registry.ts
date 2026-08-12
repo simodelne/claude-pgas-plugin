@@ -138,7 +138,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'action_map.is_query', status: 'available_unused', note: 'Available for dynamic query actions; no generated action maps to QueryAction today.' },
   { construct: 'action_map.description', status: 'emitted', note: 'Generated action_map entries include tool-facing descriptions.' },
   { construct: 'action_map.arg_descriptions', status: 'emitted', note: 'Generated LLM reasoning, notebook, verification, and delegation actions emit arg descriptions.' },
-  { construct: 'action_map.arg_schema', status: 'emitted', note: 'Contracted reasoning action args emit arg_schema at src/foundry-program/synthesizer/topology.ts:283; confirmation-loop proposal content args emit arg_schema at src/foundry-program/synthesizer.ts:3787.' },
+  { construct: 'action_map.arg_schema', status: 'emitted', note: 'Contracted reasoning action args emit arg_schema at src/foundry-program/synthesizer/topology.ts:283; notebook pin/unpin key args emit arg_schema at src/foundry-program/synthesizer.ts:2542; confirmation-loop proposal content args emit arg_schema at src/foundry-program/synthesizer.ts:3789.' },
   { construct: 'action_map.continues', status: 'available_unused', note: 'No generated terminal action opts into forced auto-continue metadata.' },
   { construct: 'action_map.awaits_user_decision', status: 'emitted', note: 'Artifact planning, document upload, and confirmation loops park automation for user decisions.' },
   { construct: 'derived_paths.first_item_where_field_ne', status: 'emitted', note: 'Confirmation loops emit first-not-done cursor derivation.' },
@@ -301,7 +301,7 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
     foundry_enforcement: 'active',
     since_engine_version: '4.2.0',
-    build_order_note: 'Generated contracted reasoning actions and confirmation-loop proposal actions emit action_map.arg_schema from existing contract/lifecycle arg constraints; free-form reasoning actions remain unconstrained.',
+    build_order_note: 'Generated contracted reasoning actions, notebook pin/unpin actions, and confirmation-loop proposal actions emit action_map.arg_schema from existing contract/lifecycle/sentinel arg constraints; free-form reasoning and wildcard notebook actions remain unconstrained.',
   },
 ] as const;
 
