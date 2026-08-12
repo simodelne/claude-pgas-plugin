@@ -648,7 +648,10 @@ describe('template renderer', () => {
         terminal: string[];
       modes: Record<string, { vocabulary: string[]; channels?: string[] }>;
       projection: Record<string, { include: string[] }>;
-      action_map: Record<string, { mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string }> }>;
+      action_map: Record<string, {
+        arg_schema?: Record<string, { type?: string; required?: boolean }>;
+        mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
+      }>;
       proceed_to: Record<string, string>;
       schema: Record<string, string>;
       control_plane: { controls: Record<string, unknown> };
@@ -735,6 +738,13 @@ describe('template renderer', () => {
     expect(parsed.action_map.pin_note.mutations).toEqual([
       { op: 'MAppend', path: 'notebook_pins', value: '', from_arg: 'key' },
     ]);
+    expect(parsed.action_map.pin_note.arg_schema).toEqual({ key: { type: 'string', required: true } });
+    expect(parsed.action_map.unpin_note.mutations).toEqual([
+      { op: 'MRemove', path: 'notebook_pins', value: '', from_arg: 'key' },
+    ]);
+    expect(parsed.action_map.unpin_note.arg_schema).toEqual({ key: { type: 'string', required: true } });
+    expect(parsed.action_map.record_note.arg_schema).toBeUndefined();
+    expect(parsed.action_map.delete_note.arg_schema).toBeUndefined();
     expect(parsed.action_map.example_action.mutations).toEqual(
       expect.arrayContaining([
         { op: 'MSet', path: 'work.example_ready', value: true },

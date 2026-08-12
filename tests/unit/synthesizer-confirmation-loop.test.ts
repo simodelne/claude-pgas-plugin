@@ -144,6 +144,7 @@ interface ParsedSpec {
     channel?: string;
     description?: string;
     awaits_user_decision?: { channel: string; intent?: string };
+    arg_schema?: Record<string, { type?: string; required?: boolean }>;
     mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
   }>;
 }
@@ -383,6 +384,10 @@ describe('confirmation_loop descriptor synthesis', () => {
       { op: 'MSet', path: 'review_work.proposal.proposed_text', value: '', from_arg: 'proposed_text' },
       { op: 'MAppend', path: 'review_work.proposal.log', value: 'proposed' },
     ]);
+    expect(parsed.action_map.propose_item.arg_schema).toEqual({
+      proposed_text: { type: 'string', required: true },
+    });
+    expect(parsed.action_map.propose_item.arg_schema).not.toHaveProperty('mutations');
     expect(parsed.action_map.complete_review_work).toMatchObject({
       description: expect.stringContaining('Advance from confirmation-loop stage review_work to complete'),
       mutations: [],
@@ -910,7 +915,7 @@ describe('confirmation_loop descriptor synthesis', () => {
 
   it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: 'db2987dd00af29a61ff3b68665cd339e3883d87e34d05b78e2e94d3b0eac94a4',
+      spec_yaml: 'c47246cf23e73399c22f07eebb2014c4d8016de950b4ad9d20c393dc228fac87',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '3a199dedfb60608b43be6403ca002ed6d79a4fedc7cfa0ab27c02c0777eceab7',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',

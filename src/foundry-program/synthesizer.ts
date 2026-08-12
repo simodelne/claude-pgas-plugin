@@ -2539,12 +2539,14 @@ function applyEngineNotebookActions(actionMap: MutableRecord): void {
   actionMap.pin_note = {
     description: 'Pin a note so its full body stays visible in later rounds.',
     arg_descriptions: { key: 'The note key to pin.' },
+    arg_schema: { key: { type: 'string', required: true } },
     mutations: [{ op: 'MAppend', path: 'notebook_pins', value: '', from_arg: 'key' }],
     channel: 'widget_output',
   };
   actionMap.unpin_note = {
     description: 'Unpin a previously pinned note.',
     arg_descriptions: { key: 'The note key to unpin.' },
+    arg_schema: { key: { type: 'string', required: true } },
     mutations: [{ op: 'MRemove', path: 'notebook_pins', value: '', from_arg: 'key' }],
     channel: 'widget_output',
   };
@@ -3784,6 +3786,10 @@ function applyConfirmationLoopIntentActions(
     const proposalPayload = confirmationLoopProposalPayloadExample(loop, lifecycle);
     actionMap[actionName] = {
       description: `Propose ${lifecycle.item_label} content for user confirmation. The runtime selects which ${lifecycle.item_label} is under review; do not choose a different item. You must author the ${lifecycle.item_label} content in proposed_text using top-level payload fields, for example payload: ${JSON.stringify(proposalPayload)}. Emit top-level payload fields, not payload.mutations, and do not emit an empty proposed_text.`,
+      arg_schema: Object.fromEntries(proposalFields.map((field) => [
+        field,
+        { type: 'string', required: true },
+      ])),
       mutations: [
         { op: 'MSet', path: confirmationLoopRawPayloadMutationsPath(loop), value: [], from_arg: 'mutations' },
         ...contentMutations,

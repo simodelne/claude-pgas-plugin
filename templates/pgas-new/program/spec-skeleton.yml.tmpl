@@ -95,12 +95,14 @@ action_map:
   pin_note:
     description: "Pin a note so its full body stays visible in later rounds."
     arg_descriptions: { key: "The note key to pin." }
+    arg_schema: { key: { type: string, required: true } }
     mutations:
       - { op: MAppend, path: notebook_pins, value: "", from_arg: key }
     channel: widget_output
   unpin_note:
     description: "Unpin a previously pinned note."
     arg_descriptions: { key: "The note key to unpin." }
+    arg_schema: { key: { type: string, required: true } }
     mutations:
       - { op: MRemove, path: notebook_pins, value: "", from_arg: key }
     channel: widget_output
