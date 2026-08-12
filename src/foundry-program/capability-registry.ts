@@ -4,6 +4,7 @@ import {
   refusedConstructs,
   type EnginePrimitiveEntry,
 } from './engine-primitive-registry.js';
+import type { GovernedConstructKind } from './governance-gate.js';
 // pgas-new #166 — foundry capability registry + honest refusal (uplift PR-1).
 //
 // The live 2026-07-14 Codex-driven session for the SimoneOS `contract-revision`
@@ -600,7 +601,13 @@ function detectGovernedComputePendingPrimitiveCapabilities(
 function activePendingPrimitiveEntries(registry: readonly EnginePrimitiveEntry[]): readonly EnginePrimitiveEntry[] {
   const activePending = refusedConstructs(registry);
   return registry.filter((entry) =>
-    entry.computation_class !== 'arg_schema' && activePending.has(entry.computation_class));
+    isGovernedPrimitiveEntry(entry) && activePending.has(entry.computation_class));
+}
+
+function isGovernedPrimitiveEntry(
+  entry: EnginePrimitiveEntry,
+): entry is EnginePrimitiveEntry & { computation_class: GovernedConstructKind } {
+  return entry.computation_class !== 'arg_schema' && entry.computation_class !== 'no_action_escape';
 }
 
 function detectComputeDedupPendingPrimitiveCapabilities(
