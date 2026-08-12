@@ -113,8 +113,8 @@ Engine anchors: `PathMutation`, `ArgSchemaFragment`, and `ActionSemantics` are `
 | Bounds | `bounds: {path: {min?, max?}}` | Numeric value bounds checked by action semantics. | Mutations, type gate. | **AVAILABLE-UNUSED** - engine supports `ActionSemantics.bounds`, but generated YAML has no `bounds:` emitter today (`_shared-types.d.ts:1110-1114`, `2427-2431`; awareness at `src/foundry-program/engine-primitive-registry.ts:133`) |
 | Query actions | `query_path: string` or `is_query: true` | Fixed or dynamic WorldQuery/QueryAction. | Query policy, projection, action_map. | **AVAILABLE-UNUSED** - generator emits ProgramEntry `queryPolicy`, not action_map query entries (`_shared-types.d.ts:1115-1134`; `src/foundry-program/synthesizer.ts:749`, `810-816`; awareness at `src/foundry-program/engine-primitive-registry.ts:136-137`) |
 | Description metadata | `description: string`, `arg_descriptions: {arg: text}` | Synthesized tool description and per-argument guidance. | Tool schema synthesis, native tool calls. | **EMITTED** (`src/foundry-program/synthesizer/topology.ts:252-278`; specialized descriptors at `src/foundry-program/synthesizer.ts:1886-1909`, `2533-2556`, `3763-3805`) |
-| Argument schema | `arg_schema: {arg: {enum?, type?, required?}}` | Driver-tier JSON-schema overlay for synthesized tool args. | `arg_descriptions`, grammar-constrained decoders, tool schema. | **NEW-v4.2.0** - adopt in PR2 arg_schema (`_shared-types.d.ts:1069-1099`, `1166-1180`, `2449-2460`; awareness at `src/foundry-program/engine-primitive-registry.ts:140`) |
-| Auto-continue metadata | `continues: true` | Forces terminal effect to auto-continue intent. | `awaits_user_decision`, continuation policy. | **AVAILABLE-UNUSED** - no generated terminal action emits it (`_shared-types.d.ts:1181-1190`; awareness at `src/foundry-program/engine-primitive-registry.ts:141`) |
+| Argument schema | `arg_schema: {arg: {enum?, type?, required?}}` | Driver-tier JSON-schema overlay for synthesized tool args. | `arg_descriptions`, grammar-constrained decoders, tool schema. | **EMITTED@src/foundry-program/synthesizer.ts:3787** for confirmation-loop proposal content args and **EMITTED@src/foundry-program/synthesizer/topology.ts:283** for contracted reasoning args (`_shared-types.d.ts:1069-1099`, `1166-1180`, `2449-2460`; awareness at `src/foundry-program/engine-primitive-registry.ts:141`) |
+| Auto-continue metadata | `continues: true` | Forces terminal effect to auto-continue intent. | `awaits_user_decision`, continuation policy. | **AVAILABLE-UNUSED** - no generated terminal action emits it (`_shared-types.d.ts:1181-1190`; awareness at `src/foundry-program/engine-primitive-registry.ts:142`) |
 | User-decision parking | `awaits_user_decision: {channel, intent?}` | Parks automation until a declared input channel receives a user decision/upload. | Structured decision channels, confirmation pairing. | **EMITTED** (`src/foundry-program/synthesizer.ts:2500-2507`, `3785-3794`; foundry artifact plan at `src/foundry-program/specs.yml:891-907`) |
 
 ## 6. Derived Paths
@@ -172,7 +172,7 @@ Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.
 
 The guard added in this PR asserts that:
 
-- `action_map.arg_schema` is present in `ENGINE_DECLARATION_AWARENESS` as `adopt_backlog` for PR2.
+- `action_map.arg_schema` is present in `ENGINE_DECLARATION_AWARENESS` as `emitted` for PR2.
 - `Specification.no_action_escapes` is present in `ENGINE_DECLARATION_AWARENESS` as `adopt_backlog` for PR3.
 - Every `adopt_backlog`, `available_unused`, and `held` awareness entry has a non-empty note.
 

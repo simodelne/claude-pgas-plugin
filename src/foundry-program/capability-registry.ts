@@ -599,7 +599,8 @@ function detectGovernedComputePendingPrimitiveCapabilities(
 
 function activePendingPrimitiveEntries(registry: readonly EnginePrimitiveEntry[]): readonly EnginePrimitiveEntry[] {
   const activePending = refusedConstructs(registry);
-  return registry.filter((entry) => activePending.has(entry.computation_class));
+  return registry.filter((entry) =>
+    entry.computation_class !== 'arg_schema' && activePending.has(entry.computation_class));
 }
 
 function detectComputeDedupPendingPrimitiveCapabilities(

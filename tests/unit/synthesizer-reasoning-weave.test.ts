@@ -3,7 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import {
+  createPgasServer,
+  createProgramAdapters,
+  loadSpecWithPatterns,
+  validateSpecWiring,
+  type ProgramEntry,
+  type ToolHandler,
+  type UnifiedAuthorDriverOptions,
+} from '@simodelne/pgas-server/plugin.js';
 import {
   resynthesizeWithReasoningContracts,
   synthesizeProgramSpecFromDomain,
@@ -85,6 +93,7 @@ interface ParsedSpec {
     channel?: string;
     result_path?: string;
     arg_descriptions?: Record<string, string>;
+    arg_schema?: Record<string, { enum?: Array<string | number>; type?: string; required?: boolean }>;
     mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string; coerce?: string; coerce_key?: string }>;
   }>;
 }
@@ -145,10 +154,17 @@ describe('reasoning contract weave', () => {
       expect(action.arg_descriptions?.gaps).toBe('Concrete memo gaps found during review. Provide the value as a JSON array string.');
       expect(action.arg_descriptions?.result_json).toContain('May be a native JSON object or a JSON string encoding an object containing at least: decision (enum: approve | request_revision)');
       expect(action.arg_descriptions?.items_json).toContain('matching the templates: review:decision:<decision>, review:quality:<quality_score>.');
+      expect(action.arg_schema).toEqual({
+        decision: { enum: ['approve', 'request_revision'], type: 'string', required: true },
+        rationale: { type: 'string', required: true },
+        quality_score: { type: 'number', required: true },
+        blocking: { type: 'boolean', required: true },
+        gaps: { type: 'string', required: true },
+      });
     }
   });
 
-  it('declares GKType-typed schema paths for the composite record and each core field', () => {
+  it('declares tolerant raw captures and GKType-typed mirrored result paths', () => {
     expect(parsed.schema).toMatchObject({
       'review.result_json': 'string',
       'review.items_json': 'string',
@@ -225,6 +241,31 @@ describe('reasoning contract weave', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('exposes contracted arg_schema enum and required args in the synthesized provider tool declaration', async () => {
+    const parameters = await captureProviderToolParameters(woven, 'advance_review_to_complete', {
+      decision: 'approve',
+      rationale: 'The memo covers every requested risk with accurate figures.',
+      quality_score: 92,
+      blocking: false,
+      gaps: '["none material"]',
+    });
+
+    expect(parameters).toMatchObject({
+      type: 'object',
+      properties: {
+        decision: expect.objectContaining({
+          type: 'string',
+          enum: ['approve', 'request_revision'],
+        }),
+        rationale: expect.objectContaining({ type: 'string' }),
+        quality_score: expect.any(Object),
+        blocking: expect.any(Object),
+        gaps: expect.objectContaining({ type: 'string' }),
+      },
+      required: expect.arrayContaining(['decision', 'rationale', 'quality_score', 'blocking', 'gaps']),
+    });
+  });
 });
 
 describe('no-contract byte identity', () => {
@@ -247,6 +288,13 @@ describe('no-contract byte identity', () => {
       reasoningContracts: { intake: { ...reviewContract(), stage: 'intake' } },
     });
     expect(withMiskeyed).toEqual(base);
+  });
+
+  it('does not emit arg_schema for free-form reasoning args without a contract', () => {
+    const base = synthesizeProgramSpecFromDomain(branchDomain);
+    const parsedBase = load(base.spec_yaml) as ParsedSpec;
+
+    expect(parsedBase.action_map.complete_draft.arg_schema).toBeUndefined();
   });
 
   it('round-trips byte-identically through resynthesizeWithReasoningContracts with no contracts', () => {
@@ -304,3 +352,146 @@ describe('no-contract byte identity', () => {
     ]));
   });
 });
+
+type UnifiedComplete = UnifiedAuthorDriverOptions['complete'];
+
+function handlerMapFromSource(source: string): Map<string, ToolHandler> {
+  const names = Array.from(source.matchAll(/^\s+async\s+([a-zA-Z0-9_]+)\(/gmu), (match) => match[1] as string);
+  return new Map(names.map((name) => [name, async () => ({})]));
+}
+
+function generatedProgramEntry(artifact: { spec_yaml: string; handlers_ts: string }): ProgramEntry {
+  const dir = mkdtempSync(join(tmpdir(), 'pgas-new-arg-schema-load-'));
+  try {
+    const specPath = join(dir, 'specs.yml');
+    writeFileSync(specPath, artifact.spec_yaml);
+    const spec = loadSpecWithPatterns(specPath).spec;
+    const handlerMap = handlerMapFromSource(artifact.handlers_ts);
+    validateSpecWiring(spec, handlerMap);
+    const handlers = Object.fromEntries(handlerMap);
+    return {
+      spec,
+      reactionHandlers: new Map(),
+      createAdapters: (ctx) => createProgramAdapters(spec, ctx, handlers),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function captureProviderToolParameters(
+  artifact: { spec_yaml: string; handlers_ts: string },
+  targetAction: string,
+  targetPayload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let captured: Record<string, unknown> | undefined;
+  const complete: UnifiedComplete = async (_messages, tools) => {
+    const targetTool = tools.find((tool) => tool.function.name === targetAction);
+    if (targetTool) {
+      captured = targetTool.function.parameters;
+      return toolCall(targetAction, targetPayload);
+    }
+    const progressionTool = tools.find((tool) => !ENGINE_TOOLKIT_ACTIONS.has(tool.function.name));
+    if (!progressionTool) {
+      throw new Error('did not receive a generated progression tool');
+    }
+    return toolCall(progressionTool.function.name, {
+      result_json: '{}',
+      items_json: '[]',
+    });
+  };
+  const server = await createPgasServer({
+    programs: [{ name: 'memo-review', entry: generatedProgramEntry(artifact) }],
+    drivers: {
+      authorMode: 'unified',
+      authorHandle: throwingAuthorHandle,
+      observerHandle: throwingObserverHandle,
+      unified: { complete },
+    },
+    devMode: true,
+    telemetry: { enabled: false },
+    port: 0,
+  });
+
+  try {
+    const created = await fetchJson<{ sessionId: string }>(server, '/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ program: 'memo-review' }),
+    });
+    for (const payload of ['Start memo review.', 'Draft memo.', 'Finish review.']) {
+      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({ channel: 'user_text', payload }),
+      });
+      if (captured) {
+        break;
+      }
+    }
+  } finally {
+    await server.close();
+  }
+
+  if (!captured) {
+    throw new Error(`did not capture provider tool parameters for ${targetAction}`);
+  }
+  return captured;
+}
+
+function toolCall(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    tool_calls: [{
+      id: `call_${name}`,
+      function: {
+        name,
+        arguments: JSON.stringify(args),
+      },
+    }],
+  };
+}
+
+const throwingAuthorHandle = {
+  modelId: 'arg-schema-test',
+  async complete() {
+    throw new Error('legacy JSON author should not be used in arg_schema tests');
+  },
+};
+
+const throwingObserverHandle = {
+  modelId: 'arg-schema-test',
+  async complete() {
+    return 'noop';
+  },
+};
+
+const ENGINE_TOOLKIT_ACTIONS = new Set([
+  'pin_note',
+  'unpin_note',
+  'session_new',
+  'session_abort_current',
+  'session_status',
+  'session_history',
+  'session_resume',
+  'session_help',
+  'read_note',
+  'record_note',
+  'delete_note',
+]);
+
+async function fetchJson<T = unknown>(
+  server: Awaited<ReturnType<typeof createPgasServer>>,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await server.app.fetch(new Request(`http://local${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...init?.headers,
+    },
+  }));
+  const body = await response.json() as T;
+  if (!response.ok) {
+    throw new Error(`request failed ${response.status}: ${JSON.stringify(body)}`);
+  }
+  return body;
+}

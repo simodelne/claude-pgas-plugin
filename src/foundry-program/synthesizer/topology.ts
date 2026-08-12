@@ -13,7 +13,12 @@ import type {
   TransitionAction,
 } from './types.js';
 import type { ClassifiedStage } from '../stage-classifier.js';
-import { reasoningFieldSummary, type ReasoningStageContract } from '../reasoning-contract.js';
+import {
+  reasoningFieldSummary,
+  runtimeTypeNameFor,
+  type ReasoningField,
+  type ReasoningStageContract,
+} from '../reasoning-contract.js';
 
 export function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
   const fieldsByMode = new Map<string, string[]>();
@@ -275,6 +280,7 @@ export function actionMapEntryFor(
             result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
             items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
           },
+      ...(contract ? { arg_schema: reasoningContractArgSchema(contract) } : {}),
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
@@ -284,6 +290,23 @@ export function actionMapEntryFor(
       reasoningContract ? new Map([[action.source, reasoningContract]]) : new Map(),
     ),
   };
+}
+
+function reasoningContractArgSchema(
+  contract: ReasoningStageContract,
+): Record<string, { enum?: Array<string | number>; type?: string; required: true }> {
+  return Object.fromEntries(contract.result_schema.fields.map((field) => [
+    field.name,
+    {
+      ...(field.type === 'enum' ? { enum: field.enum_values ?? [] } : {}),
+      type: reasoningFieldArgSchemaType(field),
+      required: true,
+    },
+  ]));
+}
+
+function reasoningFieldArgSchemaType(field: ReasoningField): 'string' | 'number' | 'boolean' | 'array' {
+  return runtimeTypeNameFor(field.type);
 }
 
 function deterministicActionDomainSpecDescription(

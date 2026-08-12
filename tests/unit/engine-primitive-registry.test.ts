@@ -9,7 +9,7 @@ import {
 
 describe('engine-primitive-registry', () => {
   it('models convergence primitives including #844 as landed, with narrow active enforcement', () => {
-    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(ENGINE_PRIMITIVE_REGISTRY.map((entry) => entry.primitive_index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 
     const cursor = primitiveForConstruct('iteration_cursor');
     expect(cursor).toMatchObject({
@@ -115,6 +115,14 @@ describe('engine-primitive-registry', () => {
       foundry_enforcement: 'active',
       since_engine_version: '3.34.0',
     });
+    expect(primitiveForConstruct('arg_schema')).toMatchObject({
+      primitive_index: 13,
+      primitive_name: 'arg_schema',
+      primitive_status: 'landed',
+      pgas_ref: 'simodelne/pgas#891',
+      foundry_enforcement: 'active',
+      since_engine_version: '4.2.0',
+    });
 
     expect(primitiveForConstruct('domain_shape_branch')).toBeUndefined();
     expect(primitiveForConstruct('adhoc_validation_throw')).toBeUndefined();
@@ -159,11 +167,11 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('acknowledges v4.2.0 declaration additions before adoption PRs wire emission', () => {
+  it('tracks v4.2.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
-      status: 'adopt_backlog',
+      status: 'emitted',
     });
     expect(awarenessByConstruct.get('Specification.no_action_escapes')).toMatchObject({
       status: 'adopt_backlog',

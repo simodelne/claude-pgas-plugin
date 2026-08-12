@@ -1,12 +1,13 @@
 import type { GovernedConstructKind } from './governance-gate.js';
 
-export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+export type PrimitiveIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 export type PrimitiveStatus = 'landed' | 'shipped' | 'building' | 'asked';
 export type FoundryEnforcement = 'active' | 'pending';
 export type EngineDeclarationAwarenessStatus = 'emitted' | 'available_unused' | 'held' | 'adopt_backlog';
+export type EnginePrimitiveConstructKind = GovernedConstructKind | 'arg_schema';
 
 export interface EnginePrimitiveEntry {
-  readonly computation_class: GovernedConstructKind;
+  readonly computation_class: EnginePrimitiveConstructKind;
   readonly primitive_index: PrimitiveIndex;
   readonly primitive_name: string;
   readonly primitive_status: PrimitiveStatus;
@@ -137,7 +138,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'action_map.is_query', status: 'available_unused', note: 'Available for dynamic query actions; no generated action maps to QueryAction today.' },
   { construct: 'action_map.description', status: 'emitted', note: 'Generated action_map entries include tool-facing descriptions.' },
   { construct: 'action_map.arg_descriptions', status: 'emitted', note: 'Generated LLM reasoning, notebook, verification, and delegation actions emit arg descriptions.' },
-  { construct: 'action_map.arg_schema', status: 'adopt_backlog', note: 'NEW-v4.2.0 via pgas#891; adoption is scoped to PR2 arg_schema.' },
+  { construct: 'action_map.arg_schema', status: 'emitted', note: 'Contracted reasoning action args emit arg_schema at src/foundry-program/synthesizer/topology.ts:283; confirmation-loop proposal content args emit arg_schema at src/foundry-program/synthesizer.ts:3787.' },
   { construct: 'action_map.continues', status: 'available_unused', note: 'No generated terminal action opts into forced auto-continue metadata.' },
   { construct: 'action_map.awaits_user_decision', status: 'emitted', note: 'Artifact planning, document upload, and confirmation loops park automation for user decisions.' },
   { construct: 'derived_paths.first_item_where_field_ne', status: 'emitted', note: 'Confirmation loops emit first-not-done cursor derivation.' },
@@ -291,9 +292,20 @@ export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
     since_engine_version: '3.34.0',
     build_order_note: 'Narrow anti-fabrication validation for extracted document records; foundry emits FieldSourceGrounded in schema_invariants with engine-owned token extractors and source allowlist paths.',
   },
+  {
+    computation_class: 'arg_schema',
+    primitive_index: 13,
+    primitive_name: 'arg_schema',
+    primitive_status: 'landed',
+    pgas_ref: 'simodelne/pgas#891',
+    request_ref: CONVERGENCE_ALIGNMENT_REQUEST,
+    foundry_enforcement: 'active',
+    since_engine_version: '4.2.0',
+    build_order_note: 'Generated contracted reasoning actions and confirmation-loop proposal actions emit action_map.arg_schema from existing contract/lifecycle arg constraints; free-form reasoning actions remain unconstrained.',
+  },
 ] as const;
 
-export function primitiveForConstruct(kind: GovernedConstructKind): EnginePrimitiveEntry | undefined {
+export function primitiveForConstruct(kind: EnginePrimitiveConstructKind): EnginePrimitiveEntry | undefined {
   return ENGINE_PRIMITIVE_REGISTRY.find((entry) => entry.computation_class === kind);
 }
 
@@ -302,7 +314,8 @@ export function activeEnforcedConstructs(
 ): ReadonlySet<GovernedConstructKind> {
   return new Set(
     registry
-      .filter((entry) => entry.foundry_enforcement === 'active')
+      .filter((entry): entry is EnginePrimitiveEntry & { computation_class: GovernedConstructKind } =>
+        entry.foundry_enforcement === 'active' && isGovernedConstructKind(entry.computation_class))
       .map((entry) => entry.computation_class),
   );
 }
@@ -312,7 +325,14 @@ export function refusedConstructs(
 ): ReadonlySet<GovernedConstructKind> {
   return new Set(
     registry
-      .filter((entry) => entry.foundry_enforcement === 'active' && entry.primitive_status !== 'landed')
+      .filter((entry): entry is EnginePrimitiveEntry & { computation_class: GovernedConstructKind } =>
+        entry.foundry_enforcement === 'active' &&
+        entry.primitive_status !== 'landed' &&
+        isGovernedConstructKind(entry.computation_class))
       .map((entry) => entry.computation_class),
   );
+}
+
+function isGovernedConstructKind(kind: EnginePrimitiveConstructKind): kind is GovernedConstructKind {
+  return kind !== 'arg_schema';
 }
