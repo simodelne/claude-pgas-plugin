@@ -1,0 +1,179 @@
+# Engine Declaration Catalog
+
+Authoritative engine surface for this branch: `@simodelne/pgas-server@4.2.0`, installed under `node_modules/@simodelne/pgas-server`.
+Line references to engine declarations cite `node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts`.
+Line references to foundry status cite generator/registry files in this repo. This PR is awareness-only: it does not change synthesis emission.
+
+Status vocabulary:
+
+- **EMITTED** - pgas-new emits the construct today.
+- **AVAILABLE-UNUSED** - v4.2.0 accepts it, but pgas-new does not emit it yet.
+- **HELD** - intentionally blocked on an upstream/design dependency.
+- **NEW-v4.2.0** - newly acknowledged v4.2.0 surface, assigned to an adoption PR.
+
+The machine-readable mirror is `ENGINE_DECLARATION_AWARENESS` in `src/foundry-program/engine-primitive-registry.ts:29-159`.
+
+## 1. Top-Level Specification Fields
+
+Engine anchors: compiled `Specification` is declared at `_shared-types.d.ts:1585-1907`; raw YAML `RawSpecificationFile` is declared at `_shared-types.d.ts:2307-3026`; create-time `initial_trigger` lives on route session input at `_shared-types.d.ts:6738-6750`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| `name`, `preamble`, `initial`, `terminal` | top-level scalar/list fields (`name`, optional `preamble`, `initial`, `terminal[]`) | Program identity, invariant prompt prefix, entry mode, terminal modes. | `modes`, `projection`, `guidance`, terminal transition guards. | **EMITTED** (`src/foundry-program/synthesizer.ts:446-449`) |
+| `termination`, `topology`, `repair_bound`, `fallback` | `termination`, `topology`, numeric `repair_bound`, fallback `{channel,payload}` | Session bounds/topology and fallback terminal behavior. | Gate loop safety, fallback/no-action detection, channel declarations. | **EMITTED** from the generated skeleton loaded by the synthesizer (`src/foundry-program/synthesizer.ts:440-444`; skeleton fields in `templates/pgas-new/program/spec-skeleton.yml.tmpl:1-4`, `149-153`) |
+| `modes` | map of mode key to `{vocabulary, channels, transitions, preconditions, ...}` | Legal actions, legal channels, mode-local gates, and transition graph. | `action_map`, `channels`, `proceed_to`, predicates. | **EMITTED** (`src/foundry-program/synthesizer.ts:482-516`) |
+| `status_on_terminal` | terminal mode to `Completed` or `Failed` | Declarative terminal session status override. | `terminal`, transition settlement. | **AVAILABLE-UNUSED** - no generator input selects terminal status overrides yet (`src/foundry-program/engine-primitive-registry.ts:37`) |
+| `channels` | map of channel id to channel declaration | Trigger/effect transport and delivery declarations. | `modes[*].channels`, `ingestion`, `action_map.channel`, delegation. | **EMITTED** (`src/foundry-program/synthesizer.ts:627-645`) |
+| `schema` | map of path/wildcard path to type name | Durable world shape. Wildcards such as `notebook.*` and collection `*` paths type repeated state. | Mutations, predicates, projection, ingestion, invariants. | **EMITTED** (`src/foundry-program/synthesizer.ts:675-749`) |
+| `ingestion` | channel to list of schema paths | Where trigger payload data enters the world. | In channels, schema/wildcards, reactions, preconditions. | **EMITTED** (`src/foundry-program/synthesizer.ts:599-607`) |
+| `ingestion_guidance` | channel to guidance strings | Channel-specific author guidance after ingestion. | Prompt/guidance projection. | **AVAILABLE-UNUSED** - generated programs use mode `guidance`, `prompts`, and `recovery_steers` instead (`src/foundry-program/engine-primitive-registry.ts:41`) |
+| `ingestion_root_passthrough` | list/set of ingestion channels | Routes unrecognized payload keys under the channel's ingestion root. | `ingestion`, schema root wildcards. | **AVAILABLE-UNUSED** - no generated channel needs root passthrough today (`src/foundry-program/engine-primitive-registry.ts:42`) |
+| `action_map` | map of action name to `ActionSemantics` | Declared state writes, effects, queries, user waits, and tool metadata. | `modes[*].vocabulary`, channels, schema, tools. | **EMITTED** (`src/foundry-program/synthesizer.ts:647-673`) |
+| `projection`, `prompts`, `guidance`, `proceed_to` | per-mode projection, prompt/guidance maps, action target map | Author-visible state, instructions, and direct action-to-mode continuation. | Modes, action_map, query policy, terminal guidance. | **EMITTED** (`src/foundry-program/synthesizer.ts:518-524`, `542-578`, `580-597`, `751-758`) |
+| `integrations`, `reactions` | integration libraries/hooks and declarative reaction declarations | External hook declarations and engine-invoked reaction write scopes. | `action_map.result_path`, handlers, features, schema. | **EMITTED** for export hooks and generated reactions (`src/foundry-program/synthesizer.ts:608-625`, `1291-1305`) |
+| `features` | array/set of engine feature flags | Opt-in gate for advanced declarative surfaces. | Every feature-gated field below. | **EMITTED** (`src/foundry-program/synthesizer.ts:450-462`) |
+| `finalization_requires`, `finalization_gated_actions` | predicate list and gated action names | Terminal-targeting transition finalization checks. | Terminal transitions, schema predicates. | **AVAILABLE-UNUSED** - completion is currently expressed through transition guards and schema facts (`src/foundry-program/engine-primitive-registry.ts:52-53`) |
+| `artifact_bundle` | list of `{id, media_type, status_path, expected_count_path, storage_path}` | Spec-level artifact materialization contract. | `finalization_requires`, schema paths. | **AVAILABLE-UNUSED** - generator emits ProgramEntry `artifactPolicy` for exports instead (`src/foundry-program/synthesizer.ts:434-438`; `src/foundry-program/engine-primitive-registry.ts:54`) |
+| `schema_invariants` | collection plus record-relative predicates | Reject-only invariants for authored collection records. | Predicates, schema, document extraction. | **EMITTED** for document fidelity invariants (`src/foundry-program/synthesizer.ts:1056-1087`, `473-477`) |
+| `bounded_rework` | list of `{mode,counter,cap,regress}` | Per-loop regress action bound. | Rework actions, counters, `bounded_rework` feature. | **AVAILABLE-UNUSED** - v4.2.0 supports it; no generator contract emits regress counters today (`_shared-types.d.ts:1656-1663`; `src/foundry-program/engine-primitive-registry.ts:56`) |
+| `keyed_collections` | list of `{collection,key}` | Engine-owned upsert-by-key for `MAppend`. | Persistence output collections, schema wildcards. | **EMITTED** (`src/foundry-program/synthesizer.ts:400-405`, `463-466`, `1376-1410`; domain synthesis reads it at `src/foundry-program/domain-synthesis.ts:1535-1553`) |
+| `recovery_steers` | list of `{mode,when,guidance?,set?,template_paths?}` | Mode-scoped AfterRound guidance and optional idempotent flag setting. | Predicates, guidance, confirmation loops. | **EMITTED** including `set` and `template_paths` (`src/foundry-program/synthesizer.ts:400-405`, `468-471`, `3686-3718`) |
+| `merge_collections` | list of `{collection,key?/key_fields?,reducers[]}` | Content-key or key-based merge with per-field reducers. | `MAppend`, keyed collection semantics, `merge_collection` feature. | **AVAILABLE-UNUSED** - registered as primitive index 10, but no foundry content-key reducer emitter exists (`src/foundry-program/engine-primitive-registry.ts:262-270`) |
+| `no_action_escapes` | list of `{mode,counter,cap,arm,guidance?}` | Counts fallback/no-action rounds and arms a boolean escape flag. | Fallback terminal, counters, transition/precondition guards, `no_action_escape` feature. | **NEW-v4.2.0** - adopt in PR3 no_action_escapes (`_shared-types.d.ts:883-921`, `2602-2617`; awareness at `src/foundry-program/engine-primitive-registry.ts:60`) |
+| `confirmation_pairing` | `{prefixes, policy, terminals}` | Pairs user-confirmation terminal actions with collection prefixes. | `structured_decision` channels, confirmation loops. | **EMITTED** (`src/foundry-program/synthesizer.ts:673`, `3843-3857`) |
+| `notice_terminal_exemptions` | action name set/list | Exempts named actions from notice-terminal rewriting. | `action_map`, notice terminal normalization. | **AVAILABLE-UNUSED** - no generated action needs this exemption today (`src/foundry-program/engine-primitive-registry.ts:63`) |
+| `derived_paths` | list of `{target, when, set}` | Post-round state derivation. | Schema, collection lifecycles, predicates. | **EMITTED** (`src/foundry-program/synthesizer.ts:1523-1595`) |
+| `derived_state_machines` | list of state-machine declarations | Engine-owned state derivation by ordered conditions. | Schema, derived paths, reactions. | **AVAILABLE-UNUSED** - no generated stage maps to it yet (`_shared-types.d.ts:1461-1490`; `src/foundry-program/engine-primitive-registry.ts:65`) |
+| `collection_finalizers` | collection plus ordered transformer pipeline | Post-round dedupe/renumber/rewrite finalization. | Collections, schema, terminal modes. | **AVAILABLE-UNUSED** - no generator surface maps cleanup pipelines to it (`_shared-types.d.ts:1492-1583`; `src/foundry-program/engine-primitive-registry.ts:66`) |
+| `collections`, `collection` | aggregate collection blocks / PGAS-L collection blocks | Loader sugar for keyed, merge, invariants, derived paths, and finalizers. | Scattered collection primitives and feature flags. | **AVAILABLE-UNUSED** - foundry emits scattered primitives directly (`_shared-types.d.ts:2731-2900`; `src/foundry-program/engine-primitive-registry.ts:67-68`) |
+| `tools` | named tool definitions | Loader desugars tools into action/channel/semantics and tool declarations. | Tool registry, channels, action_map, ProgramEntry handlers. | **EMITTED** for registered `web_search` tools (`src/foundry-program/synthesizer.ts:760-769`, `12740-12790`) |
+| `pure`, `pure:strict` | `pure?: boolean | "strict"` | Pure profile, or strict pure profile forbidding handler-style reactions. | Features, reactions, ProgramEntry callbacks. | `pure` **EMITTED** (`src/foundry-program/synthesizer.ts:478-480`); `pure:strict` **HELD** pending K/L/M choreography engine ask, pgas#844 (`_shared-types.d.ts:1759-1774`; `src/foundry-program/engine-primitive-registry.ts:71`) |
+| `disallow_raw_mutation_authoring` | boolean | Opt-in refusal for runtime mutations not backed by action_map. | Action map, type gate. | **AVAILABLE-UNUSED** - no generated program opts in yet (`_shared-types.d.ts:1889-1907`; `src/foundry-program/engine-primitive-registry.ts:72`) |
+| `command_grammar`, `control_plane` | command grammar block, control plane declaration | CLI/control vocabulary and dispatch metadata. | Runtime control feature, channels, session operations. | `control_plane` **EMITTED** via skeleton and entry-channel rewrite (`templates/pgas-new/program/spec-skeleton.yml.tmpl:172-240`; `src/foundry-program/synthesizer.ts:1334-1350`); `command_grammar` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:73`) |
+| `ephemeral`, `advisory_schema`, `activation_providers`, `decision_schema` | ephemeral/advisory/decision zone declarations | Non-durable state, activation context, and skill-triage decision state. | Features `ephemeral_state`, `activation`, `skill_triage`; predicates/projection. | `advisory_schema`, `activation_providers`, `decision_schema` **EMITTED** for skills (`src/foundry-program/synthesizer.ts:1308-1331`); `ephemeral` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:75-78`) |
+| `agent_nodes`, `schedule` | agent network nodes and scheduled tick declarations | Background/agent fabric declarations. | Typed channels, features `agent_network`, `scheduled_program`. | **AVAILABLE-UNUSED** - no generated program declares these yet (`_shared-types.d.ts:1858-1887`, `2995-3025`; `src/foundry-program/engine-primitive-registry.ts:79-80`) |
+| `initial_crystallize`, `initial_trigger` | initial cache-crystallized paths; create-then-trigger route input | Prompt-cache static paths at session creation and session-create trigger sugar. | Projection, schema, route create session. | **AVAILABLE-UNUSED** - generated scaffolds seed through ordinary triggers today (`_shared-types.d.ts:1840-1855`, `6738-6750`; `src/foundry-program/engine-primitive-registry.ts:81-82`) |
+
+## 2. Channels, Ingestion, And Schema Wildcards
+
+Engine anchors: `Channel` fields are `_shared-types.d.ts:444-530`; raw channel YAML is `_shared-types.d.ts:2353-2404`; ingestion and schema raw fields are `_shared-types.d.ts:2405-2416`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Direction and sync | `{direction: "In"|"Out", sync: "Sync"|"Async"}` | Channel trigger/effect direction and sync behavior. | Mode channel allowlists, ingestion, result_path. | **EMITTED** (`src/foundry-program/synthesizer.ts:627-637`; `src/foundry-program/engine-primitive-registry.ts:83-84`) |
+| Structured decisions | `structured_decision: true`, optional `decision_targeting` | Typed user approval/selection payloads and item targeting. | `awaits_user_decision`, confirmation pairing, ingestion paths. | **EMITTED** (`src/foundry-program/synthesizer.ts:3416-3439`) |
+| Durable channels | `durable: true`, `durability: {max_retries, ordering}` | Durable async delivery policy. | Conversational hub entry channel, feature `durable_channel`. | **EMITTED** when conversational hub is synthesized (`src/foundry-program/synthesizer.ts:450-455`, `630-634`) |
+| Delegation channel fields | `target_spec`, `result_path`, `max_delegated_rounds`, `round_timeout_ms`, `optional` | Parent-to-child session dispatch and bounded failure behavior. | Delegation policy, system query result continuation. | **EMITTED** (`src/foundry-program/synthesizer.ts:1745-1758`, `2117-2141`) |
+| Delegation advanced fields | `delegation_mode`, `dynamic_target_arg`, `reacquire_timeout_ms`, `result_schema` | Continue-mode, dynamic target, lock reacquire timeout, channel result schema. | Delegation channels and policies. | **AVAILABLE-UNUSED** - v1 delegation is static/blocking/degrade-only; dynamic/continue are rejected (`src/foundry-program/synthesizer.ts:13577-13606`; awareness at `src/foundry-program/engine-primitive-registry.ts:90-95`) |
+| MCP connector channel | `type: "mcp_connector"`, `dynamic`, `servers[]` | Direct MCP connector declaration as channel. | Tooling and integrations. | **AVAILABLE-UNUSED** - foundry emits `tools` plus tool registry adapters, not MCP connector channels (`src/foundry-program/engine-primitive-registry.ts:98`) |
+| Typed channel metadata | `message_type`, `delivery_policy`, `capabilities`, `ttl_ms`, `max_subscribers` | Agent-network channel semantics and limits. | `agent_nodes`, scheduling, channel fabric. | **AVAILABLE-UNUSED** - no generated typed-channel fabric yet (`_shared-types.d.ts:51-69`, `521-530`; `src/foundry-program/engine-primitive-registry.ts:99-103`) |
+| Ingestion maps | `ingestion: {channel: [path...]}` | Trigger payload landing paths. | In channels, schema, reactions. | **EMITTED** for seed/user/system/doc/delegation channels (`src/foundry-program/synthesizer.ts:599-607`, `2133-2141`, `2404-2412`, `3442-3450`) |
+| Schema and wildcards | `schema: {"path": "type", "items.*.field": "type"}` | Durable path typing, including collections and open wildcard slots. | Mutations, predicates, projection, keyed collections. | **EMITTED** (`src/foundry-program/synthesizer.ts:675-749`, `1659-1685`, `2414-2486`) |
+| Ingestion root passthrough | `ingestion_root_passthrough: ["channel"]` | Root-prefixing for unknown payload keys. | Schema root wildcard and ingestion root. | **AVAILABLE-UNUSED** - no generated channel uses this server-side shaping yet (`_shared-types.d.ts:1614-1625`, `2408-2416`) |
+
+## 3. Modes, Transitions, Preconditions, And Vocabulary
+
+Engine anchors: `Mode` and `ModeTransition` are `_shared-types.d.ts:922-977`; raw modes are `_shared-types.d.ts:2316-2345`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Mode vocabulary | `vocabulary: ActionName[]` | Legal actions in a mode. | `action_map`, toolkit/session controls. | **EMITTED** (`src/foundry-program/synthesizer.ts:1180-1199`, `2117-2130`, `2668-2685`, `3514-3535`) |
+| Mode channel allowlist | `channels: string[]` | Trigger/effect channels allowed in a mode. | `channels`, ingestion, terminal actions. | **EMITTED** (`src/foundry-program/synthesizer.ts:482-516`, `1201-1219`) |
+| Transitions | `transitions: [{target, guard?, crystallize?}]` | Mode graph edges and optional guards/cache crystallization. | Predicates, proceed_to, initial_crystallize. | Target/guard **EMITTED** (`src/foundry-program/synthesizer.ts:991-1010`); `crystallize` **AVAILABLE-UNUSED** - no generated transition selects crystallized paths yet (`_shared-types.d.ts:922-936`) |
+| Preconditions | `preconditions: {action: Predicate[]}` | Action-local gates. | Vocabulary, action_map, predicates. | **EMITTED** (`src/foundry-program/synthesizer.ts:1965-2005`, `2566-2628`, `3234-3247`) |
+| Enum router | `enum_router: {path, mapping}` | Branch routing from a path value. | Modes, transition graph, feature `enum_router`. | **AVAILABLE-UNUSED** - current generator emits explicit guarded transitions instead (`_shared-types.d.ts:938-940`, `2331-2334`) |
+| Decision-only modes | `decision_only: true` | Author-less auto-transition mode. | Transition guards, integrations, export hooks. | **EMITTED** for export decision-only stages (`src/foundry-program/synthesizer.ts:1222-1241`) |
+| Auto-trigger interval | `auto_trigger_min_interval_ms` | Host-applied throttle for automated mode-entry triggers. | Scheduled/continuation drivers. | **AVAILABLE-UNUSED** - no generated monitor loop emits timing metadata (`_shared-types.d.ts:956-970`, `2337-2338`) |
+| Evidence requirements | `evidence_requirements: string[]` | Projection coverage required for a mode. | Projection, schema, feature `evidence_requirements`. | **AVAILABLE-UNUSED** - generated specs directly include needed projection paths today (`_shared-types.d.ts:971-976`, `2339-2344`) |
+
+## 4. Gates And Predicate Variants
+
+Engine anchor: `PredicateKind` is `_shared-types.d.ts:104`; predicate fields are `_shared-types.d.ts:663-745`. `FieldNe` and `Not` are not in the v4.2.0 type surface; they are listed below only to prevent accidental invention.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Truth and equality | `FieldTruthy`, `FieldFalsy`, `FieldEquals`, `FieldEqualsField` with `path`, `value`, or `other_path` | Presence/boolean/equality gates. | Mode guards, preconditions, derived predicates. | Truthy/falsy/equals **EMITTED** (`src/foundry-program/synthesizer.ts:42-45`, `1090`, `1975-2003`); `FieldEqualsField` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:107`) |
+| Numeric predicates | `FieldLessThan`, `FieldLessOrEqual`, `FieldGreaterThan`, `FieldGreaterOrEqual` with `path`, `value` or `other_path` | Numeric threshold/coherence validation. | Derived sums, document fidelity, lifecycle guards. | **EMITTED** (`src/foundry-program/synthesizer/types.ts:13-18`; dynamic emission at `src/foundry-program/synthesizer.ts:1153-1163`; document min-char guard at `1035-1043`) |
+| Token/regex/source validators | `FieldContainsAll`, `FieldMatchesPattern`, `FieldNotMatchesPattern`, `FieldSourceGrounded` | Content coverage, regex allow/deny, source grounding. | Schema invariants, document extraction. | **EMITTED** (`src/foundry-program/synthesizer.ts:1045-1053`, `1056-1087`; registry active entries at `src/foundry-program/engine-primitive-registry.ts:250-292`) |
+| Previous item cursor | `PreviousItemFieldEquals` with `path`, `cursor`, `order`, `value` | Ordered item predecessor gate. | `first_item_where_field_ne`, confirmation loops. | **EMITTED** (`src/foundry-program/synthesizer.ts:3538-3552`) |
+| Collection membership | `FieldInCollection`, `CollectionSubset`, plus legacy raw `FieldIn` | Membership/subset checks against declared collections. | Schema arrays, source paths. | **AVAILABLE-UNUSED** - no generator descriptor emits these membership predicates yet (`_shared-types.d.ts:719-744`; `src/foundry-program/engine-primitive-registry.ts:116-126`) |
+| Status/event predicates | `AllNodesStatus`, `AllItemsStatus`, `EventEmitted`, `TriggerType` | Agent node status, collection item status, event presence, trigger channel matching. | Modes, channels, agent fabric, confirmation. | `AllItemsStatus` and `TriggerType` **EMITTED** (`src/foundry-program/synthesizer.ts:1632-1637`; foundry spec trigger preconditions at `src/foundry-program/specs.yml:80-85`, `153-165`); `AllNodesStatus`/`EventEmitted` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:119-121`) |
+| Combinators | `All`, `Any`, `Implies` with `subs[]` | Predicate composition. | Guards, preconditions, recovery steers, derived predicates. | **EMITTED** (`src/foundry-program/synthesizer.ts:1024-1032`, `1093-1099`, `3538-3552`, `3686-3718`) |
+| `FieldNe`, `Not` | no v4.2.0 declaration shape | Not available in installed engine type surface. | None. | **HELD** - do not emit until engine adds these variants (`_shared-types.d.ts:104`; `src/foundry-program/engine-primitive-registry.ts:127-128`) |
+
+## 5. Action Map And ActionSemantics
+
+Engine anchors: `PathMutation`, `ArgSchemaFragment`, and `ActionSemantics` are `_shared-types.d.ts:982-1200`; raw YAML action_map is `_shared-types.d.ts:2417-2470`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Mutations | `mutations: [{op,path,value?,from_arg?,from_state?,coerce?,coerce_key?}]` | Declared world writes for an action. | Schema, type gate, preconditions. | `op/path/value/from_arg` **EMITTED** (`src/foundry-program/synthesizer/topology.ts:219-250`, `252-286`; notebook actions at `src/foundry-program/synthesizer.ts:2533-2556`); `from_state` **EMITTED** (`src/foundry-program/synthesizer.ts:3144-3182`, `9741-9751`); `coerce` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:132`) |
+| Terminal effect channel | `channel: string` | EffectAction channel for a named action. | Channel declarations, mode channel allowlists. | **EMITTED** (`src/foundry-program/synthesizer/topology.ts:279-286`; many specialized actions at `src/foundry-program/synthesizer.ts:2488-2531`, `3763-3805`) |
+| Result path | `result_path: string` | Effect result write path for sync output handlers. | Sync Out channels, schema, handlers. | **EMITTED** (`src/foundry-program/synthesizer/topology.ts:279`; documents at `src/foundry-program/synthesizer.ts:2508-2513`; collection events at `3399-3412`; foundry spec examples at `src/foundry-program/specs.yml:891-907`, `973-987`, `1023-1041`) |
+| Bounds | `bounds: {path: {min?, max?}}` | Numeric value bounds checked by action semantics. | Mutations, type gate. | **AVAILABLE-UNUSED** - engine supports `ActionSemantics.bounds`, but generated YAML has no `bounds:` emitter today (`_shared-types.d.ts:1110-1114`, `2427-2431`; awareness at `src/foundry-program/engine-primitive-registry.ts:133`) |
+| Query actions | `query_path: string` or `is_query: true` | Fixed or dynamic WorldQuery/QueryAction. | Query policy, projection, action_map. | **AVAILABLE-UNUSED** - generator emits ProgramEntry `queryPolicy`, not action_map query entries (`_shared-types.d.ts:1115-1134`; `src/foundry-program/synthesizer.ts:749`, `810-816`; awareness at `src/foundry-program/engine-primitive-registry.ts:136-137`) |
+| Description metadata | `description: string`, `arg_descriptions: {arg: text}` | Synthesized tool description and per-argument guidance. | Tool schema synthesis, native tool calls. | **EMITTED** (`src/foundry-program/synthesizer/topology.ts:252-278`; specialized descriptors at `src/foundry-program/synthesizer.ts:1886-1909`, `2533-2556`, `3763-3805`) |
+| Argument schema | `arg_schema: {arg: {enum?, type?, required?}}` | Driver-tier JSON-schema overlay for synthesized tool args. | `arg_descriptions`, grammar-constrained decoders, tool schema. | **NEW-v4.2.0** - adopt in PR2 arg_schema (`_shared-types.d.ts:1069-1099`, `1166-1180`, `2449-2460`; awareness at `src/foundry-program/engine-primitive-registry.ts:140`) |
+| Auto-continue metadata | `continues: true` | Forces terminal effect to auto-continue intent. | `awaits_user_decision`, continuation policy. | **AVAILABLE-UNUSED** - no generated terminal action emits it (`_shared-types.d.ts:1181-1190`; awareness at `src/foundry-program/engine-primitive-registry.ts:141`) |
+| User-decision parking | `awaits_user_decision: {channel, intent?}` | Parks automation until a declared input channel receives a user decision/upload. | Structured decision channels, confirmation pairing. | **EMITTED** (`src/foundry-program/synthesizer.ts:2500-2507`, `3785-3794`; foundry artifact plan at `src/foundry-program/specs.yml:891-907`) |
+
+## 6. Derived Paths
+
+Engine anchors: `DerivedPathCondition`, `DerivedPathSetKind`, `DerivedPathSetParams`, and `DerivedPathRule` are `_shared-types.d.ts:1352-1445`; raw YAML is `_shared-types.d.ts:2625-2659`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Conditions | `when: {always:true}` or `path_equals` or `path_truthy` | When a derived rule runs. | Schema, governance/system paths, reactions. | **EMITTED** primarily with `always` (`src/foundry-program/synthesizer.ts:1528-1595`) |
+| `first_item_where_field_ne` | `set.kind`, params `collection_path`, `field`, `value`, `order` | Active cursor over first not-done item. | `PreviousItemFieldEquals`, confirmation loops. | **EMITTED** (`src/foundry-program/synthesizer.ts:1576-1588`; registry active at `src/foundry-program/engine-primitive-registry.ts:162-172`) |
+| `all_items_field_eq` | params `collection_path`, `field`, `value` | Universal completion flag. | Collection lifecycle guard. | **EMITTED** (`src/foundry-program/synthesizer.ts:1530-1538`; registry active at `src/foundry-program/engine-primitive-registry.ts:173-183`) |
+| `any_item_field_eq` | params `collection_path`, `field`, `value` | Existential completion/proposed flag. | Confirmation loops. | **EMITTED** (`src/foundry-program/synthesizer.ts:1558-1565`; registry active at `src/foundry-program/engine-primitive-registry.ts:217-227`) |
+| `items_where_field_eq` | params `collection_path`, `field`, `value` | Status/verdict partition bucket. | Approval-loop bounded projections. | **EMITTED** (`src/foundry-program/synthesizer.ts:1566-1575`; registry active at `src/foundry-program/engine-primitive-registry.ts:228-238`) |
+| `sum_of` | params `collection_path`, `field` | Numeric aggregate over collection item field. | Numeric aggregate predicates and schema. | **EMITTED** (`src/foundry-program/synthesizer.ts:1539-1550`; registry active at `src/foundry-program/engine-primitive-registry.ts:239-249`) |
+| `from_predicate` | params `predicate` | Writes composed predicate truth to a boolean path. | Existing predicate vocabulary. | **AVAILABLE-UNUSED** - generated specs compose predicates directly in guards/steers (`_shared-types.d.ts:1424-1436`; `src/foundry-program/engine-primitive-registry.ts:148`) |
+| `count_of`, `concat`, `field_value`, `now_iso`, `current_round` | set kinds with their respective params | Generic count/string/copy/time/round derivations. | Schema paths and projection. | **AVAILABLE-UNUSED** - no generated descriptor maps to these helper derivations yet (`_shared-types.d.ts:1365-1382`; `src/foundry-program/engine-primitive-registry.ts:149-153`) |
+| `merge_collections` | not a `derived_paths` set kind; top-level `merge_collections` declaration | Reducer/upsert collection merging. | `MAppend`, collection sugar. | **AVAILABLE-UNUSED** - registered index 10 but no emitter (`src/foundry-program/engine-primitive-registry.ts:262-270`) |
+
+## 7. Collections, Recovery, No-Action Escapes, And Bounded Rework
+
+Engine anchors: keyed collections are `_shared-types.d.ts:758-776`; merge collections are `_shared-types.d.ts:778-829`; recovery steers are `_shared-types.d.ts:830-881`; no-action escapes are `_shared-types.d.ts:883-921`; bounded rework is `_shared-types.d.ts:1656-1663` and raw `_shared-types.d.ts:2540-2552`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| `keyed_collections` | `{collection, key}` | Idempotent replace-on-key for appended records. | Persistence stage outputs, schema arrays. | **EMITTED** (`src/foundry-program/synthesizer.ts:1376-1410`, `463-466`; active registry at `src/foundry-program/engine-primitive-registry.ts:184-194`) |
+| `merge_collections` | `{collection, key? | key_fields?, reducers[]}` | Merge colliding records by reducers (`union`, `max`, `min`, `replace`). | Collection sugar, `MAppend`, feature `merge_collection`. | **AVAILABLE-UNUSED** - registered but pending content-key reducer emitter (`src/foundry-program/engine-primitive-registry.ts:262-270`) |
+| `recovery_steers.guidance` | `{mode, when, guidance}` | Conditional mode-local steer guidance. | Predicates, `pc_steer_guidance`. | **EMITTED** (`src/foundry-program/synthesizer.ts:3686-3718`) |
+| `recovery_steers.set` | `set: {path, value}` | Idempotent flag arming when a predicate holds. | Schema-declared non-array paths, transitions/preconditions. | **EMITTED** (`src/foundry-program/synthesizer.ts:3701-3706`) |
+| `recovery_steers.template_paths` | `template_paths: string[]` | Allowlisted interpolation into guidance text. | Guidance strings, projected state paths. | **EMITTED** (`src/foundry-program/synthesizer.ts:3707-3718`) |
+| `no_action_escapes` | `{mode,counter,cap,arm,guidance?}` | Counts fallback rounds and arms a boolean escape. | Fallback/no-action terminal, schema counters, transition guards. | **NEW-v4.2.0** - adopt in PR3 no_action_escapes (`_shared-types.d.ts:883-921`, `2602-2617`; awareness at `src/foundry-program/engine-primitive-registry.ts:60`) |
+| `bounded_rework` | `{mode,counter,cap,regress}` | Bounds explicit regress actions. | Rework loop actions, counters, GKBoundedRework. | **AVAILABLE-UNUSED** - no generated per-loop rework surface uses it (`src/foundry-program/engine-primitive-registry.ts:56`) |
+| `collections` and PGAS-L `collection` sugar | aggregate/desugared collection blocks | Compact authoring of keyed, merge, invariants, derived paths, finalizers. | All scattered collection primitives. | **AVAILABLE-UNUSED** - foundry emits scattered primitives directly (`_shared-types.d.ts:2731-2900`; `src/foundry-program/engine-primitive-registry.ts:67-68`) |
+
+## 8. Projections, Delegation, ProgramEntry Policies, Features, And Purity
+
+Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.ts:1948-1995`, `5031-5068`; `ProgramEntry` policy fields are `_shared-types.d.ts:5224-5240`; activation declarations are `_shared-types.d.ts:175-180`, `1795-1839`, `4243-4259`.
+
+| construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
+| --- | --- | --- | --- | --- |
+| Declarative projection | `projection: {mode: {include?, exclude?}}` | Mode-local world view. | Schema, prompts, query policy, evidence requirements. | **EMITTED** (`src/foundry-program/synthesizer.ts:542-578`, `1687-1701`, `2144-2196`, `2701-2738`) |
+| Query policy | ProgramEntry `queryPolicy: {allowedWorldQueryPrefixes, mode:"enforce"}` | Runtime policy for inline world queries not included in projection. | Projection/schema prefixes, engine query tool. | **EMITTED** (`src/foundry-program/synthesizer.ts:749`, `810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`, `120-128`) |
+| Delegation channels and policy | Channel `target_spec/result_path/...` plus ProgramEntry `delegationPolicy` | Child session dispatch and deterministic input enrichment. | Delegation action_map, system query continuation, child artifacts. | **EMITTED** (`src/foundry-program/synthesizer.ts:1745-1758`, `1876-1910`, `10188-10239`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`) |
+| Delegation advanced patterns | continue mode, dynamic target arg, strict delegation, generic fan-out | Broader child session orchestration. | Delegation channel fields and policies. | **AVAILABLE-UNUSED / HELD** - current validator rejects continue/dynamic/strict/generic fan-out for v1 (`src/foundry-program/synthesizer.ts:13577-13606`) |
+| Artifact policy | ProgramEntry `artifactPolicy` | Host materialization policy for generated export artifacts. | Export stage descriptors, sync output hooks. | **EMITTED** (`src/foundry-program/synthesizer.ts:434-438`, `810-816`, `10240-10272`; `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`) |
+| Feature flags | `features: Feature[]` | Enables feature-gated declarative surfaces. | All advanced spec fields. | **EMITTED** (`src/foundry-program/synthesizer.ts:450-462`) |
+| `pure=false` | `pure: false` | Allows generated programs that need imperative handlers/policies. | Reactions, ProgramEntry callbacks, export stages. | **EMITTED** when export decision-only requires it (`src/foundry-program/synthesizer.ts:478-480`) |
+| `pure: true` | `pure: true` | Pure profile for skeleton/default generated specs. | Feature flags and reaction callback restrictions. | **EMITTED** from skeleton loaded by synthesizer (`src/foundry-program/synthesizer.ts:440-444`; `templates/pgas-new/program/spec-skeleton.yml.tmpl:1-4`) |
+| `pure: "strict"` | `pure: strict` plus `pure_strict` feature | Strict pure profile forbidding handler-style reactions. | Reactions and ProgramEntry callbacks. | **HELD** - pending K/L/M choreography engine ask, pgas#844 (`_shared-types.d.ts:1759-1774`; awareness at `src/foundry-program/engine-primitive-registry.ts:71`) |
+| Activation/advisory declarations | `advisory_schema`, `activation_providers`, skill activation declarations | Static advisory context materialized by activation actions. | Skill catalog, advisory projection, decision schema. | **EMITTED** for generated skill catalogs (`src/foundry-program/synthesizer.ts:1308-1331`) |
+| Decision schema | `decision_schema` | Guard-visible, non-author-mutable skill-triage state. | Skill triage, predicates. | **EMITTED** for skill triage (`src/foundry-program/synthesizer.ts:1328-1331`) |
+| Reaction handlers | ProgramEntry `reactionHandlers` | Handler map for declared reaction names. | `reactions`, generated handlers. | **EMITTED** (`src/foundry-program/synthesizer.ts:781-794`, `5247`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:90-107`) |
+| Sync-out continuation policy | ProgramEntry `syncOutContinuationPolicy` | Continuation policy for registered tool sync outputs. | `tools`, tool channels, runtime continuation. | **EMITTED** for registered tools (`src/foundry-program/synthesizer.ts:810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:51-57`) |
+
+## Version 4.2.0 Awareness Guard
+
+The guard added in this PR asserts that:
+
+- `action_map.arg_schema` is present in `ENGINE_DECLARATION_AWARENESS` as `adopt_backlog` for PR2.
+- `Specification.no_action_escapes` is present in `ENGINE_DECLARATION_AWARENESS` as `adopt_backlog` for PR3.
+- Every `adopt_backlog`, `available_unused`, and `held` awareness entry has a non-empty note.
+
+See `tests/unit/engine-primitive-registry.test.ts:162-179`.
