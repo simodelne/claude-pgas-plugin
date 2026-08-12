@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   activeEnforcedConstructs,
+  ENGINE_DECLARATION_AWARENESS,
   ENGINE_PRIMITIVE_REGISTRY,
   primitiveForConstruct,
   refusedConstructs,
@@ -156,5 +157,24 @@ describe('engine-primitive-registry', () => {
 
   it('every entry references an existing curator-request doc path', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
+  });
+
+  it('acknowledges v4.2.0 declaration additions before adoption PRs wire emission', () => {
+    const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
+
+    expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Specification.no_action_escapes')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+  });
+
+  it('requires backlog, available-unused, and held awareness notes', () => {
+    for (const entry of ENGINE_DECLARATION_AWARENESS) {
+      if (entry.status === 'emitted') continue;
+
+      expect(entry.note.trim().length, `${entry.construct} missing awareness note`).toBeGreaterThan(0);
+    }
   });
 });
