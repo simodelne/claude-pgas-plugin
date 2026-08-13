@@ -2,7 +2,7 @@
 
 Authoritative engine surface for this branch: `@simodelne/pgas-server@4.9.0`, installed under `node_modules/@simodelne/pgas-server`.
 Line references to engine declarations cite `node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts` plus the public entrypoint export declarations where relevant.
-Line references to foundry status cite generator/registry files in this repo. Phase B changes synthesis emission for typed raw-value `view:` sections while leaving later declaration surfaces as backlog.
+Line references to foundry status cite generator/registry files in this repo. Phase B changes synthesis emission for typed raw-value `ViewSection` sections while leaving later declaration surfaces as backlog.
 
 Status vocabulary:
 
@@ -15,11 +15,11 @@ The machine-readable mirror is `ENGINE_DECLARATION_AWARENESS` in `src/foundry-pr
 
 ## v4.4.0/v4.9.0 Additive Awareness
 
-Phase B adopts `view:` for typed raw-value projection reads and still only acknowledges later-phase render, convention-registration, and engine-capability surfaces.
+Phase B adopts `ViewProfile` for typed raw-value projection reads and still only acknowledges later-phase render, convention-registration, and engine-capability surfaces. In v4.9.0, generated registrations attach these sections through `ProgramEntry.viewProfile`; generated `specs.yml` files do not serialize a top-level YAML `view:` block because the current loader does not accept that block shape.
 
 | construct | public anchor | FOUNDRY STATUS |
 | --- | --- | --- |
-| `view:` / `ViewSection` / `ViewProfile` | `_shared-types.d.ts:5261-5270`; `ProgramEntry.viewProfile` and `projectionBuilderMigration` at `_shared-types.d.ts:5699-5729`; plugin exports at `plugin.d.ts:111-118` | **EMITTED**, Phase B. Existing-repo typed result/read leaves move to `view:`; residual presentation builders coexist only with `projectionBuilderMigration`. |
+| `view:` / `ViewSection` / `ViewProfile` | `_shared-types.d.ts:5261-5270`; `ProgramEntry.viewProfile` and `projectionBuilderMigration` at `_shared-types.d.ts:5699-5729`; plugin exports at `plugin.d.ts:111-118` | **EMITTED via `ProgramEntry.viewProfile`**, Phase B. Existing-repo typed result/read leaves build `ViewSection[]` and attach them at registration; residual presentation builders coexist only with `projectionBuilderMigration`. The in-spec YAML `view:` block is deferred until the loader/blueprint compiler accepts it (#915/#917). |
 | `render:` / `RenderProfile` | `_shared-types.d.ts:5310-5508`; `ProgramEntry.renderProfile` at `_shared-types.d.ts:5743-5755` | **ADOPT-BACKLOG**, Phase C. Replaces per-program report/render data `.ts` declarations. |
 | `requires_delegations` / mandatory delegation | raw mode YAML at `_shared-types.d.ts:2488-2503`; typed declarations at `_shared-types.d.ts:969-1081`; compiled `mandatory_delegations` at `_shared-types.d.ts:1838-1846` | **ADOPT-BACKLOG**, Phase D. |
 | conversational delegation | `DelegationMode = "blocking" \| "continue" \| "conversational"` at `_shared-types.d.ts:443`; caller inbox fields at `_shared-types.d.ts:519-532` | **ADOPT-BACKLOG**, Phase D. |
@@ -172,7 +172,7 @@ Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.
 
 | construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
 | --- | --- | --- | --- | --- |
-| Declarative projection | `projection: {mode: {include?, exclude?}}`; `view:` / `ViewProfile` for declarative derived views | Mode-local world view and frontend-derived raw values. | Schema, prompts, query policy, evidence requirements, `projectionBuilderMigration`. | `projection` **EMITTED**; `view:` **EMITTED** in Phase B for existing-repo typed result/read leaves, with residual presentation builders tracked through `projectionBuilderMigration` (`src/foundry-program/synthesizer.ts`; `src/pgas-new/governed-attach-profile.ts`; `_shared-types.d.ts:5261-5270`, `5699-5729`) |
+| Declarative projection | `projection: {mode: {include?, exclude?}}`; `ViewProfile` for declarative derived views | Mode-local world view and frontend-derived raw values. | Schema, prompts, query policy, evidence requirements, `projectionBuilderMigration`. | `projection` **EMITTED**; `ViewSection[]` **EMITTED via `ProgramEntry.viewProfile`** in Phase B for existing-repo typed result/read leaves, with residual presentation builders tracked through `projectionBuilderMigration`. Top-level YAML `view:` remains deferred for #915/#917 because the v4.9.0 loader takes runtime `viewProfile` at registration (`src/foundry-program/synthesizer.ts`; `src/pgas-new/governed-attach-profile.ts`; `_shared-types.d.ts:5261-5270`, `5699-5729`) |
 | Query policy | ProgramEntry `queryPolicy: {allowedWorldQueryPrefixes, mode:"enforce"}` | Runtime policy for inline world queries not included in projection. | Projection/schema prefixes, engine query tool. | **EMITTED** (`src/foundry-program/synthesizer.ts:749`, `810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`, `120-128`) |
 | Delegation channels and policy | Channel `target_spec/result_path/...` plus ProgramEntry `delegationPolicy` | Child session dispatch and deterministic input enrichment. | Delegation action_map, system query continuation, child artifacts. | **EMITTED** (`src/foundry-program/synthesizer.ts:1745-1758`, `1876-1910`, `10188-10239`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`) |
 | Delegation advanced patterns | continue mode, dynamic target arg, strict delegation, generic fan-out | Broader child session orchestration. | Delegation channel fields and policies. | **AVAILABLE-UNUSED / HELD** - current validator rejects continue/dynamic/strict/generic fan-out for v1 (`src/foundry-program/synthesizer.ts:13577-13606`) |
@@ -187,7 +187,7 @@ Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.
 | Decision schema | `decision_schema` | Guard-visible, non-author-mutable skill-triage state. | Skill triage, predicates. | **EMITTED** for skill triage (`src/foundry-program/synthesizer.ts:1328-1331`) |
 | Reaction handlers | ProgramEntry `reactionHandlers` | Handler map for declared reaction names. | `reactions`, generated handlers. | **EMITTED** (`src/foundry-program/synthesizer.ts:781-794`, `5247`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:90-107`) |
 | Sync-out continuation policy | ProgramEntry `syncOutContinuationPolicy` | Continuation policy for registered tool sync outputs. | `tools`, tool channels, runtime continuation. | **EMITTED** for registered tools (`src/foundry-program/synthesizer.ts:810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:51-57`) |
-| Convention registration helper | `registerProgramByConvention` public helper | Builds `ProgramEntry` from `programs/<name>/` convention. | `ProgramEntry`, generated registration removal, sidecar extraction. | **ADOPT-BACKLOG**, #924 / Phase E-F. v4.9.0 exports the helper (`_shared-types.d.ts:8452`; `plugin.d.ts:149-150`), but this PR keeps generated registrations while adopting `view:`. |
+| Convention registration helper | `registerProgramByConvention` public helper | Builds `ProgramEntry` from `programs/<name>/` convention. | `ProgramEntry`, generated registration removal, sidecar extraction. | **ADOPT-BACKLOG**, #924 / Phase E-F. v4.9.0 exports the helper (`_shared-types.d.ts:8452`; `plugin.d.ts:149-150`), but this PR keeps generated registrations while adopting runtime `ViewProfile`. |
 
 ## Version 4.2.0 Through 4.9.0 Awareness Guard
 
@@ -195,7 +195,7 @@ The guard added in this PR asserts that:
 
 - `action_map.arg_schema` is present in `ENGINE_DECLARATION_AWARENESS` as `emitted` for PR2.
 - `Specification.no_action_escapes` is present in `ENGINE_DECLARATION_AWARENESS` as `emitted` for PR3.
-- v4.4.0/v4.9.0 additions are acknowledged: emitted `Specification.view`, plus backlog `Specification.render`, `Mode.requires_delegations`, `DelegationMode.conversational`, `Feature.pure_strict`, `Specification.policies`, `EngineCapability.web_search`, `EngineCapability.document_extraction`, and `registerProgramByConvention`.
+- v4.4.0/v4.9.0 additions are acknowledged: emitted runtime `ProgramEntry.viewProfile` for `ViewSection[]` plus deferred in-spec YAML `view:`, and backlog `Specification.render`, `Mode.requires_delegations`, `DelegationMode.conversational`, `Feature.pure_strict`, `Specification.policies`, `EngineCapability.web_search`, `EngineCapability.document_extraction`, and `registerProgramByConvention`.
 - Every `adopt_backlog`, `available_unused`, and `held` awareness entry has a non-empty note.
 
 See `tests/unit/engine-primitive-registry.test.ts:178-215`.

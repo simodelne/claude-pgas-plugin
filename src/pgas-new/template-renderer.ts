@@ -4,7 +4,7 @@ import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import ts from 'typescript';
-import { buildViewProfile, type ViewSection } from '@simodelne/pgas-server/plugin.js';
+import type { ViewSection } from '@simodelne/pgas-server/plugin.js';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import {
   assertGeneratedProgramSourceGovernance,
@@ -70,6 +70,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   targetProfile?: ExistingRepoTargetProfile;
   governedAttachFrontendMode?: SimoneOsGovernedAttachFrontendMode;
   synthesizedSpecYaml?: string;
+  synthesizedViewSections?: readonly ViewSection[];
   synthesizedSynthesisContext?: SynthesisContext;
   synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
@@ -95,6 +96,7 @@ interface TemplateSpec {
 
 interface SynthesizedSources {
   specYaml?: string;
+  viewSections?: readonly ViewSection[];
   registrationTs?: string;
   projectionTs?: string;
   frontendSpecYaml?: string;
@@ -944,26 +946,19 @@ const ATTACHED_PROJECTION_MIGRATION_REMAINING_KEYS = [
   'composer_placeholder',
 ] as const;
 
-function renderAttachedRegistrationSource(slug: string, specYaml?: string): string {
+function renderAttachedRegistrationSource(slug: string, viewSections: readonly ViewSection[] = []): string {
   const source = readFileSync(join(TEMPLATE_ROOT, 'consumer/registration-attached.ts.tmpl'), 'utf8');
   return renderTemplate(source, {
     CAMEL_NAME: toCamelCase(slug),
-    LOAD_SPEC_SNIPPET: attachedLoadSpecSnippet(specYaml),
+    LOAD_SPEC_SNIPPET: '  const { spec } = loadSpecWithPatterns(specPath);\n',
     PASCAL_NAME: toPascalCase(slug),
     SLUG: slug,
-    ...attachedViewSupportTokens(specYaml),
+    ...attachedViewSupportTokens(viewSections),
   });
 }
 
-function attachedLoadSpecSnippet(specYaml: string | undefined): string {
-  return viewSectionsFromSpecYaml(specYaml).length > 0
-    ? '  const { spec } = loadSpecWithGeneratedView(specPath);\n'
-    : '  const { spec } = loadSpecWithPatterns(specPath);\n';
-}
-
-function attachedViewSupportTokens(specYaml: string | undefined): Record<string, string> {
-  const sections = viewSectionsFromSpecYaml(specYaml);
-  if (sections.length === 0) {
+function attachedViewSupportTokens(viewSections: readonly ViewSection[]): Record<string, string> {
+  if (viewSections.length === 0) {
     return {
       VIEW_PROFILE_ENTRY: '',
       VIEW_SUPPORT_DECLARATIONS: '',
@@ -979,49 +974,11 @@ function attachedViewSupportTokens(specYaml: string | undefined): Record<string,
 `,
     VIEW_SUPPORT_DECLARATIONS: `
 const VIEW_PROFILE: ProgramEntry['viewProfile'] = {
-  sections: ${renderTsValue(sections)},
+  sections: ${renderTsValue(viewSections)},
 };
-
-function loadSpecWithGeneratedView(specPath: string): ReturnType<typeof loadSpecWithPatterns> {
-  const strippedPath = \`\${specPath}.view-stripped.\${process.pid}.yml\`;
-  writeFileSync(strippedPath, stripTopLevelViewBlock(readFileSync(specPath, 'utf8')), 'utf8');
-  try {
-    return loadSpecWithPatterns(strippedPath);
-  } finally {
-    rmSync(strippedPath, { force: true });
-  }
-}
-
-function stripTopLevelViewBlock(source: string): string {
-  const lines = source.split(/\\r?\\n/u);
-  const output: string[] = [];
-  for (let index = 0; index < lines.length;) {
-    if (/^view:\\s*$/u.test(lines[index] ?? '')) {
-      index += 1;
-      while (index < lines.length && ((lines[index] ?? '') === '' || /^[ \\t]/u.test(lines[index] ?? ''))) {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(lines[index] ?? '');
-    index += 1;
-  }
-  return output.join('\\n');
-}
 `,
-    VIEW_SUPPORT_IMPORTS: "import { readFileSync, rmSync, writeFileSync } from 'node:fs';\n",
+    VIEW_SUPPORT_IMPORTS: '',
   };
-}
-
-function viewSectionsFromSpecYaml(specYaml: string | undefined): ViewSection[] {
-  if (!specYaml) {
-    return [];
-  }
-  const parsed = load(specYaml);
-  if (!isRecord(parsed)) {
-    return [];
-  }
-  return buildViewProfile(parsed.view)?.sections ?? [];
 }
 
 function renderTsValue(value: unknown): string {
@@ -1060,7 +1017,7 @@ function templateForSynthesizedArtifact(
       return inlineTemplate(selected.registrationTs);
     }
     if (artifact.path !== `src/programs/${selected.slug}/registration.ts`) {
-      return inlineTemplate(renderAttachedRegistrationSource(selected.slug, selected.specYaml));
+      return inlineTemplate(renderAttachedRegistrationSource(selected.slug, selected.viewSections ?? []));
     }
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
@@ -1784,6 +1741,7 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
 
 function synthesizedSourcesFor(options: {
   synthesizedSpecYaml?: string;
+  synthesizedViewSections?: readonly ViewSection[];
   synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
@@ -1798,6 +1756,7 @@ function synthesizedSourcesFor(options: {
 }): SynthesizedSources {
   return {
     specYaml: options.synthesizedSpecYaml,
+    viewSections: options.synthesizedViewSections ?? [],
     registrationTs: options.synthesizedRegistrationTs,
     projectionTs: undefined,
     frontendSpecYaml: undefined,
@@ -1817,6 +1776,7 @@ function synthesizedSourcesFor(options: {
       slug: child.slug,
       name: child.name,
       specYaml: child.spec_yaml,
+      viewSections: [],
       registrationTs: child.registration_ts,
       projectionTs: undefined,
       frontendSpecYaml: undefined,

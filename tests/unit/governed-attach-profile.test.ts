@@ -227,21 +227,18 @@ describe('SimoneOS governed attach profile', () => {
           exclude: [],
         },
       });
-      expect(parsed.view).toEqual([
-        { key: 'work_status', from: 'work.status', label: 'Work Status' },
-        { key: 'intake_facts', from: 'work.intake.facts', label: 'Intake Facts' },
-        { key: 'memo_title', from: 'work.memo_artifact.title', label: 'Memo Title' },
-        { key: 'memo_body', from: 'work.memo_artifact.body', label: 'Memo Body' },
-        { key: 'memo_status', from: 'work.memo_artifact.status', label: 'Memo Status' },
-      ]);
+      expect(parsed.view).toBeUndefined();
 
       const registration = readFileSync(join(repoRoot, 'programs/governed-memo-mini/registration.ts'), 'utf8');
-      expect(registration).toContain("import { readFileSync, rmSync, writeFileSync } from 'node:fs';");
       expect(registration).toContain("import { createProgramAdapters, enableNotebook, loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';");
       expect(registration).toContain('export function createProgramEntry(): ProgramEntry');
       expect(registration).toContain('const GOVERNED_MEMO_MINI_VIEW_PROFILE');
-      expect(registration).toContain("loadSpecWithGeneratedView(path.join(dirname, 'specs.yml'))");
+      expect(registration).toContain("loadSpecWithPatterns(path.join(dirname, 'specs.yml'))");
+      expect(registration).not.toContain('loadSpecWithGeneratedView');
+      expect(registration).not.toContain('view-stripped');
       expect(registration).toContain('viewProfile: GOVERNED_MEMO_MINI_VIEW_PROFILE');
+      expect(registration).toContain('{ key: "work_status", from: "work.status", label: "Work Status" }');
+      expect(registration).toContain('{ key: "memo_body", from: "work.memo_artifact.body", label: "Memo Body" }');
       expect(registration).toContain('projectionBuilderMigration:');
       expect(registration).toContain('trackingIssue: \'docs/ENGINE-DECLARATION-CATALOG.md#declarative-projection\'');
       expect(registration).toContain('"status_banner"');

@@ -147,7 +147,6 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
         exclude: [],
       },
     },
-    view: SIMONEOS_GOVERNED_ATTACH_VIEW_SECTIONS,
     schema: {
       'inputs.user_text': 'string',
       'inputs.user_message_latest': 'string',
@@ -271,7 +270,6 @@ export function renderSimoneOsGovernedAttachRegistration(options: SimoneOsGovern
     : "['memo', 'governed attach', 'markdown', 'backend']";
   const manifestInteractive = options.frontendSpecPath ? 'true' : 'false';
   return `import path from 'node:path';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createProgramAdapters, enableNotebook, loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 import { ${projectionName} } from './projection.js';
@@ -344,36 +342,9 @@ const ${constantPrefix}_VIEW_PROFILE: ProgramEntry['viewProfile'] = {
   sections: ${renderTsValue(SIMONEOS_GOVERNED_ATTACH_VIEW_SECTIONS)},
 };
 
-function loadSpecWithGeneratedView(specPath: string): ReturnType<typeof loadSpecWithPatterns> {
-  const strippedPath = \`\${specPath}.view-stripped.\${process.pid}.yml\`;
-  writeFileSync(strippedPath, stripTopLevelViewBlock(readFileSync(specPath, 'utf8')), 'utf8');
-  try {
-    return loadSpecWithPatterns(strippedPath);
-  } finally {
-    rmSync(strippedPath, { force: true });
-  }
-}
-
-function stripTopLevelViewBlock(source: string): string {
-  const lines = source.split(/\\r?\\n/u);
-  const output: string[] = [];
-  for (let index = 0; index < lines.length;) {
-    if (/^view:\\s*$/u.test(lines[index] ?? '')) {
-      index += 1;
-      while (index < lines.length && ((lines[index] ?? '') === '' || /^[ \\t]/u.test(lines[index] ?? ''))) {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(lines[index] ?? '');
-    index += 1;
-  }
-  return output.join('\\n');
-}
-
 export function createProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
-  const { spec: loadedSpec } = loadSpecWithGeneratedView(path.join(dirname, 'specs.yml'));
+  const { spec: loadedSpec } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
   const spec = enableNotebook(loadedSpec, { modes: ['intake', 'draft_memo'] });
 
   return {

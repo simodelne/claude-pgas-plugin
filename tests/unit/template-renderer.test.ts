@@ -559,20 +559,28 @@ describe('template renderer', () => {
           '  fee_modelling.result.hourly_total: number',
           'repair_bound: 2',
           'fallback: { channel: widget_output, payload: { ok: false } }',
-          'view:',
-          '  - key: fee_modelling_hourly_total',
-          '    from: fee_modelling.result.hourly_total',
-          '    label: Fee Modelling Hourly Total',
           '',
         ].join('\n'),
+        synthesizedViewSections: [
+          {
+            key: 'fee_modelling_hourly_total',
+            from: 'fee_modelling.result.hourly_total',
+            label: 'Fee Modelling Hourly Total',
+          },
+        ],
         synthesizedHandlersTs: 'export const handlers = {}; export const reactionHandlers = new Map();\n',
         synthesizedHandlersIndexTs: 'export const handlers = {};\n',
         synthesizedToolsTs: 'export function registerFeeProposalDrafterTools() {}\n',
       });
 
+      const spec = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/specs.yml'), 'utf8');
+      expect(spec).not.toContain('\nview:');
       const registration = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/registration.ts'), 'utf8');
       expect(registration).toContain('viewProfile:');
       expect(registration).toContain('projectionBuilderMigration:');
+      expect(registration).toContain('loadSpecWithPatterns(specPath)');
+      expect(registration).not.toContain('loadSpecWithGeneratedView');
+      expect(registration).not.toContain('view-stripped');
 
       const module = await import(pathToFileURL(join(repoRoot, 'programs/fee-proposal-drafter/registration.ts')).href) as {
         createFeeProposalDrafterProgramEntry: () => {

@@ -620,9 +620,6 @@ export function synthesizeProgramSpecFromDomain(
   applyScaleSafeProjectionPolicy(projection);
   removeExportDecisionOnlyStageEntries(projection, exportActions);
   spec.projection = projection;
-  if (declarativeViewSections.length > 0) {
-    spec.view = declarativeViewSections;
-  }
 
   const prompts: MutableRecord = {
     [firstMode]: `Capture the initial request for ${name} and start the work.`,

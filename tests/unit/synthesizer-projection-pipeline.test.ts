@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { deriveFromViewProfile } from '@simodelne/pgas-server/plugin.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 
 describe('synthesizer projection finalization pipeline', () => {
@@ -18,22 +19,37 @@ describe('synthesizer projection finalization pipeline', () => {
     ]);
   });
 
-  it('emits view sections for existing-repo typed stage result fields without presenting shaped builder keys', () => {
+  it('attaches view sections for existing-repo typed stage result fields without serializing a YAML view block', () => {
     const artifact = synthesizeProgramSpecFromDomain(feeViewDomain(), { targetKind: 'existing_repo' });
     const parsed = load(artifact.spec_yaml) as {
       view?: Array<{ key: string; from: string; label?: string; format?: string }>;
     };
 
-    expect(parsed.view).toEqual(expect.arrayContaining([
-      { key: 'fee_modelling_hourly_total', from: 'fee_modelling.result.hourly_total', label: 'Fee Modelling Hourly Total' },
-      { key: 'fee_modelling_fixed_quote', from: 'fee_modelling.result.fixed_quote', label: 'Fee Modelling Fixed Quote' },
-      { key: 'fee_modelling_currency', from: 'fee_modelling.result.currency', label: 'Fee Modelling Currency' },
-    ]));
-    expect(parsed.view?.map((section) => section.key)).not.toEqual(expect.arrayContaining([
-      'pricing_cards',
-      'workspace_checkpoints',
-      'status_banner',
-    ]));
+    expect(parsed.view).toBeUndefined();
+    expect(artifact.registration_ts).toContain('const VIEW_PROFILE');
+    expect(artifact.registration_ts).toContain('loadSpecWithPatterns(specPath)');
+    expect(artifact.registration_ts).not.toContain('loadSpecWithGeneratedView');
+    expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_hourly_total', from: 'fee_modelling.result.hourly_total', label: 'Fee Modelling Hourly Total' }");
+    expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_fixed_quote', from: 'fee_modelling.result.fixed_quote', label: 'Fee Modelling Fixed Quote' }");
+    expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_currency', from: 'fee_modelling.result.currency', label: 'Fee Modelling Currency' }");
+    expect(artifact.registration_ts).not.toContain('pricing_cards');
+    expect(artifact.registration_ts).not.toContain('workspace_checkpoints');
+    expect(artifact.registration_ts).not.toContain('status_banner');
+
+    const derived = deriveFromViewProfile(new Map<string, unknown>([
+      ['fee_modelling.result.hourly_total', 1250],
+      ['fee_modelling.result.fixed_quote', 4800],
+      ['fee_modelling.result.currency', 'USD'],
+    ]), {
+      sections: [
+        { key: 'fee_modelling_hourly_total', from: 'fee_modelling.result.hourly_total', label: 'Fee Modelling Hourly Total' },
+        { key: 'fee_modelling_fixed_quote', from: 'fee_modelling.result.fixed_quote', label: 'Fee Modelling Fixed Quote' },
+        { key: 'fee_modelling_currency', from: 'fee_modelling.result.currency', label: 'Fee Modelling Currency' },
+      ],
+    });
+    expect(derived.fee_modelling_hourly_total).toBe(1250);
+    expect(derived.fee_modelling_fixed_quote).toBe(4800);
+    expect(derived.fee_modelling_currency).toBe('USD');
   });
 });
 

@@ -47,7 +47,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'Specification.guidance', status: 'emitted', note: 'The synthesizer emits mode guidance and toolkit guidance.' },
   { construct: 'Specification.prompts', status: 'emitted', note: 'The synthesizer emits per-mode prompt text.' },
   { construct: 'Specification.projection', status: 'emitted', note: 'The synthesizer emits mode-specific include/exclude projection profiles.' },
-  { construct: 'Specification.view', status: 'emitted', note: 'Phase B emits top-level view: sections for existing-repo typed result/read paths and attaches ProgramEntry.viewProfile via generated registrations; v4.9 view anchors are node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5261-5270 and ProgramEntry.viewProfile/projectionBuilderMigration at 5699-5729.' },
+  { construct: 'Specification.view', status: 'emitted', note: 'Phase B builds ViewSection[] for existing-repo typed result/read paths and emits them through ProgramEntry.viewProfile on generated registrations; generated specs.yml does not serialize top-level view: because the v4.9.0 loader takes runtime viewProfile and does not accept the YAML block shape. In-spec YAML view: is deferred for #915/#917 blueprint compiler/loader adoption; anchors are node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5261-5270 and ProgramEntry.viewProfile/projectionBuilderMigration at 5699-5729.' },
   { construct: 'Specification.render', status: 'adopt_backlog', note: 'Phase C backlog: v4.5 render: / RenderProfile replaces report-data.ts-style renderer declarations; public anchors are node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5310-5508 and node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5743-5755.' },
   { construct: 'Specification.integrations', status: 'emitted', note: 'Export decision-only stages emit integration hooks when needed.' },
   { construct: 'Specification.reactions', status: 'emitted', note: 'Generated specs emit declarative reactions with write scopes.' },
@@ -168,7 +168,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'ProgramEntry.reliabilityPolicy', status: 'adopt_backlog', note: 'Phase E backlog: ProgramEntry can carry ProgramReliabilityPolicy retry/round/denial budgets at node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5660-5681; Phase B emits no reliability policies.' },
   { construct: 'ProgramEntry.reactionHandlers', status: 'emitted', note: 'Generated registrations wire generated reaction handlers.' },
   { construct: 'ProgramEntry.syncOutContinuationPolicy', status: 'emitted', note: 'Registered tool channels emit sync-out continuation policy.' },
-  { construct: 'registerProgramByConvention', status: 'adopt_backlog', note: 'v4.9 #924 publicly exports registerProgramByConvention/loadProgramByConvention (plugin.d.ts:149-150; _shared-types.d.ts:8452), but Phase B keeps generated registrations while adopting view:; convention registration remains a later migration phase.' },
+  { construct: 'registerProgramByConvention', status: 'adopt_backlog', note: 'v4.9 #924 publicly exports registerProgramByConvention/loadProgramByConvention (plugin.d.ts:149-150; _shared-types.d.ts:8452), but Phase B keeps generated registrations while adopting runtime ProgramEntry.viewProfile; convention registration remains a later migration phase.' },
 ] as const;
 
 export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [
