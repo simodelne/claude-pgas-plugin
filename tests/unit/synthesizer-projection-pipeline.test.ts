@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { load } from 'js-yaml';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 
 describe('synthesizer projection finalization pipeline', () => {
   it('runs confirmation-loop projection finalization once in the projection mutator order', () => {
@@ -15,7 +17,63 @@ describe('synthesizer projection finalization pipeline', () => {
       'removeExportDecisionOnlyStageEntries',
     ]);
   });
+
+  it('emits view sections for existing-repo typed stage result fields without presenting shaped builder keys', () => {
+    const artifact = synthesizeProgramSpecFromDomain(feeViewDomain(), { targetKind: 'existing_repo' });
+    const parsed = load(artifact.spec_yaml) as {
+      view?: Array<{ key: string; from: string; label?: string; format?: string }>;
+    };
+
+    expect(parsed.view).toEqual(expect.arrayContaining([
+      { key: 'fee_modelling_hourly_total', from: 'fee_modelling.result.hourly_total', label: 'Fee Modelling Hourly Total' },
+      { key: 'fee_modelling_fixed_quote', from: 'fee_modelling.result.fixed_quote', label: 'Fee Modelling Fixed Quote' },
+      { key: 'fee_modelling_currency', from: 'fee_modelling.result.currency', label: 'Fee Modelling Currency' },
+    ]));
+    expect(parsed.view?.map((section) => section.key)).not.toEqual(expect.arrayContaining([
+      'pricing_cards',
+      'workspace_checkpoints',
+      'status_banner',
+    ]));
+  });
 });
+
+function feeViewDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'fee-proposal-drafter',
+    'program.name': 'Fee Proposal Drafter',
+    'program.target_dir': '/tmp/fee-proposal-drafter',
+    'program.design_path': 'design',
+    'intake.purpose': 'Prepare professional services fee proposals with parameterized fee modelling.',
+    'intake.entry_channel': 'frontend_intake',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      {
+        slug: 'fee_modelling',
+        domain_spec: {
+          reads: ['inputs.initial_frontend_intake.rate_card'],
+          produces: {
+            result_json: {
+              stage: 'string',
+              hourly_total: 'number',
+              fixed_quote: 'number',
+              currency: 'string',
+            },
+            items_json: ['fixed_quote:<fixed_quote>'],
+          },
+          rules: ['Compute hourly and fixed quote values from the intake rate card.'],
+          invariants: ['result_json.stage must equal fee_modelling.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'fee_modelling', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'fee_modelling', to: 'complete', trigger: 'modelled', guard_field: 'fee_modelling.ready' },
+    ]),
+    'intake.delegation_json': JSON.stringify({ fee_modelling: { kind: 'pure-compute' } }),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'fee_modelling.ready' }),
+  };
+}
 
 function projectionFinalizationCalls(source: string): string[] {
   const file = ts.createSourceFile('synthesizer.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);

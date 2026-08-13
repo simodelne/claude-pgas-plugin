@@ -181,7 +181,7 @@ describe('lead-research-agent hermetic smoke', () => {
       const output = execFileSync(process.execPath, [
         fileURLToPath(VITEST_BIN),
         'run',
-        '--pool=threads',
+        '--pool=forks',
         '--maxWorkers=1',
         'tests/program-deterministic.test.ts',
       ], {

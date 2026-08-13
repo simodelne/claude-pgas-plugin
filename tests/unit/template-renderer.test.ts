@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
@@ -355,7 +356,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.5.0"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.9.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
@@ -504,6 +505,94 @@ describe('template renderer', () => {
       expect(registration).toContain("frontendSpecPath: 'programs/audit-trail'");
       expect(registration).not.toContain("from 'node:path'");
       expect(registration).not.toContain("from 'node:url'");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('loads attached specs with view profiles and declares projection-builder migration debt', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-view-profile-'));
+    try {
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'fee-proposal-drafter',
+        name: 'Fee Proposal Drafter',
+        synthesizedSpecYaml: [
+          'name: fee-proposal-drafter',
+          'termination: BoundedSession',
+          'topology: CyclicTopology',
+          'pure: true',
+          'initial: intake',
+          'terminal: [complete]',
+          'features: [base]',
+          'channels:',
+          '  frontend_intake: { direction: In, sync: Async }',
+          '  widget_output: { direction: Out, sync: Async }',
+          'modes:',
+          '  intake:',
+          '    vocabulary: [begin_work]',
+          '    channels: [frontend_intake, widget_output]',
+          '    transitions:',
+          '      - target: complete',
+          '        guard: { kind: FieldTruthy, path: intake.started }',
+          '  complete:',
+          '    vocabulary: []',
+          '    channels: [widget_output]',
+          '    transitions: []',
+          'projection:',
+          '  intake: { include: [intake.started, fee_modelling.result.hourly_total], exclude: [] }',
+          '  complete: { include: [fee_modelling.result.hourly_total], exclude: [] }',
+          'prompts:',
+          '  intake: Start.',
+          '  complete: Done.',
+          'ingestion:',
+          '  frontend_intake: [inputs.frontend_intake]',
+          'action_map:',
+          '  begin_work:',
+          '    mutations:',
+          '      - { op: MSet, path: intake.started, value: true }',
+          '    channel: widget_output',
+          'schema:',
+          '  inputs.frontend_intake: string',
+          '  intake.started: boolean',
+          '  fee_modelling.result.hourly_total: number',
+          'repair_bound: 2',
+          'fallback: { channel: widget_output, payload: { ok: false } }',
+          'view:',
+          '  - key: fee_modelling_hourly_total',
+          '    from: fee_modelling.result.hourly_total',
+          '    label: Fee Modelling Hourly Total',
+          '',
+        ].join('\n'),
+        synthesizedHandlersTs: 'export const handlers = {}; export const reactionHandlers = new Map();\n',
+        synthesizedHandlersIndexTs: 'export const handlers = {};\n',
+        synthesizedToolsTs: 'export function registerFeeProposalDrafterTools() {}\n',
+      });
+
+      const registration = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/registration.ts'), 'utf8');
+      expect(registration).toContain('viewProfile:');
+      expect(registration).toContain('projectionBuilderMigration:');
+
+      const module = await import(pathToFileURL(join(repoRoot, 'programs/fee-proposal-drafter/registration.ts')).href) as {
+        createFeeProposalDrafterProgramEntry: () => {
+          spec: { name: string };
+          viewProfile?: { sections: Array<{ key: string; from: string; label?: string }> };
+          projectionBuilderMigration?: { trackingIssue: string; remainingKeys?: string[] };
+        };
+      };
+      const entry = module.createFeeProposalDrafterProgramEntry();
+      expect(entry.spec.name).toBe('fee-proposal-drafter');
+      expect(entry.viewProfile?.sections).toEqual([
+        {
+          key: 'fee_modelling_hourly_total',
+          from: 'fee_modelling.result.hourly_total',
+          label: 'Fee Modelling Hourly Total',
+        },
+      ]);
+      expect(entry.projectionBuilderMigration).toMatchObject({
+        trackingIssue: 'docs/ENGINE-DECLARATION-CATALOG.md#declarative-projection',
+      });
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

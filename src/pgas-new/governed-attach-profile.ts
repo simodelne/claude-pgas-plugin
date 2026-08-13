@@ -34,6 +34,36 @@ interface StageTransition {
   guard_field?: string;
 }
 
+const SIMONEOS_GOVERNED_ATTACH_VIEW_SECTIONS = [
+  { key: 'work_status', from: 'work.status', label: 'Work Status' },
+  { key: 'intake_facts', from: 'work.intake.facts', label: 'Intake Facts' },
+  { key: 'memo_title', from: 'work.memo_artifact.title', label: 'Memo Title' },
+  { key: 'memo_body', from: 'work.memo_artifact.body', label: 'Memo Body' },
+  { key: 'memo_status', from: 'work.memo_artifact.status', label: 'Memo Status' },
+] as const;
+
+const SIMONEOS_GOVERNED_ATTACH_PROJECTION_RESIDUAL_KEYS = [
+  'program_title',
+  'program_slug',
+  'mode',
+  'status_banner',
+  'focus_object',
+  'phase_steps',
+  'workspace_checkpoints',
+  'workspace_metadata',
+  'workspace_context_tabs',
+  'workspace_session_content',
+  'workspace_domain_content',
+  'workspace_stat_items',
+  'memo_sections',
+  'memo_artifact',
+  'workspace_artifact_items',
+  'completion_title',
+  'completion_summary',
+  'final_artifacts',
+  'completion_artifacts',
+] as const;
+
 export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOptions): string {
   const model = minimalLinearStageModel(options.context);
   const askChannel = governedAskChannel(options.context.entry_channel);
@@ -117,6 +147,7 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
         exclude: [],
       },
     },
+    view: SIMONEOS_GOVERNED_ATTACH_VIEW_SECTIONS,
     schema: {
       'inputs.user_text': 'string',
       'inputs.user_message_latest': 'string',
@@ -240,6 +271,7 @@ export function renderSimoneOsGovernedAttachRegistration(options: SimoneOsGovern
     : "['memo', 'governed attach', 'markdown', 'backend']";
   const manifestInteractive = options.frontendSpecPath ? 'true' : 'false';
   return `import path from 'node:path';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createProgramAdapters, enableNotebook, loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 import { ${projectionName} } from './projection.js';
@@ -308,14 +340,50 @@ const ${constantPrefix}_CONTINUATION_POLICY: ProgramEntry['continuationPolicy'] 
   },
 };
 
+const ${constantPrefix}_VIEW_PROFILE: ProgramEntry['viewProfile'] = {
+  sections: ${renderTsValue(SIMONEOS_GOVERNED_ATTACH_VIEW_SECTIONS)},
+};
+
+function loadSpecWithGeneratedView(specPath: string): ReturnType<typeof loadSpecWithPatterns> {
+  const strippedPath = \`\${specPath}.view-stripped.\${process.pid}.yml\`;
+  writeFileSync(strippedPath, stripTopLevelViewBlock(readFileSync(specPath, 'utf8')), 'utf8');
+  try {
+    return loadSpecWithPatterns(strippedPath);
+  } finally {
+    rmSync(strippedPath, { force: true });
+  }
+}
+
+function stripTopLevelViewBlock(source: string): string {
+  const lines = source.split(/\\r?\\n/u);
+  const output: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    if (/^view:\\s*$/u.test(lines[index] ?? '')) {
+      index += 1;
+      while (index < lines.length && ((lines[index] ?? '') === '' || /^[ \\t]/u.test(lines[index] ?? ''))) {
+        index += 1;
+      }
+      continue;
+    }
+    output.push(lines[index] ?? '');
+    index += 1;
+  }
+  return output.join('\\n');
+}
+
 export function createProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
-  const { spec: loadedSpec } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
+  const { spec: loadedSpec } = loadSpecWithGeneratedView(path.join(dirname, 'specs.yml'));
   const spec = enableNotebook(loadedSpec, { modes: ['intake', 'draft_memo'] });
 
   return {
     spec,
 ${frontendSpecPathLine}    createAdapters: (ctx) => createProgramAdapters(spec, ctx, {}),
+    viewProfile: ${constantPrefix}_VIEW_PROFILE,
+    projectionBuilderMigration: {
+      trackingIssue: 'docs/ENGINE-DECLARATION-CATALOG.md#declarative-projection',
+      remainingKeys: ${renderTsValue([...SIMONEOS_GOVERNED_ATTACH_PROJECTION_RESIDUAL_KEYS])},
+    },
     projectionBuilder: ${projectionName},
     manifest: ${constantPrefix}_MANIFEST,
     presentation: ${constantPrefix}_PRESENTATION,
@@ -1526,6 +1594,21 @@ function toConstantPrefix(value: string): string {
     .filter(Boolean)
     .map((part) => part.toUpperCase())
     .join('_');
+}
+
+function renderTsValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(renderTsValue).join(', ')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entryValue]) => `${key}: ${renderTsValue(entryValue)}`);
+    return `{ ${entries.join(', ')} }`;
+  }
+  if (typeof value === 'string') {
+    return tsString(value);
+  }
+  return JSON.stringify(value);
 }
 
 function tsString(value: string): string {

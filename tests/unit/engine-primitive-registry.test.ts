@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v4.5.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v4.9.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -185,7 +185,7 @@ describe('engine-primitive-registry', () => {
       status: 'emitted',
     });
     expect(awarenessByConstruct.get('Specification.view')).toMatchObject({
-      status: 'adopt_backlog',
+      status: 'emitted',
     });
     expect(awarenessByConstruct.get('Specification.render')).toMatchObject({
       status: 'adopt_backlog',
@@ -206,6 +206,9 @@ describe('engine-primitive-registry', () => {
       status: 'adopt_backlog',
     });
     expect(awarenessByConstruct.get('EngineCapability.web_search')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('EngineCapability.document_extraction')).toMatchObject({
       status: 'adopt_backlog',
     });
     expect(awarenessByConstruct.get('registerProgramByConvention')).toMatchObject({

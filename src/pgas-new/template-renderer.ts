@@ -4,6 +4,7 @@ import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import ts from 'typescript';
+import { buildViewProfile, type ViewSection } from '@simodelne/pgas-server/plugin.js';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import {
   assertGeneratedProgramSourceGovernance,
@@ -482,7 +483,7 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
   }
   if (artifact.kind === 'registration') {
-    return spec('consumer/registration-attached.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
+    return inlineTemplate(renderAttachedRegistrationSource(slug));
   }
   if (artifact.kind === 'handler') {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
@@ -918,6 +919,130 @@ function ensureTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value : `${value}\n`;
 }
 
+const ATTACHED_PROJECTION_MIGRATION_REMAINING_KEYS = [
+  'program_title',
+  'program_slug',
+  'mode',
+  'status_banner',
+  'phase_steps',
+  'workspace_checkpoints',
+  'workspace_metadata',
+  'pricing_cards',
+  'fee_model',
+  'risk_adjustment',
+  'scope_summary',
+  'assumptions_summary',
+  'pricing_options',
+  'recommended_option',
+  'pricing_rationale',
+  'proposal_preview_html',
+  'proposal_outline',
+  'review_status',
+  'export_actions',
+  'signature_page',
+  'payment_terms',
+  'composer_placeholder',
+] as const;
+
+function renderAttachedRegistrationSource(slug: string, specYaml?: string): string {
+  const source = readFileSync(join(TEMPLATE_ROOT, 'consumer/registration-attached.ts.tmpl'), 'utf8');
+  return renderTemplate(source, {
+    CAMEL_NAME: toCamelCase(slug),
+    LOAD_SPEC_SNIPPET: attachedLoadSpecSnippet(specYaml),
+    PASCAL_NAME: toPascalCase(slug),
+    SLUG: slug,
+    ...attachedViewSupportTokens(specYaml),
+  });
+}
+
+function attachedLoadSpecSnippet(specYaml: string | undefined): string {
+  return viewSectionsFromSpecYaml(specYaml).length > 0
+    ? '  const { spec } = loadSpecWithGeneratedView(specPath);\n'
+    : '  const { spec } = loadSpecWithPatterns(specPath);\n';
+}
+
+function attachedViewSupportTokens(specYaml: string | undefined): Record<string, string> {
+  const sections = viewSectionsFromSpecYaml(specYaml);
+  if (sections.length === 0) {
+    return {
+      VIEW_PROFILE_ENTRY: '',
+      VIEW_SUPPORT_DECLARATIONS: '',
+      VIEW_SUPPORT_IMPORTS: '',
+    };
+  }
+  return {
+    VIEW_PROFILE_ENTRY: `    viewProfile: VIEW_PROFILE,
+    projectionBuilderMigration: {
+      trackingIssue: 'docs/ENGINE-DECLARATION-CATALOG.md#declarative-projection',
+      remainingKeys: ${renderTsValue([...ATTACHED_PROJECTION_MIGRATION_REMAINING_KEYS])},
+    },
+`,
+    VIEW_SUPPORT_DECLARATIONS: `
+const VIEW_PROFILE: ProgramEntry['viewProfile'] = {
+  sections: ${renderTsValue(sections)},
+};
+
+function loadSpecWithGeneratedView(specPath: string): ReturnType<typeof loadSpecWithPatterns> {
+  const strippedPath = \`\${specPath}.view-stripped.\${process.pid}.yml\`;
+  writeFileSync(strippedPath, stripTopLevelViewBlock(readFileSync(specPath, 'utf8')), 'utf8');
+  try {
+    return loadSpecWithPatterns(strippedPath);
+  } finally {
+    rmSync(strippedPath, { force: true });
+  }
+}
+
+function stripTopLevelViewBlock(source: string): string {
+  const lines = source.split(/\\r?\\n/u);
+  const output: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    if (/^view:\\s*$/u.test(lines[index] ?? '')) {
+      index += 1;
+      while (index < lines.length && ((lines[index] ?? '') === '' || /^[ \\t]/u.test(lines[index] ?? ''))) {
+        index += 1;
+      }
+      continue;
+    }
+    output.push(lines[index] ?? '');
+    index += 1;
+  }
+  return output.join('\\n');
+}
+`,
+    VIEW_SUPPORT_IMPORTS: "import { readFileSync, rmSync, writeFileSync } from 'node:fs';\n",
+  };
+}
+
+function viewSectionsFromSpecYaml(specYaml: string | undefined): ViewSection[] {
+  if (!specYaml) {
+    return [];
+  }
+  const parsed = load(specYaml);
+  if (!isRecord(parsed)) {
+    return [];
+  }
+  return buildViewProfile(parsed.view)?.sections ?? [];
+}
+
+function renderTsValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(renderTsValue).join(', ')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entryValue]) => `${key}: ${renderTsValue(entryValue)}`);
+    return `{ ${entries.join(', ')} }`;
+  }
+  if (typeof value === 'string') {
+    return tsString(value);
+  }
+  return JSON.stringify(value);
+}
+
+function tsString(value: string): string {
+  return `'${value.replace(/\\/gu, '\\\\').replace(/'/gu, "\\'")}'`;
+}
+
 function templateForSynthesizedArtifact(
   artifact: PlannedArtifact,
   slug: string,
@@ -935,7 +1060,7 @@ function templateForSynthesizedArtifact(
       return inlineTemplate(selected.registrationTs);
     }
     if (artifact.path !== `src/programs/${selected.slug}/registration.ts`) {
-      return spec('consumer/registration-attached.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
+      return inlineTemplate(renderAttachedRegistrationSource(selected.slug, selected.specYaml));
     }
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }

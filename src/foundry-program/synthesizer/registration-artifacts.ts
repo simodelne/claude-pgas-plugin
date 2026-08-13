@@ -1,4 +1,9 @@
-import type { ProgramArtifactPolicy, ProgramArtifactRule, ProgramDelegationPolicy } from '@simodelne/pgas-server/plugin.js';
+import type {
+  ProgramArtifactPolicy,
+  ProgramArtifactRule,
+  ProgramDelegationPolicy,
+  ViewSection,
+} from '@simodelne/pgas-server/plugin.js';
 
 import { tsString } from './shared.js';
 
@@ -26,6 +31,7 @@ export function renderRegistrationSource(
   options: {
     exportHookChannel?: string;
     syncOutContinuationChannels?: string[];
+    viewSections?: readonly ViewSection[];
   } = {},
 ): string {
   const policyEntries = [
@@ -55,9 +61,10 @@ export function renderRegistrationSource(
     },
 `
     : '';
+  const viewSupport = renderGeneratedViewSupport(options.viewSections ?? []);
   const specLoadSnippet = options.exportHookChannel
-    ? `  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
-    : `  const { spec } = loadSpecWithPatterns(specPath);\n`;
+    ? `  const { spec: loadedSpec } = ${viewSupport.loader}(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
+    : `  const { spec } = ${viewSupport.loader}(specPath);\n`;
   const decisionOnlyRegistryPromptHelper = options.exportHookChannel
     ? `
 
@@ -87,7 +94,7 @@ function withDecisionOnlyRegistryPrompts<T extends {
 }
 `
     : '';
-  return `import {
+  return `${viewSupport.imports}import {
   createProgramAdapters,
   createToolRegistry,
   loadSpecWithPatterns,
@@ -95,6 +102,7 @@ function withDecisionOnlyRegistryPrompts<T extends {
 } from '@simodelne/pgas-server/plugin.js';
 import { ${handlerImports} } from './handlers.js';
 import { register${pascalName}Tools } from './tools.js';
+${viewSupport.declarations}
 
 export function create${pascalName}ProgramEntry(): ProgramEntry {
   const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
@@ -103,6 +111,7 @@ ${specLoadSnippet}  const toolRegistry = createToolRegistry();
 
   return {
     spec,
+${viewSupport.entry}
     reactionHandlers,
 ${syncOutContinuationPolicy}${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
       const adapterHandlers: Record<string, (payload: Record<string, unknown>) => Promise<unknown>> = {
@@ -131,6 +140,60 @@ ${exportHookAdapterRegistration}      return adapters;
 }
 ${decisionOnlyRegistryPromptHelper}
 `;
+}
+
+function renderGeneratedViewSupport(viewSections: readonly ViewSection[]): {
+  imports: string;
+  declarations: string;
+  entry: string;
+  loader: string;
+} {
+  if (viewSections.length === 0) {
+    return {
+      imports: '',
+      declarations: '',
+      entry: '',
+      loader: 'loadSpecWithPatterns',
+    };
+  }
+
+  return {
+    imports: "import { readFileSync, rmSync, writeFileSync } from 'node:fs';\n",
+    declarations: `
+const VIEW_PROFILE: ProgramEntry['viewProfile'] = {
+  sections: ${renderTsValue(viewSections)},
+};
+
+function loadSpecWithGeneratedView(specPath: string): ReturnType<typeof loadSpecWithPatterns> {
+  const strippedPath = \`\${specPath}.view-stripped.\${process.pid}.yml\`;
+  writeFileSync(strippedPath, stripTopLevelViewBlock(readFileSync(specPath, 'utf8')), 'utf8');
+  try {
+    return loadSpecWithPatterns(strippedPath);
+  } finally {
+    rmSync(strippedPath, { force: true });
+  }
+}
+
+function stripTopLevelViewBlock(source: string): string {
+  const lines = source.split(/\\r?\\n/u);
+  const output: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    if (/^view:\\s*$/u.test(lines[index] ?? '')) {
+      index += 1;
+      while (index < lines.length && ((lines[index] ?? '') === '' || /^[ \\t]/u.test(lines[index] ?? ''))) {
+        index += 1;
+      }
+      continue;
+    }
+    output.push(lines[index] ?? '');
+    index += 1;
+  }
+  return output.join('\\n');
+}
+`,
+    entry: `    viewProfile: VIEW_PROFILE,\n`,
+    loader: 'loadSpecWithGeneratedView',
+  };
 }
 
 function renderTsValue(value: unknown): string {

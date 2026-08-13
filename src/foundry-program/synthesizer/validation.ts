@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { load } from 'js-yaml';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { dump, load } from 'js-yaml';
+import { extractAndStripView, loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { isRecord } from '../../util/guards.js';
 import { assertConfirmationPairingTerminals } from '../composite-checks.js';
 
@@ -10,7 +10,7 @@ export function validateSynthesizedSpec(specYaml: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-'));
   try {
     const specPath = join(dir, 'specs.yml');
-    writeFileSync(specPath, specYaml);
+    writeFileSync(specPath, loadableSpecYaml(specYaml));
     loadSpecWithPatterns(specPath);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -18,6 +18,12 @@ export function validateSynthesizedSpec(specYaml: string): void {
   const parsed = load(specYaml);
   assertPreconditionVocabularyAlignment(parsed);
   assertConfirmationPairingTerminals(parsed);
+}
+
+function loadableSpecYaml(specYaml: string): string {
+  const parsed = load(specYaml);
+  const { stripped } = extractAndStripView(parsed);
+  return dump(stripped, { lineWidth: -1, noRefs: true, sortKeys: false });
 }
 
 /**
