@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v4.5.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -183,6 +183,33 @@ describe('engine-primitive-registry', () => {
     });
     expect(awarenessByConstruct.get('Specification.no_action_escapes')).toMatchObject({
       status: 'emitted',
+    });
+    expect(awarenessByConstruct.get('Specification.view')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Specification.render')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Mode.requires_delegations')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('DelegationMode.conversational')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Feature.pure_strict')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Feature.merge_collection')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Specification.policies')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('EngineCapability.web_search')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('registerProgramByConvention')).toMatchObject({
+      status: 'adopt_backlog',
     });
   });
 
