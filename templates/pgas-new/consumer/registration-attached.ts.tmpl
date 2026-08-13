@@ -1,4 +1,4 @@
-import {
+{{VIEW_SUPPORT_IMPORTS}}import {
   createProgramAdapters,
   createToolRegistry,
   loadSpecWithPatterns,
@@ -7,16 +7,18 @@ import {
 import { handlers, reactionHandlers } from './handlers.js';
 import { {{CAMEL_NAME}}Projection } from './projection.js';
 import { register{{PASCAL_NAME}}Tools } from './tools.js';
+{{VIEW_SUPPORT_DECLARATIONS}}
 
 export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
   const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
-  const { spec } = loadSpecWithPatterns(specPath);
+{{LOAD_SPEC_SNIPPET}}
   const toolRegistry = createToolRegistry();
   register{{PASCAL_NAME}}Tools(toolRegistry);
 
   return {
     spec,
     reactionHandlers,
+{{VIEW_PROFILE_ENTRY}}
     projectionBuilder: {{CAMEL_NAME}}Projection,
     frontendSpecPath: 'programs/{{SLUG}}',
     createAdapters: (ctx) => {

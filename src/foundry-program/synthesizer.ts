@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
+import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ReactionHandler, type ReactionResult, type ViewSection } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SourceGroundedExtractor, SynthesizedArtifact } from './synthesizer-store.js';
@@ -432,7 +432,16 @@ export function synthesizeProgramSpecFromDomain(
       .filter((action) => action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source))
       .map((action) => action.source),
   );
-  const stageOutputMirrorStages = new Set([...flatMirrorStages, ...contractedReasoningOutputStages]);
+  const declarativeViewSections = options.targetKind === 'existing_repo'
+    ? buildDeclarativeViewSections(stages, stageClassificationBySlug, stageDomainSpecBySlug, reasoningContractsBySlug)
+    : [];
+  const stageOutputResultFieldsBySlug = stageResultFieldsForView(declarativeViewSections, (stage) =>
+    stageClassificationBySlug.get(stage)?.archetype !== 'llm-reasoning');
+  const stageOutputMirrorStages = new Set([
+    ...flatMirrorStages,
+    ...contractedReasoningOutputStages,
+    ...stageOutputResultFieldsBySlug.keys(),
+  ]);
   const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
   const suppressedTransitionActionNames = new Set(
     [
@@ -648,7 +657,7 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
-  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageOutputMirrorStages);
+  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageOutputMirrorStages, stageOutputResultFieldsBySlug);
   applyReasoningFieldMirrorReactions(recordField(spec, 'reactions'), reasoningContractsBySlug);
   if (completion.collection_lifecycle && confirmationLoops.length === 0) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
@@ -764,9 +773,24 @@ export function synthesizeProgramSpecFromDomain(
       if (classification?.archetype === 'external-adapter') {
         schema[`${modeName}.output.adapter_kind`] = 'string';
       }
-      if (flatMirrorStages.has(modeName)) {
+      if (stageOutputMirrorStages.has(modeName)) {
         schema[`${modeName}.result_json`] = 'string';
         schema[`${modeName}.items_json`] = 'string';
+      }
+      const resultSchema = domainSpecResultJsonSchema(stageDomainSpecBySlug.get(modeName));
+      const viewFields = stageOutputResultFieldsBySlug.get(modeName) ?? [];
+      if (resultSchema && viewFields.length > 0) {
+        schema[`${modeName}.result`] = 'object';
+        for (const field of viewFields) {
+          const schemaValue = resultSchema[field];
+          schema[`${modeName}.result.${field}`] = domainResultSchemaTypeName(schemaValue);
+          if (isRepeatedRecordSchema(schemaValue)) {
+            schema[`${modeName}.result.${field}.*`] = 'object';
+            for (const [nestedField, nestedValue] of Object.entries(schemaValue[0])) {
+              schema[`${modeName}.result.${field}.*.${nestedField}`] = domainResultSchemaTypeName(nestedValue);
+            }
+          }
+        }
       }
     }
   }
@@ -825,6 +849,7 @@ export function synthesizeProgramSpecFromDomain(
     initialEntryPath,
     entryPath: `inputs.${entryChannel}`,
     flatMirrorStages: stageOutputMirrorStages,
+    stageResultFieldsBySlug: stageOutputResultFieldsBySlug,
     collectionLifecycle: completion.collection_lifecycle,
     confirmationLoops,
     delegationChildren,
@@ -852,6 +877,7 @@ export function synthesizeProgramSpecFromDomain(
     }, {
         exportHookChannel: hasExportDecisionOnly ? EXPORT_HOOK_CHANNEL : undefined,
         syncOutContinuationChannels: registeredTools.map((tool) => `tool:${tool.name}`),
+        viewSections: declarativeViewSections,
       }),
     ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
     ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
@@ -1564,6 +1590,145 @@ function collectFlatMirrorStages(
   return flatMirrorStages;
 }
 
+const VIEW_RESULT_FIELD_SKIP_LIST = new Set(['stage']);
+const CONCRETE_VIEW_PATH_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+function buildDeclarativeViewSections(
+  stages: Stage[],
+  stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
+  stageDomainSpecBySlug: ReadonlyMap<string, StageDomainSpec>,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+): ViewSection[] {
+  const sections: ViewSection[] = [];
+  const seenKeys = new Set<string>();
+  const addSection = (section: ViewSection): void => {
+    if (seenKeys.has(section.key)) {
+      return;
+    }
+    seenKeys.add(section.key);
+    sections.push(section);
+  };
+
+  for (const stage of stages) {
+    if (stage.is_bootstrap === true || stage.is_terminal === true) {
+      continue;
+    }
+    const classification = stageClassificationBySlug.get(stage.slug);
+    if (classification?.archetype === 'conversational-hub') {
+      continue;
+    }
+    const reasoningContract = reasoningContractsBySlug.get(stage.slug);
+    if (classification?.archetype === 'llm-reasoning' && reasoningContract) {
+      for (const field of reasoningContract.result_schema.fields) {
+        const section = viewSectionForResultField(stage.slug, field.name, {
+          format: field.type === 'record_array' ? 'table' : undefined,
+          columns: field.type === 'record_array' ? plainRecordColumns(field.record_fields ?? {}) : undefined,
+        });
+        if (section) {
+          addSection(section);
+        }
+      }
+      continue;
+    }
+
+    const resultJsonSchema = domainSpecResultJsonSchema(stageDomainSpecBySlug.get(stage.slug));
+    if (!resultJsonSchema) {
+      continue;
+    }
+    for (const [field, schemaValue] of Object.entries(resultJsonSchema)) {
+      if (Array.isArray(schemaValue)) {
+        continue;
+      }
+      const section = viewSectionForResultField(stage.slug, field, {
+        format: undefined,
+        columns: undefined,
+      });
+      if (section) {
+        addSection(section);
+      }
+    }
+  }
+
+  return sections;
+}
+
+function viewSectionForResultField(
+  stage: string,
+  field: string,
+  options: Pick<ViewSection, 'columns' | 'format'> = {},
+): ViewSection | undefined {
+  if (
+    VIEW_RESULT_FIELD_SKIP_LIST.has(field) ||
+    !CONCRETE_VIEW_PATH_SEGMENT.test(stage) ||
+    !CONCRETE_VIEW_PATH_SEGMENT.test(field)
+  ) {
+    return undefined;
+  }
+  return {
+    key: `${stage}_${field}`,
+    from: `${stage}.result.${field}`,
+    label: titleCaseIdentifier(`${stage}_${field}`),
+    ...(options.format ? { format: options.format } : {}),
+    ...(options.columns && options.columns.length > 0 ? { columns: options.columns } : {}),
+  };
+}
+
+function stageResultFieldsForView(
+  sections: readonly ViewSection[],
+  includeStage: (stage: string) => boolean = () => true,
+): Map<string, string[]> {
+  const fieldsByStage = new Map<string, string[]>();
+  for (const section of sections) {
+    const match = section.from.match(/^([A-Za-z_][A-Za-z0-9_]*)\.result\.([A-Za-z_][A-Za-z0-9_]*)$/u);
+    if (!match) {
+      continue;
+    }
+    const stage = match[1] as string;
+    const field = match[2] as string;
+    if (!includeStage(stage)) {
+      continue;
+    }
+    fieldsByStage.set(stage, unique([...(fieldsByStage.get(stage) ?? []), field]));
+  }
+  return fieldsByStage;
+}
+
+function domainSpecResultJsonSchema(domainSpec: StageDomainSpec | undefined): Record<string, unknown> | undefined {
+  const resultJson = domainSpec?.produces.result_json;
+  return resultJson && typeof resultJson === 'object' && !Array.isArray(resultJson)
+    ? resultJson as Record<string, unknown>
+    : undefined;
+}
+
+function domainResultSchemaTypeName(value: unknown): string {
+  if (isRepeatedRecordSchema(value)) {
+    return 'array';
+  }
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+  if (value && typeof value === 'object') {
+    return 'object';
+  }
+  const declared = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (declared === 'number' || declared === 'boolean' || declared === 'string' || declared === 'object' || declared === 'array') {
+    return declared;
+  }
+  return 'any';
+}
+
+function plainRecordColumns(record: Record<string, unknown>): string[] {
+  return Object.keys(record).filter((key) => CONCRETE_VIEW_PATH_SEGMENT.test(key));
+}
+
+function titleCaseIdentifier(value: string): string {
+  return value
+    .split(/_+/u)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join(' ');
+}
+
 function keyedCollectionsForPersistence(
   stages: Stage[],
   stageClassificationBySlug: ReadonlyMap<string, ClassifiedStage>,
@@ -1640,14 +1805,20 @@ function applyStageOutputMirrorReactions(
   reactions: MutableRecord,
   intermediateModes: string[],
   mirrorStages: ReadonlySet<string>,
+  stageResultFieldsBySlug: ReadonlyMap<string, readonly string[]>,
 ): void {
   for (const modeName of intermediateModes) {
     if (!mirrorStages.has(modeName)) {
       continue;
     }
+    const resultFields = stageResultFieldsBySlug.get(modeName) ?? [];
     reactions[stageOutputMirrorReactionName(modeName)] = {
       event: 'AfterRound',
-      write_scope: [`${modeName}.result_json`, `${modeName}.items_json`],
+      write_scope: [
+        `${modeName}.result_json`,
+        `${modeName}.items_json`,
+        ...resultFields.map((field) => `${modeName}.result.${field}`),
+      ],
     };
   }
 }
@@ -5166,6 +5337,7 @@ function renderHandlersSource(
     initialEntryPath: string;
     entryPath: string;
     flatMirrorStages: ReadonlySet<string>;
+    stageResultFieldsBySlug: ReadonlyMap<string, readonly string[]>;
     collectionLifecycle?: CollectionLifecycleDescriptor;
     confirmationLoops: ConfirmationLoopDescriptor[];
     delegationChildren: DelegationChildDescriptor[];
@@ -5367,8 +5539,11 @@ ${fieldResolvers}
     options.delegationChildren.some(childHasSourceConfigFanOut);
   const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
-    ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
-  [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
+    ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => {
+        const resultFields = options.stageResultFieldsBySlug.get(stage) ?? [];
+        return `,
+  [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)}, ${tsString(`${stage}.result`)}, [${resultFields.map(tsString).join(', ')}])]`;
+      }).join('')
     : '';
   const leadResearchHostOutputMirrorReactionEntries = usesLeadResearchHostOutputMirrorHandlers
     ? `,
@@ -6200,6 +6375,8 @@ function mirrorStageOutput(
   outputPath: string,
   resultPath: string,
   itemsPath: string,
+  resultRootPath: string,
+  resultFieldNames: readonly string[],
 ): ReactionResult | undefined {
   const output = snapshot.get(outputPath);
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
@@ -6213,7 +6390,31 @@ function mirrorStageOutput(
   if (typeof record.items_json === 'string' && snapshot.get(itemsPath) !== record.items_json) {
     mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
   }
+  if (typeof record.result_json === 'string' && resultFieldNames.length > 0) {
+    const parsed = parseStageResultRecord(record.result_json);
+    for (const field of resultFieldNames) {
+      if (!Object.prototype.hasOwnProperty.call(parsed, field)) {
+        continue;
+      }
+      const path = \`\${resultRootPath}.\${field}\`;
+      const value = parsed[field];
+      if (JSON.stringify(snapshot.get(path)) !== JSON.stringify(value)) {
+        mutations.push({ op: 'MSet' as const, path, value });
+      }
+    }
+  }
   return mutations.length > 0 ? { mutations } : undefined;
+}
+
+function parseStageResultRecord(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }`;
 }
 

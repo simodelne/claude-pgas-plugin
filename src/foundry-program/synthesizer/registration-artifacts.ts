@@ -1,4 +1,9 @@
-import type { ProgramArtifactPolicy, ProgramArtifactRule, ProgramDelegationPolicy } from '@simodelne/pgas-server/plugin.js';
+import type {
+  ProgramArtifactPolicy,
+  ProgramArtifactRule,
+  ProgramDelegationPolicy,
+  ViewSection,
+} from '@simodelne/pgas-server/plugin.js';
 
 import { tsString } from './shared.js';
 
@@ -26,6 +31,7 @@ export function renderRegistrationSource(
   options: {
     exportHookChannel?: string;
     syncOutContinuationChannels?: string[];
+    viewSections?: readonly ViewSection[];
   } = {},
 ): string {
   const policyEntries = [
@@ -55,9 +61,10 @@ export function renderRegistrationSource(
     },
 `
     : '';
+  const viewSupport = renderGeneratedViewSupport(options.viewSections ?? []);
   const specLoadSnippet = options.exportHookChannel
-    ? `  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
-    : `  const { spec } = loadSpecWithPatterns(specPath);\n`;
+    ? `  const { spec: loadedSpec } = ${viewSupport.loader}(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
+    : `  const { spec } = ${viewSupport.loader}(specPath);\n`;
   const decisionOnlyRegistryPromptHelper = options.exportHookChannel
     ? `
 
@@ -95,6 +102,7 @@ function withDecisionOnlyRegistryPrompts<T extends {
 } from '@simodelne/pgas-server/plugin.js';
 import { ${handlerImports} } from './handlers.js';
 import { register${pascalName}Tools } from './tools.js';
+${viewSupport.declarations}
 
 export function create${pascalName}ProgramEntry(): ProgramEntry {
   const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
@@ -103,6 +111,7 @@ ${specLoadSnippet}  const toolRegistry = createToolRegistry();
 
   return {
     spec,
+${viewSupport.entry}
     reactionHandlers,
 ${syncOutContinuationPolicy}${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
       const adapterHandlers: Record<string, (payload: Record<string, unknown>) => Promise<unknown>> = {
@@ -131,6 +140,30 @@ ${exportHookAdapterRegistration}      return adapters;
 }
 ${decisionOnlyRegistryPromptHelper}
 `;
+}
+
+function renderGeneratedViewSupport(viewSections: readonly ViewSection[]): {
+  declarations: string;
+  entry: string;
+  loader: string;
+} {
+  if (viewSections.length === 0) {
+    return {
+      declarations: '',
+      entry: '',
+      loader: 'loadSpecWithPatterns',
+    };
+  }
+
+  return {
+    declarations: `
+const VIEW_PROFILE: ProgramEntry['viewProfile'] = {
+  sections: ${renderTsValue(viewSections)},
+};
+`,
+    entry: `    viewProfile: VIEW_PROFILE,\n`,
+    loader: 'loadSpecWithPatterns',
+  };
 }
 
 function renderTsValue(value: unknown): string {

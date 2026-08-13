@@ -59,6 +59,7 @@ interface ParsedSpec {
   guidance: Record<string, string[]>;
   prompts: Record<string, string>;
   projection?: Record<string, { include: string[]; exclude: string[] }>;
+  view?: Array<{ key: string; from: string; label?: string }>;
   control_plane?: unknown;
 }
 
@@ -226,11 +227,22 @@ describe('SimoneOS governed attach profile', () => {
           exclude: [],
         },
       });
+      expect(parsed.view).toBeUndefined();
 
       const registration = readFileSync(join(repoRoot, 'programs/governed-memo-mini/registration.ts'), 'utf8');
       expect(registration).toContain("import { createProgramAdapters, enableNotebook, loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';");
       expect(registration).toContain('export function createProgramEntry(): ProgramEntry');
+      expect(registration).toContain('const GOVERNED_MEMO_MINI_VIEW_PROFILE');
       expect(registration).toContain("loadSpecWithPatterns(path.join(dirname, 'specs.yml'))");
+      expect(registration).not.toContain('loadSpecWithGeneratedView');
+      expect(registration).not.toContain('view-stripped');
+      expect(registration).toContain('viewProfile: GOVERNED_MEMO_MINI_VIEW_PROFILE');
+      expect(registration).toContain('{ key: "work_status", from: "work.status", label: "Work Status" }');
+      expect(registration).toContain('{ key: "memo_body", from: "work.memo_artifact.body", label: "Memo Body" }');
+      expect(registration).toContain('projectionBuilderMigration:');
+      expect(registration).toContain('trackingIssue: \'docs/ENGINE-DECLARATION-CATALOG.md#declarative-projection\'');
+      expect(registration).toContain('"status_banner"');
+      expect(registration).toContain('"completion_artifacts"');
       expect(registration).toContain('projectionBuilder: governedMemoMiniProjection');
       expect(registration).toContain('manifest: GOVERNED_MEMO_MINI_MANIFEST');
       expect(registration).toContain('presentation: GOVERNED_MEMO_MINI_PRESENTATION');
