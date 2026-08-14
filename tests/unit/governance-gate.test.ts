@@ -15,7 +15,7 @@ export async function runStage(input, runtime) {
 }`;
 const THIN_GLUE_BODY = `
 export async function runStage(input, runtime) {
-  const report = assembleStructuredReport(input.domain);
+  const report = buildConnectorReport(input.domain);
   const bytes = await runtime.connectors.pdf_report.render_report(report);
   return { result_json: JSON.stringify({ pdf_bytes: bytes.length }), items_json: '[]', digest: '' };
 }`;

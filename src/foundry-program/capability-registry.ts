@@ -90,11 +90,11 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     capability: 'export_pdf_report',
     status: 'scaffolds_with_gap',
     evidence: capabilityEvidence([
-      'structured report-data assembler + PdfReportHostConnector contract + deterministic mock are scaffolded',
+      'RenderProfile deliverable declaration + PdfReportHostConnector contract + deterministic mock are scaffolded',
       'rendered PDF report bytes are harvested as first-class artifacts from pdf_base64 in domain state',
     ]),
     since_version: '3.26.0',
-    gap_note: 'SOTA PDF rendering is host-side; foundry ships report-data assembler + PdfReportHostConnector contract + mock',
+    gap_note: 'SOTA PDF rendering is host-side; foundry ships renderProfile + PdfReportHostConnector contract + mock',
   },
   {
     capability: 'collection_lifecycle_aggregate',

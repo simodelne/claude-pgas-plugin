@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ReactionHandler, type ReactionResult, type ViewSection } from '@simodelne/pgas-server/plugin.js';
+import { reconstructArray, type ProgramArtifactPolicy, type ProgramDelegationPolicy, type ProgramEntry, type ReactionHandler, type ReactionResult, type ViewSection } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DelegationDocumentFanOutDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SourceGroundedExtractor, SynthesizedArtifact } from './synthesizer-store.js';
@@ -435,8 +435,12 @@ export function synthesizeProgramSpecFromDomain(
   const declarativeViewSections = options.targetKind === 'existing_repo'
     ? buildDeclarativeViewSections(stages, stageClassificationBySlug, stageDomainSpecBySlug, reasoningContractsBySlug)
     : [];
-  const stageOutputResultFieldsBySlug = stageResultFieldsForView(declarativeViewSections, (stage) =>
-    stageClassificationBySlug.get(stage)?.archetype !== 'llm-reasoning');
+  const declarativeRender = buildPdfReportRenderProfile(exportDescriptors);
+  const stageOutputResultFieldsBySlug = mergeResultFieldMaps(
+    stageResultFieldsForView(declarativeViewSections, (stage) =>
+      stageClassificationBySlug.get(stage)?.archetype !== 'llm-reasoning'),
+    declarativeRender.resultFieldsByStage,
+  );
   const stageOutputMirrorStages = new Set([
     ...flatMirrorStages,
     ...contractedReasoningOutputStages,
@@ -808,6 +812,7 @@ export function synthesizeProgramSpecFromDomain(
   applyHubSectionArtifactSchema(schema, hubSectionArtifacts);
   applySkillTriageSpec(spec, skills);
   applyCollectionCompletionDerivedPaths(spec, completion.collection_lifecycle, confirmationLoops);
+  applyRenderProfileSchemaAndDerivedPaths(spec, declarativeRender);
   const queryPolicy = queryPolicyForDeclaredPaths(schema, projection, stageDomainSpecBySlug);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
@@ -876,6 +881,7 @@ export function synthesizeProgramSpecFromDomain(
       queryPolicy,
     }, {
         exportHookChannel: hasExportDecisionOnly ? EXPORT_HOOK_CHANNEL : undefined,
+        renderProfile: declarativeRender.profile,
         syncOutContinuationChannels: registeredTools.map((tool) => `tool:${tool.name}`),
         viewSections: declarativeViewSections,
       }),
@@ -1691,6 +1697,259 @@ function stageResultFieldsForView(
     fieldsByStage.set(stage, unique([...(fieldsByStage.get(stage) ?? []), field]));
   }
   return fieldsByStage;
+}
+
+interface DeclarativeRenderBuild {
+  profile?: ProgramEntry['renderProfile'];
+  resultFieldsByStage: ReadonlyMap<string, readonly string[]>;
+  schemaPaths: Readonly<Record<string, string>>;
+  derivedPathRules: readonly MutableRecord[];
+}
+
+function buildPdfReportRenderProfile(exportDescriptors: readonly ExportStageDescriptor[]): DeclarativeRenderBuild {
+  const pdfDescriptors = exportDescriptors.filter((descriptor) => descriptor.kind === 'export_pdf');
+  if (pdfDescriptors.length === 0) {
+    return {
+      resultFieldsByStage: new Map(),
+      schemaPaths: {},
+      derivedPathRules: [],
+    };
+  }
+
+  const artifacts: NonNullable<ProgramEntry['renderProfile']>['artifacts'] = pdfDescriptors.map((descriptor) => ({
+    id: `${safeIdentifier(descriptor.stage)}_report`,
+    format: 'html',
+    page: { size: 'letter', margin_pt: 72 },
+    numbering: { sections: 'decimal', clauses: 'none' },
+    cover: {
+      title: { from: 'config.title' },
+      fields: [
+        { label: { from: 'config.report.labels.purpose' }, value: { from: 'config.purpose' } },
+      ],
+    },
+    sections: [
+      {
+        kind: 'section',
+        heading: { from: 'config.report.sections.summary' },
+        nodes: [
+          { kind: 'paragraph', text: { from: 'config.purpose' } },
+          {
+            kind: 'clause',
+            heading: { from: 'config.report.metrics.sources_reviewed' },
+            body: { from: 'report.sources_reviewed' },
+          },
+          {
+            kind: 'clause',
+            heading: { from: 'config.report.metrics.total_found' },
+            body: { from: 'report.total_found' },
+          },
+          {
+            kind: 'clause',
+            heading: { from: 'config.report.metrics.leads_carried_forward' },
+            body: { from: 'report.leads_carried_forward' },
+          },
+          {
+            kind: 'clause',
+            heading: { from: 'config.report.metrics.guard_audit_entries' },
+            body: { from: 'report.guard_audit_entries' },
+          },
+          {
+            kind: 'clause',
+            heading: { from: 'config.report.metrics.refused_or_skipped' },
+            body: { from: 'report.refused_or_skipped_count' },
+          },
+        ],
+      },
+      {
+        kind: 'section',
+        heading: { from: 'config.report.sections.per_source' },
+        nodes: [
+          {
+            kind: 'table',
+            columns: [
+              { header: { from: 'config.report.columns.source' }, field: 'source' },
+              { header: { from: 'config.report.columns.found' }, field: 'found' },
+              { header: { from: 'config.report.columns.pages_visited' }, field: 'pages_visited' },
+            ],
+            rows: { from: 'aggregate.result.per_source' },
+          },
+        ],
+      },
+      {
+        kind: 'section',
+        heading: { from: 'config.report.sections.leads' },
+        nodes: [
+          {
+            kind: 'table',
+            columns: [
+              { header: { from: 'config.report.columns.name' }, field: 'name' },
+              { header: { from: 'config.report.columns.company' }, field: 'company' },
+              { header: { from: 'config.report.columns.email' }, field: 'email' },
+              { header: { from: 'config.report.columns.status' }, field: 'status' },
+            ],
+            rows: { from: 'persist.result.new_vs_existing' },
+          },
+        ],
+      },
+      {
+        kind: 'section',
+        heading: { from: 'config.report.sections.guard_audit_summary' },
+        nodes: [
+          {
+            kind: 'table',
+            columns: [
+              { header: { from: 'config.report.columns.action' }, field: 'action' },
+              { header: { from: 'config.report.columns.url' }, field: 'url' },
+              { header: { from: 'config.report.columns.reason' }, field: 'reason' },
+            ],
+            rows: { from: 'aggregate.result.audit' },
+          },
+        ],
+      },
+    ],
+  }));
+
+  return {
+    profile: { artifacts },
+    resultFieldsByStage: new Map([
+      ['aggregate', ['per_source', 'leads', 'audit']],
+      ['persist', ['new_vs_existing']],
+    ]),
+    schemaPaths: pdfReportRenderSchemaPaths(),
+    derivedPathRules: pdfReportRenderDerivedPathRules(),
+  };
+}
+
+function pdfReportRenderSchemaPaths(): Record<string, string> {
+  return {
+    'config.title': 'string',
+    'config.purpose': 'string',
+    'config.report.labels.purpose': 'string',
+    'config.report.sections.summary': 'string',
+    'config.report.sections.per_source': 'string',
+    'config.report.sections.leads': 'string',
+    'config.report.sections.guard_audit_summary': 'string',
+    'config.report.metrics.sources_reviewed': 'string',
+    'config.report.metrics.total_found': 'string',
+    'config.report.metrics.leads_carried_forward': 'string',
+    'config.report.metrics.guard_audit_entries': 'string',
+    'config.report.metrics.refused_or_skipped': 'string',
+    'config.report.columns.source': 'string',
+    'config.report.columns.found': 'string',
+    'config.report.columns.pages_visited': 'string',
+    'config.report.columns.name': 'string',
+    'config.report.columns.company': 'string',
+    'config.report.columns.email': 'string',
+    'config.report.columns.status': 'string',
+    'config.report.columns.action': 'string',
+    'config.report.columns.url': 'string',
+    'config.report.columns.reason': 'string',
+    'config.report.refused_or_skipped_actions': 'array',
+    'aggregate.result': 'object',
+    'aggregate.result.per_source': 'array',
+    'aggregate.result.per_source.*': 'object',
+    'aggregate.result.per_source.*.source': 'string',
+    'aggregate.result.per_source.*.found': 'number',
+    'aggregate.result.per_source.*.pages_visited': 'number',
+    'aggregate.result.leads': 'array',
+    'aggregate.result.audit': 'array',
+    'aggregate.result.audit.*': 'object',
+    'aggregate.result.audit.*.action': 'string',
+    'aggregate.result.audit.*.url': 'string',
+    'aggregate.result.audit.*.reason': 'string',
+    'persist.result': 'object',
+    'persist.result.new_vs_existing': 'array',
+    'persist.result.new_vs_existing.*': 'object',
+    'persist.result.new_vs_existing.*.name': 'string',
+    'persist.result.new_vs_existing.*.company': 'string',
+    'persist.result.new_vs_existing.*.email': 'string',
+    'persist.result.new_vs_existing.*.status': 'string',
+    'report.sources_reviewed': 'number',
+    'report.total_found': 'number',
+    'report.leads_carried_forward': 'number',
+    'report.guard_audit_entries': 'number',
+    'report.refused_or_skipped_audit': 'array',
+    'report.refused_or_skipped_count': 'number',
+  };
+}
+
+function pdfReportRenderDerivedPathRules(): MutableRecord[] {
+  return [
+    countOfDerivedPathRule('report.sources_reviewed', 'aggregate.result.per_source'),
+    {
+      target: 'report.total_found',
+      when: { always: true },
+      set: {
+        kind: 'sum_of',
+        params: {
+          collection_path: 'aggregate.result.per_source',
+          field: 'found',
+        },
+      },
+    },
+    countOfDerivedPathRule('report.leads_carried_forward', 'persist.result.new_vs_existing'),
+    countOfDerivedPathRule('report.guard_audit_entries', 'aggregate.result.audit'),
+    {
+      target: 'report.refused_or_skipped_audit',
+      when: { always: true },
+      set: {
+        kind: 'items_where_field_in_collection',
+        params: {
+          collection_path: 'aggregate.result.audit',
+          field: 'action',
+          source_path: 'config.report.refused_or_skipped_actions',
+        },
+      },
+    },
+    countOfDerivedPathRule('report.refused_or_skipped_count', 'report.refused_or_skipped_audit'),
+  ];
+}
+
+function countOfDerivedPathRule(target: string, collectionPath: string): MutableRecord {
+  return {
+    target,
+    when: { always: true },
+    set: {
+      kind: 'count_of',
+      params: {
+        collection_path: collectionPath,
+      },
+    },
+  };
+}
+
+function applyRenderProfileSchemaAndDerivedPaths(
+  spec: MutableRecord,
+  render: DeclarativeRenderBuild,
+): void {
+  if (!render.profile) {
+    return;
+  }
+  const schema = recordField(spec, 'schema');
+  for (const [path, typeName] of Object.entries(render.schemaPaths)) {
+    if (schema[path] === undefined) {
+      schema[path] = typeName;
+    }
+  }
+  const derivedPaths = Array.isArray(spec.derived_paths) ? spec.derived_paths as MutableRecord[] : [];
+  for (const rule of render.derivedPathRules) {
+    appendDerivedPathRule(derivedPaths, rule);
+  }
+  if (derivedPaths.length > 0) {
+    spec.derived_paths = derivedPaths;
+  }
+}
+
+function mergeResultFieldMaps(
+  ...maps: ReadonlyArray<ReadonlyMap<string, readonly string[]>>
+): Map<string, string[]> {
+  const merged = new Map<string, string[]>();
+  for (const map of maps) {
+    for (const [stage, fields] of map) {
+      merged.set(stage, unique([...(merged.get(stage) ?? []), ...fields]));
+    }
+  }
+  return merged;
 }
 
 function domainSpecResultJsonSchema(domainSpec: StageDomainSpec | undefined): Record<string, unknown> | undefined {
@@ -4824,7 +5083,7 @@ function capabilityGapsForPdfReportExportDescriptors(descriptors: readonly Expor
       capability: 'export_pdf_report',
       stage: descriptor.stage,
       connector_slug: 'pdf-report',
-      message: 'SOTA PDF rendering is host-side; foundry ships report-data assembler + PdfReportHostConnector contract + mock',
+      message: 'SOTA PDF rendering is host-side; foundry ships renderProfile + PdfReportHostConnector contract + mock',
     }));
 }
 

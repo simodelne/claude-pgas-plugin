@@ -642,9 +642,6 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
       './pdf-report-connector.js',
     ));
   }
-  if (path === `src/programs/${slug}/report-data.ts`) {
-    return inlineTemplate(renderReportDataStandaloneSource());
-  }
   if (path === `src/programs/${slug}/export/html.ts`) {
     return spec('consumer/export-html.ts.tmpl', ['NAME']);
   }
@@ -677,14 +674,6 @@ function renderCombinedConsumerTemplate(
   const contractSource = readConsumerTemplate(contractTemplate).trimEnd();
   const mockSource = removeLeadingTypeImport(readConsumerTemplate(mockTemplate), mockTypeImport).trimStart();
   return ensureTrailingNewline(`${contractSource}\n\n${mockSource}`);
-}
-
-function renderReportDataStandaloneSource(): string {
-  return ensureTrailingNewline(
-    readConsumerTemplate('report-data.ts.tmpl')
-      .replace("from './pdf-report-connector.js'", "from './connectors/pdf-report.js'")
-      .trimEnd(),
-  );
 }
 
 function readConsumerTemplate(template: string): string {

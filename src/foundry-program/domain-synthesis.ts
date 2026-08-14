@@ -30,7 +30,6 @@ const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
 const EXPORT_DOCX_IMPORT = '../export/docx.js';
 const EXPORT_HTML_IMPORT = '../export/html.js';
-const REPORT_DATA_IMPORT = '../report-data.js';
 const PDF_REPORT_CONNECTOR_IMPORT = '../connectors/pdf-report.js';
 const WEB_NAVIGATION_IMPORT = '../connectors/web-navigation.js';
 const PERSISTENCE_IMPORT = '../connectors/persistence.js';
@@ -574,7 +573,6 @@ function typecheckStageBody(
     allowedIntegrationImports.length > 0 &&
     !allowedIntegrationImports.every((allowedImport) =>
       isExportImport(allowedImport) ||
-      allowedImport === REPORT_DATA_IMPORT ||
       allowedImport === PDF_REPORT_CONNECTOR_IMPORT ||
       allowedImport === WEB_NAVIGATION_IMPORT ||
       allowedImport === PERSISTENCE_IMPORT)
@@ -586,7 +584,6 @@ function typecheckStageBody(
   const contractsFile = '/virtual/pgas/contracts.ts';
   const docxFile = '/virtual/pgas/export/docx.ts';
   const htmlFile = '/virtual/pgas/export/html.ts';
-  const reportDataFile = '/virtual/pgas/report-data.ts';
   const pdfReportConnectorFile = '/virtual/pgas/connectors/pdf-report.ts';
   const webNavigationFile = '/virtual/pgas/connectors/web-navigation.ts';
   const persistenceFile = '/virtual/pgas/connectors/persistence.ts';
@@ -639,7 +636,6 @@ declare const Buffer: {
       fileName === contractsFile ||
       fileName === docxFile ||
       fileName === htmlFile ||
-      fileName === reportDataFile ||
       fileName === pdfReportConnectorFile ||
       fileName === webNavigationFile ||
       fileName === persistenceFile ||
@@ -649,7 +645,6 @@ declare const Buffer: {
       if (fileName === contractsFile) return contractsSource;
       if (fileName === docxFile) return docxDeclarationSource();
       if (fileName === htmlFile) return htmlDeclarationSource();
-      if (fileName === reportDataFile) return reportDataDeclarationSource();
       if (fileName === pdfReportConnectorFile) return pdfReportDeclarationSource();
       if (fileName === webNavigationFile) return webNavigationDeclarationSource();
       if (fileName === persistenceFile) return persistenceDeclarationSource();
@@ -667,9 +662,6 @@ declare const Buffer: {
       }
       if (fileName === htmlFile) {
         return ts.createSourceFile(fileName, htmlDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
-      }
-      if (fileName === reportDataFile) {
-        return ts.createSourceFile(fileName, reportDataDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
       }
       if (fileName === pdfReportConnectorFile) {
         return ts.createSourceFile(fileName, pdfReportDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
@@ -700,13 +692,6 @@ declare const Buffer: {
       if (moduleName === EXPORT_HTML_IMPORT) {
         return {
           resolvedFileName: htmlFile,
-          extension: ts.Extension.Ts,
-          isExternalLibraryImport: false,
-        };
-      }
-      if (moduleName === REPORT_DATA_IMPORT) {
-        return {
-          resolvedFileName: reportDataFile,
           extension: ts.Extension.Ts,
           isExternalLibraryImport: false,
         };
@@ -759,19 +744,6 @@ export function renderStructuredDocxDocument(input: ProgramDocxInput): Uint8Arra
 
 function htmlDeclarationSource(): string {
   return `export function renderHtmlDocument(body: string): string;
-`;
-}
-
-function reportDataDeclarationSource(): string {
-  return `export interface StructuredReport {
-  readonly title: string;
-  readonly purpose: string;
-  readonly executive_summary: string;
-  readonly per_source: ReadonlyArray<{ source: string; found: number; pages_visited: number }>;
-  readonly leads: readonly Record<string, unknown>[];
-  readonly guard_audit_summary: ReadonlyArray<{ action: string; url: string; reason?: string }>;
-}
-export function assembleStructuredReport(domain: Record<string, unknown>): StructuredReport;
 `;
 }
 
@@ -1478,22 +1450,22 @@ function artifactTypeForExportKind(kind: ExportStageDescriptor['kind']): ExportS
 function exportPrimaryImportForDescriptor(descriptor: ExportStageDescriptor): string {
   if (descriptor.kind === 'export_docx') return EXPORT_DOCX_IMPORT;
   if (descriptor.kind === 'export_html') return EXPORT_HTML_IMPORT;
-  return REPORT_DATA_IMPORT;
+  return PDF_REPORT_CONNECTOR_IMPORT;
 }
 
 function exportImportsForDescriptor(descriptor: ExportStageDescriptor): string[] {
   if (descriptor.kind === 'export_pdf') {
-    return [REPORT_DATA_IMPORT, PDF_REPORT_CONNECTOR_IMPORT];
+    return [PDF_REPORT_CONNECTOR_IMPORT];
   }
   return [exportPrimaryImportForDescriptor(descriptor)];
 }
 
 function isExportImport(value: string): boolean {
-  return value === EXPORT_DOCX_IMPORT || value === EXPORT_HTML_IMPORT || value === REPORT_DATA_IMPORT;
+  return value === EXPORT_DOCX_IMPORT || value === EXPORT_HTML_IMPORT || value === PDF_REPORT_CONNECTOR_IMPORT;
 }
 
 function exportKindForImport(value: string): ExportStageDescriptor['kind'] {
-  if (value === REPORT_DATA_IMPORT) return 'export_pdf';
+  if (value === PDF_REPORT_CONNECTOR_IMPORT) return 'export_pdf';
   return value === EXPORT_HTML_IMPORT ? 'export_html' : 'export_docx';
 }
 
@@ -1721,12 +1693,20 @@ async function runPdfReportBehavioralGate(
       },
       domain: {
         config: { purpose: 'find AI engineers', title: 'Behavior PDF Report' },
-        aggregate: { per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }] },
-        persist: { new_vs_existing: [{ email: 'a@x.com', status: 'new' }] },
-        audit: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+        aggregate: {
+          result: {
+            per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }],
+            audit: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+          },
+        },
+        persist: {
+          result: {
+            new_vs_existing: [{ email: 'a@x.com', status: 'new' }],
+          },
+        },
       },
       domain_spec: options.domainSpec ?? {
-        reads: ['aggregate.per_source', 'persist.new_vs_existing', 'audit', 'config'],
+        reads: ['aggregate.result.per_source', 'persist.result.new_vs_existing', 'aggregate.result.audit', 'config'],
         produces: {},
         rules: [],
         invariants: [],
@@ -1746,15 +1726,14 @@ async function runPdfReportBehavioralGate(
       expected_result_stage: options.stage,
       expected_items_non_empty: true as const,
       expected_items_templates: ['pdf_report:<sha256>'],
-      available_domain_paths: ['aggregate.per_source', 'audit', 'config', 'persist.new_vs_existing'],
-      domain_spec_reads: ['aggregate.per_source', 'persist.new_vs_existing', 'audit', 'config'],
+      available_domain_paths: ['aggregate.result.per_source', 'aggregate.result.audit', 'config', 'persist.result.new_vs_existing'],
+      domain_spec_reads: ['aggregate.result.per_source', 'persist.result.new_vs_existing', 'aggregate.result.audit', 'config'],
     },
   };
 
   try {
     const runStage = loadRunStageForBehavior(body, {
       modules: {
-        [REPORT_DATA_IMPORT]: loadReportDataTemplateModule(),
         [PDF_REPORT_CONNECTOR_IMPORT]: {
           MockPdfReportConnector: class {
             async render_report(report: Record<string, unknown>): Promise<Uint8Array> {
@@ -1802,8 +1781,8 @@ function assertPdfReportConnectorCall(calls: Array<{ report: Record<string, unkn
   if (report.title !== 'Behavior PDF Report' || report.purpose !== 'find AI engineers') {
     return 'connector report did not include title and purpose from input.domain.config';
   }
-  if (typeof report.executive_summary !== 'string' || report.executive_summary.length === 0) {
-    return 'connector report did not include executive_summary';
+  if (typeof report.executive_summary !== 'string') {
+    return 'connector report did not preserve the residual executive_summary field';
   }
   if (!Array.isArray(report.per_source) || report.per_source.length !== 1) {
     return 'connector report did not include per_source findings';
@@ -2419,33 +2398,6 @@ function loadExportTemplateModule(importPath: string): Record<string, unknown> {
     Uint8Array,
   });
   new Script(transpiled.outputText, { filename: `${template}.behavior.cjs` }).runInContext(context, {
-    timeout: 1_000,
-  });
-  return moduleObject.exports as Record<string, unknown>;
-}
-
-function loadReportDataTemplateModule(): Record<string, unknown> {
-  const source = readFileSync(join(EXPORT_TEMPLATE_ROOT, 'report-data.ts.tmpl'), 'utf8');
-  const transpiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      strict: true,
-    },
-  });
-  const exportsObject: Record<string, unknown> = {};
-  const moduleObject = { exports: exportsObject };
-  const context = createContext({
-    exports: exportsObject,
-    module: moduleObject,
-    require: (specifier: string) => {
-      if (specifier === './pdf-report-connector.js') {
-        return {};
-      }
-      throw new Error(`report-data behavioral module not available: ${specifier}`);
-    },
-  });
-  new Script(transpiled.outputText, { filename: 'report-data.ts.tmpl.behavior.cjs' }).runInContext(context, {
     timeout: 1_000,
   });
   return moduleObject.exports as Record<string, unknown>;
@@ -3778,8 +3730,7 @@ function renderPdfReportStageBody(stage: string, descriptor: ExportStageDescript
   void stage;
   void descriptor;
   return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
-import { assembleStructuredReport } from '../report-data.js';
-import { MockPdfReportConnector, type PdfReportHostConnector } from '../connectors/pdf-report.js';
+import { MockPdfReportConnector, type PdfReportHostConnector, type StructuredReport } from '../connectors/pdf-report.js';
 
 declare const Buffer: {
   from(data: Uint8Array): { toString(encoding: 'base64'): string };
@@ -3794,7 +3745,7 @@ const defaultPdfReportConnector = new MockPdfReportConnector();
 
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   const connector = pdfReportConnector(input, runtime);
-  const report = assembleStructuredReport(stageDomain(input));
+  const report = structuredReportFromDomain(stageDomain(input));
   const bytes = await connector.render_report(report);
   const sha256 = await sha256Hex(bytes);
   const result = {
@@ -3809,6 +3760,131 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     items_json: JSON.stringify(['pdf_report:' + result.sha256]),
     digest: '',
   };
+}
+
+function structuredReportFromDomain(domain: Record<string, unknown>): StructuredReport {
+  return {
+    title: stringValue(valueAtPath(domain, 'config.title')) ?? '',
+    purpose: stringValue(valueAtPath(domain, 'config.purpose')) ?? stringValue(valueAtPath(domain, 'purpose')) ?? '',
+    executive_summary: stringValue(valueAtPath(domain, 'report.executive_summary')) ?? '',
+    per_source: perSourceRows(arrayAtPath(domain, 'aggregate.result.per_source')),
+    leads: recordRows(arrayAtPath(domain, 'persist.result.new_vs_existing')),
+    guard_audit_summary: auditRows(firstNonEmptyArray(
+      arrayAtPath(domain, 'aggregate.result.audit'),
+      arrayAtPath(domain, 'work.audit'),
+    )),
+  };
+}
+
+function perSourceRows(values: readonly unknown[]): Array<{ source: string; found: number; pages_visited: number }> {
+  const rows: Array<{ source: string; found: number; pages_visited: number }> = [];
+  for (const value of values) {
+    const record = recordValue(value);
+    const source = stringValue(record.source);
+    const found = numberValue(record.found);
+    const pagesVisited = numberValue(record.pages_visited);
+    if (!source || found === undefined || pagesVisited === undefined) {
+      continue;
+    }
+    rows.push({ source, found, pages_visited: pagesVisited });
+  }
+  return rows;
+}
+
+function recordRows(values: readonly unknown[]): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (const value of values) {
+    if (isPlainRecord(value)) {
+      rows.push({ ...value });
+    }
+  }
+  return rows;
+}
+
+function auditRows(values: readonly unknown[]): Array<{ action: string; url: string; reason?: string }> {
+  const rows: Array<{ action: string; url: string; reason?: string }> = [];
+  for (const value of values) {
+    const record = recordValue(value);
+    const action = stringValue(record.action);
+    const url = stringValue(record.url);
+    if (!action || !url) {
+      continue;
+    }
+    const reason = stringValue(record.reason);
+    rows.push({ action, url, ...(reason ? { reason } : {}) });
+  }
+  return rows;
+}
+
+function firstNonEmptyArray(...values: Array<readonly unknown[]>): readonly unknown[] {
+  for (const value of values) {
+    if (value.length > 0) {
+      return value;
+    }
+  }
+  return [];
+}
+
+function arrayAtPath(domain: Record<string, unknown>, path: string): unknown[] {
+  const direct = valueAtPath(domain, path);
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+  const indexed = indexedValuesAtPath(domain, path);
+  return indexed.length > 0 ? indexed : [];
+}
+
+function indexedValuesAtPath(domain: Record<string, unknown>, path: string): unknown[] {
+  const indices = new Set<number>();
+  const prefix = path + '.';
+  for (const key of Object.keys(domain)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const rest = key.slice(prefix.length);
+    const [rawIndex] = rest.split('.');
+    const index = Number(rawIndex);
+    if (Number.isInteger(index) && index >= 0) {
+      indices.add(index);
+    }
+  }
+  const out: unknown[] = [];
+  for (const index of [...indices].sort((left, right) => left - right)) {
+    const value = valueAtPath(domain, path + '.' + String(index));
+    if (value !== undefined) {
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+function valueAtPath(domain: Record<string, unknown>, path: string): unknown {
+  if (Object.hasOwn(domain, path)) {
+    return domain[path];
+  }
+  let cursor: unknown = domain;
+  for (const part of path.split('.')) {
+    if (!isPlainRecord(cursor) || !Object.hasOwn(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function pdfReportConnector(input: StageInput, runtime: StageRuntime): PdfReportHostConnector {

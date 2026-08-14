@@ -356,7 +356,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.9.0"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.10.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
@@ -579,8 +579,6 @@ describe('template renderer', () => {
       expect(registration).toContain('viewProfile:');
       expect(registration).toContain('projectionBuilderMigration:');
       expect(registration).toContain('loadSpecWithPatterns(specPath)');
-      expect(registration).not.toContain('loadSpecWithGeneratedView');
-      expect(registration).not.toContain('view-stripped');
 
       const module = await import(pathToFileURL(join(repoRoot, 'programs/fee-proposal-drafter/registration.ts')).href) as {
         createFeeProposalDrafterProgramEntry: () => {
@@ -1381,13 +1379,13 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         'src/programs/lead-research-agent/connectors/web-navigation.ts',
         'src/programs/lead-research-agent/connectors/persistence.ts',
         'src/programs/lead-research-agent/connectors/pdf-report.ts',
-        'src/programs/lead-research-agent/report-data.ts',
       ]));
 
       const webNavigation = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/web-navigation.ts'), 'utf8');
       const persistence = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/persistence.ts'), 'utf8');
       const pdfReport = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'), 'utf8');
-      const reportData = readFileSync(join(outDir, 'src/programs/lead-research-agent/report-data.ts'), 'utf8');
+      const registration = readFileSync(join(outDir, 'src/programs/lead-research-agent/registration.ts'), 'utf8');
+      const spec = readFileSync(join(outDir, 'src/programs/lead-research-agent/specs.yml'), 'utf8');
 
       expect(webNavigation).toContain('export interface WebNavigationHostConnector');
       expect(webNavigation).toContain('export class MockWebNavigationConnector');
@@ -1398,8 +1396,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect(pdfReport).toContain('export interface PdfReportHostConnector');
       expect(pdfReport).toContain('export class MockPdfReportConnector');
       expect(pdfReport).not.toContain("from './pdf-report-connector.js'");
-      expect(reportData).toContain("from './connectors/pdf-report.js'");
-      expect(reportData).not.toContain("from './pdf-report-connector.js'");
+      expect(existsSync(join(outDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(false);
+      expect(spec).not.toContain('\nrender:');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

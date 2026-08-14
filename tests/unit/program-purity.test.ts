@@ -48,10 +48,10 @@ describe('program purity registry', () => {
     expect(missingDebt).toEqual([]);
   });
 
-  it('records numeric_aggregate as the only projection governance debt exemption', () => {
-    expect([...PROJECTION_DEBT_EXEMPT]).toEqual(['numeric_aggregate']);
+  it('retires projection numeric_aggregate governance debt exemption', () => {
+    expect([...PROJECTION_DEBT_EXEMPT]).toEqual([]);
     const projectionDebt = DECLARATIVE_DEBT.find((entry) => entry.kind === 'projection');
-    expect(projectionDebt?.engine_ask).toContain('projection-DSL');
+    expect(projectionDebt?.north_star).toBe('delete projection.ts');
   });
 });
 
@@ -66,14 +66,14 @@ describe('generated source governance coverage', () => {
     ])).toThrow(GovernanceRefusalError);
   });
 
-  it('allows only the tracked numeric_aggregate debt in projection artifacts', () => {
+  it('KILL TEST: refuses numeric_aggregate in projection artifacts after render-derived adoption', () => {
     expect(() => assertGeneratedProgramSourceGovernance([
       {
         path: 'src/programs/lead-research-agent/report-data.ts',
         kind: 'projection',
         sourceText: NUMERIC_AGGREGATE_SOURCE,
       },
-    ])).not.toThrow();
+    ])).toThrow(GovernanceRefusalError);
   });
 
   it('KILL TEST: keeps numeric_aggregate fatal outside projection artifacts', () => {

@@ -2,6 +2,7 @@ import type {
   ProgramArtifactPolicy,
   ProgramArtifactRule,
   ProgramDelegationPolicy,
+  ProgramEntry,
   ViewSection,
 } from '@simodelne/pgas-server/plugin.js';
 
@@ -31,6 +32,7 @@ export function renderRegistrationSource(
   options: {
     exportHookChannel?: string;
     syncOutContinuationChannels?: string[];
+    renderProfile?: ProgramEntry['renderProfile'];
     viewSections?: readonly ViewSection[];
   } = {},
 ): string {
@@ -62,6 +64,7 @@ export function renderRegistrationSource(
 `
     : '';
   const viewSupport = renderGeneratedViewSupport(options.viewSections ?? []);
+  const renderSupport = renderGeneratedRenderSupport(options.renderProfile);
   const specLoadSnippet = options.exportHookChannel
     ? `  const { spec: loadedSpec } = ${viewSupport.loader}(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
     : `  const { spec } = ${viewSupport.loader}(specPath);\n`;
@@ -103,6 +106,7 @@ function withDecisionOnlyRegistryPrompts<T extends {
 import { ${handlerImports} } from './handlers.js';
 import { register${pascalName}Tools } from './tools.js';
 ${viewSupport.declarations}
+${renderSupport.declarations}
 
 export function create${pascalName}ProgramEntry(): ProgramEntry {
   const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
@@ -112,6 +116,7 @@ ${specLoadSnippet}  const toolRegistry = createToolRegistry();
   return {
     spec,
 ${viewSupport.entry}
+${renderSupport.entry}
     reactionHandlers,
 ${syncOutContinuationPolicy}${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
       const adapterHandlers: Record<string, (payload: Record<string, unknown>) => Promise<unknown>> = {
@@ -163,6 +168,25 @@ const VIEW_PROFILE: ProgramEntry['viewProfile'] = {
 `,
     entry: `    viewProfile: VIEW_PROFILE,\n`,
     loader: 'loadSpecWithPatterns',
+  };
+}
+
+function renderGeneratedRenderSupport(renderProfile: ProgramEntry['renderProfile'] | undefined): {
+  declarations: string;
+  entry: string;
+} {
+  if (!renderProfile) {
+    return {
+      declarations: '',
+      entry: '',
+    };
+  }
+
+  return {
+    declarations: `
+const RENDER_PROFILE: ProgramEntry['renderProfile'] = ${renderTsValue(renderProfile)};
+`,
+    entry: `    renderProfile: RENDER_PROFILE,\n`,
   };
 }
 

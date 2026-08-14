@@ -61,8 +61,8 @@ describe('program purity backstop', () => {
     expect(violations).toEqual([]);
   });
 
-  it('classifies report-data.ts as projection helper data', () => {
-    expect(kindForRequestedArtifact('src/programs/lead-research-agent/report-data.ts')).toBe('projection');
+  it('does not classify retired report-data.ts as an allowed generated program artifact', () => {
+    expect(kindForRequestedArtifact('src/programs/lead-research-agent/report-data.ts')).toBe('metadata');
   });
 
   it('KILL TEST: refuses an unclassified per-program TypeScript file at render time', () => {

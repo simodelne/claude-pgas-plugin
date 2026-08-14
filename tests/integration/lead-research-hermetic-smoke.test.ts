@@ -65,7 +65,9 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/web-navigation.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/persistence.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
-      expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(true);
+      expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(false);
+      const registration = readFileSync(join(tempDir, 'src/programs/lead-research-agent/registration.ts'), 'utf8');
+      expect(registration).toContain('renderProfile: RENDER_PROFILE');
       const parentSpecPath = join(tempDir, 'src/programs/lead-research-agent/specs.yml');
       const childSpecPath = join(tempDir, 'src/programs/lead-research-source-navigation/specs.yml');
       expect(() => loadSpecWithPatterns(parentSpecPath)).not.toThrow();
@@ -181,7 +183,7 @@ describe('lead-research-agent hermetic smoke', () => {
       const output = execFileSync(process.execPath, [
         fileURLToPath(VITEST_BIN),
         'run',
-        '--pool=forks',
+        '--pool=threads',
         '--maxWorkers=1',
         'tests/program-deterministic.test.ts',
       ], {
