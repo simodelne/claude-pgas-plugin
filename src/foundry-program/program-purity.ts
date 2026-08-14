@@ -22,9 +22,7 @@ export const ALLOWED_PROGRAM_ARTIFACT_KINDS: ReadonlySet<ArtifactKind> = new Set
   'extract',
 ]);
 
-export const PROJECTION_DEBT_EXEMPT: ReadonlySet<GovernedConstructKind> = new Set([
-  'numeric_aggregate',
-]);
+export const PROJECTION_DEBT_EXEMPT: ReadonlySet<GovernedConstructKind> = new Set();
 
 export type DeclarativeDebtBucket = 'logic' | 'io_adapter' | 'projection' | 'boilerplate';
 
@@ -52,7 +50,7 @@ export const DECLARATIVE_DEBT: readonly DeclarativeDebtEntry[] = [
     kind: 'projection',
     bucket: 'projection',
     engine_ask: 'projection-DSL (Channel-4, filed 2026-08-11)',
-    north_star: 'delete projection.ts/report-data.ts',
+    north_star: 'delete projection.ts',
   },
   {
     kind: 'tool',

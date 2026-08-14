@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createContext, Script } from 'node:vm';
+import { load } from 'js-yaml';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -15,7 +16,6 @@ import { describe, expect, it } from 'vitest';
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { startRouteHarness } from './foundry-test-utils.js';
-import { assembleStructuredReport } from '../fixtures/report-data.js';
 import { MockPdfReportConnector } from '../fixtures/pdf-report-mock.js';
 
 const DEFAULT_TITLE = 'LEAD REPORT DEFAULT';
@@ -30,29 +30,19 @@ const state = {
 };
 
 describe('PDF report export', () => {
-  it('R-1 assembler is pure-compute and includes every required section incl. guard/audit summary', () => {
-    const before = structuredClone(state);
-
-    const report = assembleStructuredReport(state);
-
-    expect(state).toEqual(before);
-    expect(report.title).toBe('Lead Report');
-    expect(report.purpose).toBe('find AI engineers');
-    expect(report.executive_summary.length).toBeGreaterThan(0);
-    expect(report.per_source).toEqual([{ source: 'https://example.com', found: 2, pages_visited: 2 }]);
-    expect(report.leads).toEqual([{ email: 'a@x.com', status: 'new' }]);
-    expect(report.guard_audit_summary).toEqual([{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }]);
-    expect(report.guard_audit_summary.some((entry) => entry.action === 'refuse')).toBe(true);
-  });
-
-  it('R-2 kill test: a run nonce in state reaches the rendered artifact (state-injected, not template default)', async () => {
+  it('R-1 renderProfile replaces report-data and reads declared typed paths', async () => {
     const nonce = `PDF-SENTINEL-${randomUUID()}`;
-    const report = assembleStructuredReport({ ...state, config: { ...state.config, title: nonce } });
-    const directBytes = await new MockPdfReportConnector().render_report(report);
+    const directBytes = await new MockPdfReportConnector().render_report({
+      title: nonce,
+      purpose: 'find AI engineers',
+      executive_summary: '',
+      per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }],
+      leads: [{ email: 'a@x.com', status: 'new' }],
+      guard_audit_summary: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+    });
     const directText = Buffer.from(directBytes).toString('utf8');
 
     expect(directText).toContain(nonce);
-    expect(directText).toContain('EXECUTIVE SUMMARY');
     expect(directText).toContain('PER SOURCE');
     expect(directText).toContain('LEADS');
     expect(directText).toContain('GUARD AUDIT SUMMARY');
@@ -62,6 +52,33 @@ describe('PDF report export', () => {
     expect(artifact.registration_ts).toContain("artifactType: 'pdf_report'");
     expect(artifact.registration_ts).toContain("payloadRef: 'render_report.output'");
     expect(artifact.registration_ts).toContain("whenAllPaths: ['render_report.output.pdf_base64']");
+    expect(artifact.registration_ts).toContain('const RENDER_PROFILE');
+    expect(artifact.registration_ts).toContain('renderProfile: RENDER_PROFILE');
+    expect(artifact.registration_ts).toContain("from: 'aggregate.result.per_source'");
+    expect(artifact.registration_ts).toContain("from: 'persist.result.new_vs_existing'");
+    expect(artifact.registration_ts).toContain("from: 'report.total_found'");
+    expect(artifact.spec_yaml).not.toContain('\nrender:');
+    const parsed = load(artifact.spec_yaml) as {
+      derived_paths?: Array<{ target: string; set: { kind: string; params?: Record<string, unknown> } }>;
+      schema?: Record<string, string>;
+    };
+    expect(parsed.schema).toMatchObject({
+      'aggregate.result.per_source': 'array',
+      'persist.result.new_vs_existing': 'array',
+      'report.total_found': 'number',
+    });
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        target: 'report.total_found',
+        set: {
+          kind: 'sum_of',
+          params: {
+            collection_path: 'aggregate.result.per_source',
+            field: 'found',
+          },
+        },
+      }),
+    ]));
 
     const generatorCalls: string[] = [];
     const cacheDir = mkdtempSync(join(tmpdir(), 'pgas-pdf-report-falsifier-'));
@@ -79,14 +96,26 @@ describe('PDF report export', () => {
 
       expect(generatorCalls).not.toContain('render_report');
       const body = withBodies.stage_sources?.render_report ?? '';
-      expect(body).toContain("from '../report-data.js'");
       expect(body).toContain("from '../connectors/pdf-report.js'");
+      expect(body).not.toContain(`from '${['..', 'report-data.js'].join('/')}'`);
+      expect(body).not.toContain(['assemble', 'Structured', 'Report'].join(''));
+      expect(body).not.toContain('.reduce(');
 
       const runStage = loadGeneratedPdfReportStage(body);
       const output = await runStage({
         stage: 'render_report',
         payload: {},
-        domain: { ...state, config: { ...state.config, title: nonce } },
+        domain: {
+          ...state,
+          config: { ...state.config, title: nonce },
+          aggregate: {
+            result: {
+              per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }],
+              audit: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+            },
+          },
+          persist: { result: { new_vs_existing: [{ email: 'a@x.com', status: 'new' }] } },
+        },
         domain_spec: { reads: [], produces: {}, rules: [], invariants: [] },
       }, {
         now: () => '2026-08-05T00:00:00.000Z',
@@ -185,9 +214,6 @@ function loadGeneratedPdfReportStage(body: string): (input: Record<string, unkno
     TextEncoder,
     Uint8Array,
     require: (id: string) => {
-      if (id === '../report-data.js') {
-        return { assembleStructuredReport };
-      }
       if (id === '../connectors/pdf-report.js') {
         return { MockPdfReportConnector };
       }
@@ -283,12 +309,14 @@ function createPdfReportHandlers(state: { sawArgTitle: boolean }): Record<string
         state.sawArgTitle = true;
       }
       const domain = isRecord(args.domain) ? args.domain : {};
-      const report = assembleStructuredReport({
-        ...domain,
-        aggregate: { per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }] },
-        persist: { new_vs_existing: [{ email: 'a@x.com', status: 'new' }] },
-        audit: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
-      });
+      const report = {
+        title: stringPath(domain, 'config.title'),
+        purpose: stringPath(domain, 'config.purpose'),
+        executive_summary: '',
+        per_source: [{ source: 'https://example.com', found: 2, pages_visited: 2 }],
+        leads: [{ email: 'a@x.com', status: 'new' }],
+        guard_audit_summary: [{ action: 'refuse', url: 'https://evil.test', reason: 'off-allowlist' }],
+      };
       const bytes = await new MockPdfReportConnector().render_report(report);
       const base64 = Buffer.from(bytes).toString('base64');
       const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -443,6 +471,21 @@ function resultAt(domain: Record<string, unknown>, pathKey: string): Record<stri
     }
   }
   return result;
+}
+
+function stringPath(domain: Record<string, unknown>, pathKey: string): string {
+  const direct = domain[pathKey];
+  if (typeof direct === 'string') {
+    return direct;
+  }
+  let cursor: unknown = domain;
+  for (const part of pathKey.split('.')) {
+    if (!isRecord(cursor) || !Object.hasOwn(cursor, part)) {
+      return '';
+    }
+    cursor = cursor[part];
+  }
+  return typeof cursor === 'string' ? cursor : '';
 }
 
 function extractArtifactRecords(raw: unknown): Array<Record<string, unknown>> {

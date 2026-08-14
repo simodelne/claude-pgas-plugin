@@ -369,10 +369,6 @@ function standaloneHostConnectorArtifacts(
             'typecheck',
             'program-deterministic',
           ]),
-          artifact('projection', `src/programs/${slug}/report-data.ts`, 'Provide pure structured report-data assembly for PDF report rendering.', 'branch_write', [
-            'typecheck',
-            'program-deterministic',
-          ]),
         ]
       : []),
   ];
@@ -547,7 +543,6 @@ function reconcileExistingRepoRequestedPath(path: string, programPath: string): 
 
 function isProgramRelativeArtifactPath(path: string): boolean {
   return path === 'projection.ts'
-    || path === 'report-data.ts'
     || path === 'frontend.spec.yml'
     || path === 'specs.yml'
     || path === 'registration.ts'
@@ -570,7 +565,6 @@ function uniqueArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
 }
 
 export function kindForRequestedArtifact(path: string): ArtifactKind {
-  if (path.endsWith('report-data.ts')) return 'projection';
   if (path.includes('/projection.') || path.endsWith('/projection.ts')) return 'projection';
   if (path.includes('frontend')) return 'frontend';
   if (path.includes('/connectors/')) return 'connector';

@@ -1,26 +1,26 @@
 # Engine Declaration Catalog
 
-Authoritative engine surface for this branch: `@simodelne/pgas-server@4.9.0`, installed under `node_modules/@simodelne/pgas-server`.
+Authoritative engine surface for this branch: `@simodelne/pgas-server@4.10.0`, installed under `node_modules/@simodelne/pgas-server`.
 Line references to engine declarations cite `node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts` plus the public entrypoint export declarations where relevant.
-Line references to foundry status cite generator/registry files in this repo. Phase B changes synthesis emission for typed raw-value `ViewSection` sections while leaving later declaration surfaces as backlog.
+Line references to foundry status cite generator/registry files in this repo. Phase C adds runtime `RenderProfile` emission for PDF-report deliverables while keeping render-tier declarations beside the engine `Specification`.
 
 Status vocabulary:
 
 - **EMITTED** - pgas-new emits the construct today.
-- **AVAILABLE-UNUSED** - v4.9.0 accepts it, but pgas-new does not emit it yet and no convergence phase needs it.
+- **AVAILABLE-UNUSED** - v4.10.0 accepts it, but pgas-new does not emit it yet and no convergence phase needs it.
 - **HELD** - intentionally blocked on an upstream/design dependency.
 - **ADOPT-BACKLOG** - acknowledged and intentionally deferred to a later blueprint convergence phase.
 
 The machine-readable mirror is `ENGINE_DECLARATION_AWARENESS` in `src/foundry-program/engine-primitive-registry.ts:30-170`.
 
-## v4.4.0/v4.9.0 Additive Awareness
+## v4.4.0 Through v4.10.0 Additive Awareness
 
-Phase B adopts `ViewProfile` for typed raw-value projection reads and still only acknowledges later-phase render, convention-registration, and engine-capability surfaces. In v4.9.0, generated registrations attach these sections through `ProgramEntry.viewProfile`; generated `specs.yml` files do not serialize a top-level YAML `view:` block because the current loader does not accept that block shape.
+Phase B adopts `ViewProfile` for typed raw-value projection reads, and Phase C adopts `RenderProfile` for the PDF-report deliverable profile. Generated registrations attach these render-tier declarations through `ProgramEntry.viewProfile` and `ProgramEntry.renderProfile`; generated `specs.yml` files do not serialize top-level YAML `view:` or `render:` blocks because those declarations live beside the engine `Specification`.
 
 | construct | public anchor | FOUNDRY STATUS |
 | --- | --- | --- |
 | `view:` / `ViewSection` / `ViewProfile` | `_shared-types.d.ts:5261-5270`; `ProgramEntry.viewProfile` and `projectionBuilderMigration` at `_shared-types.d.ts:5699-5729`; plugin exports at `plugin.d.ts:111-118` | **EMITTED via `ProgramEntry.viewProfile`**, Phase B. Existing-repo typed result/read leaves build `ViewSection[]` and attach them at registration; residual presentation builders coexist only with `projectionBuilderMigration`. The in-spec YAML `view:` block is deferred until the loader/blueprint compiler accepts it (#915/#917). |
-| `render:` / `RenderProfile` | `_shared-types.d.ts:5310-5508`; `ProgramEntry.renderProfile` at `_shared-types.d.ts:5743-5755` | **ADOPT-BACKLOG**, Phase C. Replaces per-program report/render data `.ts` declarations. |
+| `render:` / `RenderProfile` | `_shared-types.d.ts:5310-5508`; `ProgramEntry.renderProfile` at `_shared-types.d.ts:5743-5755` | **EMITTED via `ProgramEntry.renderProfile`**, Phase C. PDF-report deliverable shape reads typed stage result sub-paths and `derived_paths`; the residual free-form executive-summary prose is not fabricated as render content. |
 | `requires_delegations` / mandatory delegation | raw mode YAML at `_shared-types.d.ts:2488-2503`; typed declarations at `_shared-types.d.ts:969-1081`; compiled `mandatory_delegations` at `_shared-types.d.ts:1838-1846` | **ADOPT-BACKLOG**, Phase D. |
 | conversational delegation | `DelegationMode = "blocking" \| "continue" \| "conversational"` at `_shared-types.d.ts:443`; caller inbox fields at `_shared-types.d.ts:519-532` | **ADOPT-BACKLOG**, Phase D. |
 | `pure_strict` feature and `pure: "strict"` | feature union at `_shared-types.d.ts:141`; strict contract at `_shared-types.d.ts:1906-1920` | **ADOPT-BACKLOG**, Phase F. Per-program gated; fan-out programs remain blocked on the per-item delegation-fan-out engine ask. |
@@ -28,7 +28,11 @@ Phase B adopts `ViewProfile` for typed raw-value projection reads and still only
 | declarative `policies:` surface | `RetryBudgetPolicy` / `RoundBudgetPolicy` / `QueryPolicy` / `DenialTrackingPolicy` / `ContentScanPolicy` at `_shared-types.d.ts:3212-3366`; `RiskPolicy` at `_shared-types.d.ts:4778-4801`; `ProgramQueryPolicy` and `ProgramReliabilityPolicy` at `_shared-types.d.ts:5520-5523`, `5660-5681`; plugin exports policy subset at `plugin.d.ts:30`, `63`, `66`, `81-82` | **ADOPT-BACKLOG**, Phase E / blueprint block 11. |
 | `web_search` engine capability | `WebSearchProvider` at `_shared-types.d.ts:8212-8231`; plugin export at `plugin.d.ts:113` | **ADOPT-BACKLOG**, Phase D/E. Replaces per-program web-navigation connector `.ts`; this PR keeps existing registered tool emission. |
 | `capability: document_extraction` | Capability sidecar design at `_shared-types.d.ts:8331-8355`; implementation binding includes `document_extraction` in `plugin.mjs` | **ADOPT-BACKLOG**, #926. Foundry keeps its current document extraction upload/delegation/self-contained surfaces in this phase. |
-| `registerProgramByConvention` | Public helper is present in v4.9.0 at `_shared-types.d.ts:8452` and `plugin.d.ts:149-150` | **ADOPT-BACKLOG**, #924 / Phase E-F. Do not replace generated `registration.ts` in this PR. |
+| `registerProgramByConvention` | Public helper is present in v4.9+ at `_shared-types.d.ts:8452` and `plugin.d.ts:149-150` | **ADOPT-BACKLOG**, #924 / Phase E-F. Do not replace generated `registration.ts` in this PR. |
+| `Always` predicate | `PredicateKind` includes `Always` at `_shared-types.d.ts:104` | **AVAILABLE-UNUSED**, #836. Expresses an unconditional predicate leaf; foundry already uses `derived_paths.when.always` and has no guard/precondition emitter needing a `Predicate.Always` node yet. |
+| `min_of` / `max_of` | `DerivedPathSetKind` and raw YAML set kinds at `_shared-types.d.ts:1470`, `2805` | **ADOPT-BACKLOG**, #836. Express numeric minimum/maximum over a collection item field; no current generated report or threshold descriptor needs them. |
+| `join_from` membership filtering | Implemented as `items_where_field_in_collection` at `_shared-types.d.ts:1470`; `source_path` / `source_item_path` at `_shared-types.d.ts:1543-1555` | **ADOPT-BACKLOG**, #836. Expresses filtering rows whose field appears in another collection; Phase C uses the installed set kind narrowly for refused/skipped audit counts, while broader PGAS-L `join_from` descriptor sugar remains backlog. |
+| `invariant { require, on }` sugar | collection aggregate invariants at `_shared-types.d.ts:2932-2933`; PGAS-L `collection.require` at `_shared-types.d.ts:3019-3020` | **AVAILABLE-UNUSED**, #836. Expresses per-record collection invariants; foundry still emits `schema_invariants` directly. |
 
 ## 1. Top-Level Specification Fields
 
@@ -106,7 +110,7 @@ Engine anchors: `Mode` and `ModeTransition` are `_shared-types.d.ts:922-977`; ra
 
 ## 4. Gates And Predicate Variants
 
-Engine anchor: `PredicateKind` is `_shared-types.d.ts:104`; predicate fields are `_shared-types.d.ts:663-745`. `FieldNe` and `Not` are not in the installed v4.9.0 type surface; they are listed below only to prevent accidental invention.
+Engine anchor: `PredicateKind` is `_shared-types.d.ts:104`; predicate fields are `_shared-types.d.ts:663-745`. `FieldNe` and `Not` are not in the installed v4.10.0 type surface; they are listed below only to prevent accidental invention.
 
 | construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
 | --- | --- | --- | --- | --- |
@@ -117,7 +121,7 @@ Engine anchor: `PredicateKind` is `_shared-types.d.ts:104`; predicate fields are
 | Collection membership | `FieldInCollection`, `CollectionSubset`, plus legacy raw `FieldIn` | Membership/subset checks against declared collections. | Schema arrays, source paths. | **AVAILABLE-UNUSED** - no generator descriptor emits these membership predicates yet (`_shared-types.d.ts:719-744`; `src/foundry-program/engine-primitive-registry.ts:116-126`) |
 | Status/event predicates | `AllNodesStatus`, `AllItemsStatus`, `EventEmitted`, `TriggerType` | Agent node status, collection item status, event presence, trigger channel matching. | Modes, channels, agent fabric, confirmation. | `AllItemsStatus` and `TriggerType` **EMITTED** (`src/foundry-program/synthesizer.ts:1632-1637`; foundry spec trigger preconditions at `src/foundry-program/specs.yml:80-85`, `153-165`); `AllNodesStatus`/`EventEmitted` **AVAILABLE-UNUSED** (`src/foundry-program/engine-primitive-registry.ts:119-121`) |
 | Combinators | `All`, `Any`, `Implies` with `subs[]` | Predicate composition. | Guards, preconditions, recovery steers, derived predicates. | **EMITTED** (`src/foundry-program/synthesizer.ts:1024-1032`, `1093-1099`, `3538-3552`, `3686-3718`) |
-| `FieldNe`, `Not` | no installed v4.9.0 declaration shape | Not available in installed engine type surface. | None. | **HELD** - do not emit until engine adds these variants (`_shared-types.d.ts:104`; `src/foundry-program/engine-primitive-registry.ts:137-138`) |
+| `FieldNe`, `Not` | no installed v4.10.0 declaration shape | Not available in installed engine type surface. | None. | **HELD** - do not emit until engine adds these variants (`_shared-types.d.ts:104`; `src/foundry-program/engine-primitive-registry.ts:137-138`) |
 
 ## 5. Action Map And ActionSemantics
 
@@ -172,12 +176,12 @@ Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.
 
 | construct | declaration shape | what it expresses | composes-with | FOUNDRY STATUS |
 | --- | --- | --- | --- | --- |
-| Declarative projection | `projection: {mode: {include?, exclude?}}`; `ViewProfile` for declarative derived views | Mode-local world view and frontend-derived raw values. | Schema, prompts, query policy, evidence requirements, `projectionBuilderMigration`. | `projection` **EMITTED**; `ViewSection[]` **EMITTED via `ProgramEntry.viewProfile`** in Phase B for existing-repo typed result/read leaves, with residual presentation builders tracked through `projectionBuilderMigration`. Top-level YAML `view:` remains deferred for #915/#917 because the v4.9.0 loader takes runtime `viewProfile` at registration (`src/foundry-program/synthesizer.ts`; `src/pgas-new/governed-attach-profile.ts`; `_shared-types.d.ts:5261-5270`, `5699-5729`) |
+| Declarative projection | `projection: {mode: {include?, exclude?}}`; `ViewProfile` for declarative derived views | Mode-local world view and frontend-derived raw values. | Schema, prompts, query policy, evidence requirements, `projectionBuilderMigration`. | `projection` **EMITTED**; `ViewSection[]` **EMITTED via `ProgramEntry.viewProfile`** in Phase B for existing-repo typed result/read leaves, with residual presentation builders tracked through `projectionBuilderMigration`. Top-level YAML `view:` remains deferred for #915/#917 because the loader takes runtime `viewProfile` at registration (`src/foundry-program/synthesizer.ts`; `src/pgas-new/governed-attach-profile.ts`; `_shared-types.d.ts:5261-5270`, `5699-5729`) |
 | Query policy | ProgramEntry `queryPolicy: {allowedWorldQueryPrefixes, mode:"enforce"}` | Runtime policy for inline world queries not included in projection. | Projection/schema prefixes, engine query tool. | **EMITTED** (`src/foundry-program/synthesizer.ts:749`, `810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`, `120-128`) |
 | Delegation channels and policy | Channel `target_spec/result_path/...` plus ProgramEntry `delegationPolicy` | Child session dispatch and deterministic input enrichment. | Delegation action_map, system query continuation, child artifacts. | **EMITTED** (`src/foundry-program/synthesizer.ts:1745-1758`, `1876-1910`, `10188-10239`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`) |
 | Delegation advanced patterns | continue mode, dynamic target arg, strict delegation, generic fan-out | Broader child session orchestration. | Delegation channel fields and policies. | **AVAILABLE-UNUSED / HELD** - current validator rejects continue/dynamic/strict/generic fan-out for v1 (`src/foundry-program/synthesizer.ts:13577-13606`) |
 | Artifact policy | ProgramEntry `artifactPolicy` | Host materialization policy for generated export artifacts. | Export stage descriptors, sync output hooks. | **EMITTED** (`src/foundry-program/synthesizer.ts:434-438`, `810-816`, `10240-10272`; `src/foundry-program/synthesizer/registration-artifacts.ts:31-43`) |
-| Render profile | ProgramEntry `renderProfile` compiled from top-level `render:` | Declarative deliverable shape and renderer profile. | Artifact policy, export surfaces, authored world paths. | **ADOPT-BACKLOG**, Phase C (`_shared-types.d.ts:5310-5508`, `5743-5755`; awareness at `src/foundry-program/engine-primitive-registry.ts:51`) |
+| Render profile | ProgramEntry `renderProfile` built from the render-tier `RenderProfile` structure | Declarative deliverable shape and renderer profile. | Artifact policy, export surfaces, authored world paths, typed stage result sub-paths, `derived_paths`. | **EMITTED** for PDF-report deliverables in Phase C (`_shared-types.d.ts:5310-5508`, `5743-5755`; awareness at `src/foundry-program/engine-primitive-registry.ts:51`) |
 | Reliability and query policies | ProgramEntry `reliabilityPolicy`, `queryPolicy`, and related v4.5 policy interfaces | Declarative retry/round/query/denial/content/risk policy surfaces. | Session reliability, query enforcement, strict purity. | `queryPolicy` **EMITTED** today; broader declarative `policies:` surface and `reliabilityPolicy` are **ADOPT-BACKLOG**, Phase E / blueprint block 11 (`_shared-types.d.ts:3212-3366`, `4768-4801`, `5520-5523`, `5660-5681`; awareness at `src/foundry-program/engine-primitive-registry.ts:55`, `167`) |
 | Feature flags | `features: Feature[]` | Enables feature-gated declarative surfaces. | All advanced spec fields. | **EMITTED** (`src/foundry-program/synthesizer.ts:450-462`) |
 | `pure=false` | `pure: false` | Allows generated programs that need imperative handlers/policies. | Reactions, ProgramEntry callbacks, export stages. | **EMITTED** when export decision-only requires it (`src/foundry-program/synthesizer.ts:478-480`) |
@@ -187,15 +191,15 @@ Engine anchors: projection context and `ProjectionBuilder` are `_shared-types.d.
 | Decision schema | `decision_schema` | Guard-visible, non-author-mutable skill-triage state. | Skill triage, predicates. | **EMITTED** for skill triage (`src/foundry-program/synthesizer.ts:1328-1331`) |
 | Reaction handlers | ProgramEntry `reactionHandlers` | Handler map for declared reaction names. | `reactions`, generated handlers. | **EMITTED** (`src/foundry-program/synthesizer.ts:781-794`, `5247`; registration at `src/foundry-program/synthesizer/registration-artifacts.ts:90-107`) |
 | Sync-out continuation policy | ProgramEntry `syncOutContinuationPolicy` | Continuation policy for registered tool sync outputs. | `tools`, tool channels, runtime continuation. | **EMITTED** for registered tools (`src/foundry-program/synthesizer.ts:810-816`; `src/foundry-program/synthesizer/registration-artifacts.ts:51-57`) |
-| Convention registration helper | `registerProgramByConvention` public helper | Builds `ProgramEntry` from `programs/<name>/` convention. | `ProgramEntry`, generated registration removal, sidecar extraction. | **ADOPT-BACKLOG**, #924 / Phase E-F. v4.9.0 exports the helper (`_shared-types.d.ts:8452`; `plugin.d.ts:149-150`), but this PR keeps generated registrations while adopting runtime `ViewProfile`. |
+| Convention registration helper | `registerProgramByConvention` public helper | Builds `ProgramEntry` from `programs/<name>/` convention. | `ProgramEntry`, generated registration removal, sidecar extraction. | **ADOPT-BACKLOG**, #924 / Phase E-F. v4.9+ exports the helper (`_shared-types.d.ts:8452`; `plugin.d.ts:149-150`), but this PR keeps generated registrations while adopting runtime profiles. |
 
-## Version 4.2.0 Through 4.9.0 Awareness Guard
+## Version 4.2.0 Through 4.10.0 Awareness Guard
 
 The guard added in this PR asserts that:
 
 - `action_map.arg_schema` is present in `ENGINE_DECLARATION_AWARENESS` as `emitted` for PR2.
 - `Specification.no_action_escapes` is present in `ENGINE_DECLARATION_AWARENESS` as `emitted` for PR3.
-- v4.4.0/v4.9.0 additions are acknowledged: emitted runtime `ProgramEntry.viewProfile` for `ViewSection[]` plus deferred in-spec YAML `view:`, and backlog `Specification.render`, `Mode.requires_delegations`, `DelegationMode.conversational`, `Feature.pure_strict`, `Specification.policies`, `EngineCapability.web_search`, `EngineCapability.document_extraction`, and `registerProgramByConvention`.
+- v4.4.0 through v4.10.0 additions are acknowledged: emitted runtime `ProgramEntry.viewProfile` for `ViewSection[]`, emitted runtime `ProgramEntry.renderProfile` for PDF-report deliverables, v4.10 #836 `Always`, `min_of`/`max_of`, `items_where_field_in_collection` join-from filtering, and collection invariant sugar, plus backlog `Mode.requires_delegations`, `DelegationMode.conversational`, `Feature.pure_strict`, `Specification.policies`, `EngineCapability.web_search`, `EngineCapability.document_extraction`, and `registerProgramByConvention`.
 - Every `adopt_backlog`, `available_unused`, and `held` awareness entry has a non-empty note.
 
 See `tests/unit/engine-primitive-registry.test.ts:178-215`.

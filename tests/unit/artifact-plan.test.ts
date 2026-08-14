@@ -105,8 +105,8 @@ describe('artifact planner', () => {
       'src/programs/pgas-new/connectors/web-navigation.ts',
       'src/programs/pgas-new/connectors/persistence.ts',
       'src/programs/pgas-new/connectors/pdf-report.ts',
-      'src/programs/pgas-new/report-data.ts',
     ]));
+    expect(gapPaths).not.toContain('src/programs/pgas-new/report-data.ts');
   });
 
   it('plans existing-repo artifacts from the binding manifest paths', () => {

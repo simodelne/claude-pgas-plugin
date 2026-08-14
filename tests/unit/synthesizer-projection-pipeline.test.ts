@@ -28,7 +28,6 @@ describe('synthesizer projection finalization pipeline', () => {
     expect(parsed.view).toBeUndefined();
     expect(artifact.registration_ts).toContain('const VIEW_PROFILE');
     expect(artifact.registration_ts).toContain('loadSpecWithPatterns(specPath)');
-    expect(artifact.registration_ts).not.toContain('loadSpecWithGeneratedView');
     expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_hourly_total', from: 'fee_modelling.result.hourly_total', label: 'Fee Modelling Hourly Total' }");
     expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_fixed_quote', from: 'fee_modelling.result.fixed_quote', label: 'Fee Modelling Fixed Quote' }");
     expect(artifact.registration_ts).toContain("{ key: 'fee_modelling_currency', from: 'fee_modelling.result.currency', label: 'Fee Modelling Currency' }");
