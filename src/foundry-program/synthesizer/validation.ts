@@ -1,21 +1,29 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { loadProgramByConvention } from '@simodelne/pgas-server/plugin.js';
 import { isRecord } from '../../util/guards.js';
 import { assertConfirmationPairingTerminals } from '../composite-checks.js';
 
 export function validateSynthesizedSpec(specYaml: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-'));
+  const parsed = load(specYaml);
   try {
-    const specPath = join(dir, 'specs.yml');
+    if (!isRecord(parsed) || typeof parsed.name !== 'string' || parsed.name.trim().length === 0) {
+      throw new Error('synthesized spec must declare a non-empty name');
+    }
+    const programDir = join(dir, 'programs', parsed.name);
+    mkdirSync(programDir, { recursive: true });
+    const specPath = join(programDir, 'specs.yml');
     writeFileSync(specPath, specYaml);
-    loadSpecWithPatterns(specPath);
+    loadProgramByConvention(parsed.name, {
+      programsRoot: dir,
+      validationOptions: { blueprint: 'off' },
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  const parsed = load(specYaml);
   assertPreconditionVocabularyAlignment(parsed);
   assertConfirmationPairingTerminals(parsed);
 }

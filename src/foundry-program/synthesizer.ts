@@ -260,6 +260,8 @@ const SOURCE_GROUNDED_EXTRACTORS: readonly SourceGroundedExtractor[] = [
   'figure_refs',
 ] as const;
 
+type GeneratedSmokeTargetKind = 'standalone_repo' | 'existing_repo';
+
 export function synthesizeProgramSpecFromDomain(
   domain: Record<string, unknown>,
   options: SynthesizeProgramSpecOptions = {},
@@ -836,6 +838,26 @@ export function synthesizeProgramSpecFromDomain(
       },
     ]));
   }
+  if ((options.targetKind ?? 'standalone_repo') !== 'existing_repo') {
+    spec.policies = {
+      ...registrationPolicies,
+      ...(registeredTools.length > 0
+        ? {
+            syncOutContinuationPolicy: {
+              channels: registeredTools.map((tool) => `tool:${tool.name}`),
+              maxContinuations: 4,
+            },
+          }
+        : {}),
+      queryPolicy,
+    };
+    if (declarativeRender.profile) {
+      spec.render = declarativeRender.profile;
+    }
+    if (declarativeViewSections.length > 0) {
+      spec.view = declarativeViewSections;
+    }
+  }
   assertNoForbiddenLeadResearchWebVocabulary(spec, slug, stageClassification, domain);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
@@ -874,7 +896,19 @@ export function synthesizeProgramSpecFromDomain(
     handlers_ts: handlersTs,
     handlers_index_ts: renderHandlersIndexBarrelSource(),
     tools_ts: toolsTs,
-    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
+    smoke_test_ts: renderSmokeTestSource(
+      slug,
+      name,
+      entryChannel,
+      stages,
+      transitionActions,
+      completion,
+      reasoningContractsBySlug,
+      confirmationLoops,
+      delegationChildren,
+      documents,
+      options.targetKind ?? 'standalone_repo',
+    ),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     registration_ts: renderRegistrationSource(toPascalCase(slug), {
       ...registrationPolicies,
@@ -5877,6 +5911,9 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
   const reactionExport = options.includeReactionHandlers
     ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
+  const handlerAdapterOverrides = exportActions.length > 0
+    ? `\n\nexport function createHandlerAdapterOverrides() {\n  return {\n    ${tsString(EXPORT_HOOK_CHANNEL)}: createExportHookAdapter(),\n  };\n}`
+    : '\n\nexport function createHandlerAdapterOverrides() {\n  return {};\n}';
   const conformanceHelper = contractActionSources.size > 0
     ? `
 
@@ -6053,7 +6090,7 @@ export const handlers: Record<string, ToolHandler> = {
 ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}${notebookHandlers}
 
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}${documentActionHandlers ? `\n\n${documentActionHandlers}` : ''}
-};${lifecycleIntentHelper}${exportHookAdapter}${reactionExport}${documentHelper}${conformanceHelper}
+};${handlerAdapterOverrides}${lifecycleIntentHelper}${exportHookAdapter}${reactionExport}${documentHelper}${conformanceHelper}
 `;
 }
 
@@ -8410,12 +8447,16 @@ function registerWebSearchTool(registry: ToolRegistry): void {
     : '';
   const registryParamName = registeredTools.length === 0 ? '_registry' : 'registry';
 
+  const registeredToolNames = `[${registeredTools.map((tool) => tsString(tool.name)).join(', ')}] as const`;
+
   return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';${registeredToolImport}
 
 // Native stage actions are declared in specs.yml action_map. This metadata gives
 // implementers one fillable local-tool slot per synthesized stage without adding
 // extra invoke_tool_* actions to the engine topology.
 export const stageActionTools = ${metadata} as const;${lifecycleMetadata}
+
+export const registeredToolNames = ${registeredToolNames};
 
 export function register${toPascalCase(slug)}Tools(${registryParamName}: ToolRegistry): void {
 ${registeredToolRegistrations}
@@ -8634,6 +8675,7 @@ function renderSmokeTestSource(
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
   delegationChildren: DelegationChildDescriptor[] = [],
   documents?: DocumentsDescriptor,
+  targetKind: GeneratedSmokeTargetKind = 'standalone_repo',
 ): string {
   const documentFanOutSmokeChild = documents
     ? delegationChildren.find((child) =>
@@ -8641,7 +8683,7 @@ function renderSmokeTestSource(
       (child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent'))
     : undefined;
   if (documents && documentFanOutSmokeChild) {
-    return renderDocumentFanOutDelegationSmokeTestSource(slug, name, entryChannel, documents, documentFanOutSmokeChild, transitionActions);
+    return renderDocumentFanOutDelegationSmokeTestSource(slug, name, entryChannel, documents, documentFanOutSmokeChild, transitionActions, targetKind);
   }
   const documentIngestReuseSmokeChild = documents
     ? delegationChildren.find((child) =>
@@ -8650,29 +8692,29 @@ function renderSmokeTestSource(
       child.registered_name !== undefined)
     : undefined;
   if (documents && documentIngestReuseSmokeChild) {
-    return renderDocumentUploadReuseDelegationSmokeTestSource(slug, name, entryChannel, documents, documentIngestReuseSmokeChild, transitionActions);
+    return renderDocumentUploadReuseDelegationSmokeTestSource(slug, name, entryChannel, documents, documentIngestReuseSmokeChild, transitionActions, targetKind);
   }
   if (documents) {
-    return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions);
+    return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions, targetKind);
   }
   // Slice B: N distinct static delegation children dispatch + settle sequentially. The
   // single-child renderers below stay byte-identical for exactly one child; only 2+ children
   // route to the multi-child smoke that dispatches + settles EVERY child against its own
   // separately-registered stub program.
   if (delegationChildren.length >= 2) {
-    return renderMultiChildDelegationSmokeTestSource(slug, name, entryChannel, delegationChildren, transitionActions);
+    return renderMultiChildDelegationSmokeTestSource(slug, name, entryChannel, delegationChildren, transitionActions, targetKind);
   }
   const delegationSmokeChild = delegationChildren.find((child) =>
     child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent');
   if (delegationSmokeChild) {
-    return renderDelegationSmokeTestSource(slug, name, entryChannel, delegationSmokeChild, transitionActions);
+    return renderDelegationSmokeTestSource(slug, name, entryChannel, delegationSmokeChild, transitionActions, targetKind);
   }
   const reuseDelegationSmokeChild = delegationChildren.find((child) => child.target_spec && child.registered_name);
   if (reuseDelegationSmokeChild) {
-    return renderReuseDelegationSmokeTestSource(slug, name, entryChannel, reuseDelegationSmokeChild, transitionActions);
+    return renderReuseDelegationSmokeTestSource(slug, name, entryChannel, reuseDelegationSmokeChild, transitionActions, targetKind);
   }
   if (confirmationLoops.length > 0) {
-    return renderConfirmationLoopSmokeTestSource(slug, name, entryChannel, confirmationLoops, completion.collection_lifecycle);
+    return renderConfirmationLoopSmokeTestSource(slug, name, entryChannel, confirmationLoops, completion.collection_lifecycle, targetKind);
   }
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
   const authorPathActions = pathActions.filter((action) => !isExportTransitionAction(action));
@@ -8722,7 +8764,7 @@ ${cannedFieldArgs}
 
   return `import { describe, expect, it } from 'vitest';
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
-import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 
 describe('generated program smoke', () => {
   it('runs ${name} through the deterministic completion path without stub output', async () => {
@@ -8762,6 +8804,169 @@ function smokeTransitionActionUsesWidgetOutput(action: TransitionAction | undefi
   return action?.archetype === 'llm-reasoning' || action?.archetype === 'conversational-hub';
 }
 
+interface SmokeConventionProgramSource {
+  readonly slug: string;
+  readonly delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
+}
+
+function renderSmokeProgramEntryPrelude(
+  programs: SmokeConventionProgramSource[],
+  targetKind: GeneratedSmokeTargetKind,
+): string {
+  if (targetKind === 'existing_repo') {
+    return programs
+      .map(({ slug }) => `import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';`)
+      .join('\n');
+  }
+
+  return `import {
+  createToolRegistry as createSmokeConventionToolRegistry,
+  loadProgramByConvention as loadSmokeProgramByConvention,
+  type ProgramAdapterOverride as SmokeProgramAdapterOverride,
+  type ProgramEntry as SmokeProgramEntry,
+  type ReactionHandler as SmokeReactionHandler,
+  type RegisterProgramByConventionOptions as SmokeRegisterProgramByConventionOptions,
+  type ToolHandler as SmokeToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
+${renderSmokeConventionProgramImports(programs)}
+
+${renderSmokeConventionProgramHelpers(programs)}`;
+}
+
+function renderSmokeConventionProgramImports(programs: readonly SmokeConventionProgramSource[]): string {
+  return programs.flatMap(({ slug }) => {
+    const pascal = toPascalCase(slug);
+    const camel = smokeCamelCase(slug);
+    return [
+      `import { createHandlerAdapterOverrides as create${pascal}HandlerAdapterOverrides, handlers as ${camel}Handlers, reactionHandlers as ${camel}ReactionHandlers } from '../src/programs/${slug}/handlers.js';`,
+      `import { registeredToolNames as ${camel}RegisteredToolNames, register${pascal}Tools as ${camel}RegisterTools } from '../src/programs/${slug}/tools.js';`,
+    ];
+  }).join('\n');
+}
+
+function renderSmokeConventionProgramHelpers(programs: readonly SmokeConventionProgramSource[]): string {
+  const entries = programs.map((program) => {
+    const pascal = toPascalCase(program.slug);
+    const camel = smokeCamelCase(program.slug);
+    const entryOverrides = program.delegationResultPolicy
+      ? `, ${renderSmokeTsValue({ delegationResultPolicy: program.delegationResultPolicy })}`
+      : '';
+    return `function create${pascal}ProgramEntry(): SmokeProgramEntry {
+  return createSmokeConventionProgramEntry(
+    '${program.slug}',
+    ${camel}Handlers,
+    ${camel}ReactionHandlers,
+    ${camel}RegisterTools,
+    ${camel}RegisteredToolNames,
+    create${pascal}HandlerAdapterOverrides${entryOverrides},
+  );
+}`;
+  }).join('\n\n');
+
+  return `const smokeProgramsRoot = decodeURIComponent(new URL('../src', import.meta.url).pathname);
+
+type SmokeToolRegistryInstance = ReturnType<typeof createSmokeConventionToolRegistry>;
+type SmokeRegisterTools = (registry: SmokeToolRegistryInstance) => void;
+type SmokeHandlerAdapterOverrides = () => Record<string, SmokeProgramAdapterOverride>;
+
+${entries}
+
+function createSmokeConventionProgramEntry(
+  name: string,
+  handlers: Record<string, SmokeToolHandler>,
+  reactionHandlers: Map<string, SmokeReactionHandler>,
+  registerTools: SmokeRegisterTools,
+  registeredToolNames: readonly string[],
+  createHandlerAdapterOverrides: SmokeHandlerAdapterOverrides,
+  entryOverrides?: SmokeRegisterProgramByConventionOptions['entryOverrides'],
+): SmokeProgramEntry {
+  const toolRegistry = createSmokeConventionToolRegistry();
+  registerTools(toolRegistry);
+  const loaded = loadSmokeProgramByConvention(name, {
+    programsRoot: smokeProgramsRoot,
+    additionalHandlers: {
+      ...handlers,
+      ...smokeToolHandlerPlaceholders(toolRegistry, registeredToolNames),
+    },
+    reactionHandlers,
+    adapterOptions: {
+      overrides: {
+        ...createHandlerAdapterOverrides(),
+        ...smokeToolAdapterOverrides(toolRegistry, registeredToolNames),
+      },
+    },
+    ...(entryOverrides ? { entryOverrides } : {}),
+  });
+  return { ...loaded.entry, spec: withSmokeConventionDecisionOnlyRegistryPrompts(loaded.entry.spec) };
+}
+
+function smokeToolHandlerPlaceholders(toolRegistry: SmokeToolRegistryInstance, registeredToolNames: readonly string[]): Record<string, SmokeToolHandler> {
+  const placeholders: Record<string, SmokeToolHandler> = {};
+  for (const name of registeredToolNames) {
+    if (!toolRegistry.has(name)) continue;
+    placeholders[\`invoke_tool_\${name}\`] = async () => {
+      throw new Error(\`tool adapter for \${name} was not installed\`);
+    };
+  }
+  return placeholders;
+}
+
+function smokeToolAdapterOverrides(toolRegistry: SmokeToolRegistryInstance, registeredToolNames: readonly string[]): Record<string, SmokeProgramAdapterOverride> {
+  const overrides: Record<string, SmokeProgramAdapterOverride> = {};
+  for (const name of registeredToolNames) {
+    if (toolRegistry.has(name)) {
+      overrides[\`tool:\${name}\`] = toolRegistry.createAdapter(name);
+    }
+  }
+  return overrides;
+}
+
+function withSmokeConventionDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
+}`;
+}
+
+function smokeCamelCase(value: string): string {
+  const pascal = toPascalCase(value);
+  return pascal.length === 0 ? 'program' : `${pascal.charAt(0).toLowerCase()}${pascal.slice(1)}`;
+}
+
+function renderSmokeTsValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(renderSmokeTsValue).join(', ')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entryValue]) => `${key}: ${renderSmokeTsValue(entryValue)}`);
+    return `{ ${entries.join(', ')} }`;
+  }
+  if (typeof value === 'string') {
+    return tsString(value);
+  }
+  return JSON.stringify(value);
+}
+
 function renderDocumentFanOutDelegationSmokeTestSource(
   slug: string,
   name: string,
@@ -8769,6 +8974,7 @@ function renderDocumentFanOutDelegationSmokeTestSource(
   documents: DocumentsDescriptor,
   child: DelegationChildDescriptor,
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const parentPascal = toPascalCase(slug);
   const childSlug = delegationTargetSpec(child);
@@ -8826,8 +9032,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
-import { create${childPascal}ProgramEntry } from '../src/programs/${childSlug}/registration.js';
+${renderSmokeProgramEntryPrelude([
+    { slug },
+    { slug: childSlug, delegationResultPolicy: delegationResultPolicyForChild(child) },
+  ], targetKind)}
 
 describe('generated document fan-out review smoke', () => {
   it('runs five document review delegations through the route for ${name}', async () => {
@@ -9052,6 +9260,7 @@ function renderDocumentUploadReuseDelegationSmokeTestSource(
   documents: DocumentsDescriptor,
   child: DelegationChildDescriptor,
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const parentPascal = toPascalCase(slug);
   const childTargetSpec = delegationTargetSpec(child);
@@ -9174,7 +9383,7 @@ import {
   type ProgramEntry,
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
-import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 
 describe('generated document upload plus manifest reuse delegation smoke', () => {
   it('runs required upload and reused document-ingest delegation through the route for ${name}', async () => {
@@ -9353,6 +9562,22 @@ function documentRefLanded(domain: Record<string, unknown>, fileId: string): boo
   return isRecord(first) && first.fileId === fileId;
 }
 
+function stripConventionSidecarsForRawLoader(source: string): string {
+  const sidecars = new Set(['view', 'render', 'policies', 'capabilities', 'composite', 'notebook']);
+  const lines: string[] = [];
+  let skipping = false;
+  for (const line of source.split(/\\r?\\n/u)) {
+    const topLevel = /^(\\S[^:]*):/u.exec(line);
+    if (topLevel) {
+      skipping = sidecars.has(topLevel[1]);
+      if (skipping) continue;
+    }
+    if (skipping) continue;
+    lines.push(line);
+  }
+  return lines.join('\\n');
+}
+
 function createDocumentIngestStubChildEntry(tempDir: string): ProgramEntry {
   const specPath = join(tempDir, 'document-ingest-stub-specs.yml');
   writeFileSync(specPath, documentIngestStubChildSpec(), 'utf8');
@@ -9442,6 +9667,7 @@ function renderDocumentUploadSmokeTestSource(
   entryChannel: string,
   documents: DocumentsDescriptor,
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const transitionAction = transitionActions.find((action) => action.source === documents.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(documents.stage)}`;
@@ -9480,7 +9706,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 
 describe('generated document upload smoke', () => {
   it('runs synthesized document upload hermetically through the route for ${name}', async () => {
@@ -9721,6 +9947,7 @@ function renderConfirmationLoopSmokeTestSource(
   entryChannel: string,
   loops: ConfirmationLoopDescriptor[],
   lifecycle?: CollectionLifecycleDescriptor,
+  targetKind: GeneratedSmokeTargetKind = 'standalone_repo',
 ): string {
   if (!lifecycle) {
     throw new Error('confirmation-loop smoke requires collection_lifecycle');
@@ -9735,7 +9962,7 @@ function renderConfirmationLoopSmokeTestSource(
   return `import { describe, expect, it } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 import { reactionHandlers } from '../src/programs/${slug}/handlers.js';
 
 describe('generated confirmation-loop smoke', () => {
@@ -10025,6 +10252,7 @@ function synthesizeWorkerChildArtifact(
     ...artifact,
     slug: childSlug,
     name: childName,
+    delegation_result_policy: delegationResultPolicyForChild(child),
     spec_yaml: specYaml,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     registration_ts: renderRegistrationSource(toPascalCase(childSlug), {
@@ -10061,6 +10289,7 @@ function synthesizeResearchAgentChildArtifact(
     ...artifact,
     slug: childSlug,
     name: childName,
+    delegation_result_policy: delegationResultPolicyForChild(child),
     spec_yaml: specYaml,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     contracts_ts: contractsTs,
@@ -10936,6 +11165,7 @@ function renderReuseDelegationSmokeTestSource(
   entryChannel: string,
   child: DelegationChildDescriptor,
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const parentPascal = toPascalCase(slug);
   const childTargetSpec = delegationTargetSpec(child);
@@ -11059,7 +11289,7 @@ import {
   type ProgramEntry,
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
-import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 import { handlers, reactionHandlers } from '../src/programs/${slug}/handlers.js';
 import { register${parentPascal}Tools } from '../src/programs/${slug}/tools.js';
 
@@ -11179,7 +11409,7 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
   const source = readFileSync(sourcePath, 'utf8');
   const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
   const specPath = join(tempDir, 'parent-patched-specs.yml');
-  writeFileSync(specPath, patched, 'utf8');
+  writeFileSync(specPath, stripConventionSidecarsForRawLoader(patched), 'utf8');
   const { spec } = loadSpecWithPatterns(specPath);
   const toolRegistry = createToolRegistry();
   register${parentPascal}Tools(toolRegistry);
@@ -11202,6 +11432,22 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
       return adapters;
     },
   };
+}
+
+function stripConventionSidecarsForRawLoader(source: string): string {
+  const sidecars = new Set(['view', 'render', 'policies', 'capabilities', 'composite', 'notebook']);
+  const lines: string[] = [];
+  let skipping = false;
+  for (const line of source.split(/\\r?\\n/u)) {
+    const topLevel = /^(\\S[^:]*):/u.exec(line);
+    if (topLevel) {
+      skipping = sidecars.has(topLevel[1]);
+      if (skipping) continue;
+    }
+    if (skipping) continue;
+    lines.push(line);
+  }
+  return lines.join('\\n');
 }
 
 function createManifestReuseStubChildEntry(tempDir: string): ProgramEntry {
@@ -11306,6 +11552,7 @@ function renderMultiChildDelegationSmokeTestSource(
   entryChannel: string,
   children: DelegationChildDescriptor[],
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const parentPascal = toPascalCase(slug);
   const childSpecs = children.map((child, index) => {
@@ -11379,7 +11626,7 @@ import {
   type ProgramEntry,
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
-import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([{ slug }], targetKind)}
 
 describe('generated multi-child delegation smoke', () => {
   it('dispatches and settles all ${String(childSpecs.length)} delegation children hermetically through the route for ${name}', async () => {
@@ -11629,6 +11876,7 @@ function renderDelegationSmokeTestSource(
   entryChannel: string,
   child: DelegationChildDescriptor,
   transitionActions: TransitionAction[],
+  targetKind: GeneratedSmokeTargetKind,
 ): string {
   const childSlug = delegationTargetSpec(child);
   const parentPascal = toPascalCase(slug);
@@ -11706,10 +11954,12 @@ import {
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
-import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+${renderSmokeProgramEntryPrelude([
+    { slug },
+    { slug: childSlug, delegationResultPolicy: delegationResultPolicyForChild(child) },
+  ], targetKind)}
 import { handlers, reactionHandlers } from '../src/programs/${slug}/handlers.js';
 import { register${parentPascal}Tools } from '../src/programs/${slug}/tools.js';
-import { create${childPascal}ProgramEntry } from '../src/programs/${childSlug}/registration.js';
 
 describe('generated delegation smoke', () => {
   it('runs synthesized delegation hermetically through the route for ${name}', async () => {
@@ -11810,14 +12060,29 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
   }
 }
 
+function stripConventionSidecarsForRawLoader(source: string): string {
+  const sidecars = new Set(['view', 'render', 'policies', 'capabilities', 'composite', 'notebook']);
+  const lines: string[] = [];
+  let skipping = false;
+  for (const line of source.split(/\\r?\\n/u)) {
+    const topLevel = /^(\\S[^:]*):/u.exec(line);
+    if (topLevel) {
+      skipping = sidecars.has(topLevel[1]);
+      if (skipping) continue;
+    }
+    if (skipping) continue;
+    lines.push(line);
+  }
+  return lines.join('\\n');
+}
+
 function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): ProgramEntry {
   const sourcePath = decodeURIComponent(new URL('../src/programs/${slug}/specs.yml', import.meta.url).pathname);
   const source = readFileSync(sourcePath, 'utf8');
   const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
   const specPath = join(tempDir, 'parent-patched-specs.yml');
-  writeFileSync(specPath, patched, 'utf8');
-  const { spec: loadedSpec } = loadSpecWithPatterns(specPath);
-  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);
+  writeFileSync(specPath, stripConventionSidecarsForRawLoader(patched), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
   const toolRegistry = createToolRegistry();
   register${parentPascal}Tools(toolRegistry);
   return {
@@ -11839,31 +12104,6 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
       return adapters;
     },
   };
-}
-
-function withDecisionOnlyRegistryPrompts<T extends {
-  modes?: Map<string, { decisionOnly?: boolean }>;
-  prompts?: Map<string, string>;
-}>(spec: T): T {
-  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
-    return spec;
-  }
-  const prompts = new Map(spec.prompts);
-  for (const [modeName, mode] of spec.modes) {
-    if (mode.decisionOnly === true && !prompts.has(modeName)) {
-      prompts.set(modeName, 'Decision-only auto-transition mode.');
-    }
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(spec);
-  delete descriptors.prompts;
-  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
-  Object.defineProperties(clone, descriptors);
-  Object.defineProperty(clone, 'prompts', {
-    value: prompts,
-    enumerable: true,
-    configurable: true,
-  });
-  return clone;
 }
 
 async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {

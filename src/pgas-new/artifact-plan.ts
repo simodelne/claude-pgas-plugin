@@ -140,10 +140,6 @@ export function createStandaloneArtifactPlan(
       artifact('spec', `src/programs/${slug}/specs.yml`, 'Declare PGAS modes, governance, notebook, and control_plane.', 'branch_write', [
         'spec-load',
       ]),
-      artifact('registration', `src/programs/${slug}/registration.ts`, 'Register the PGAS program using public plugin.js helpers.', 'branch_write', [
-        'typecheck',
-        'program-deterministic',
-      ]),
       ...generatedDomainArtifacts(`src/programs/${slug}`, stageSlugs),
       artifact('handler', `src/programs/${slug}/handlers.ts`, 'Implement stubbed action handlers and attachment points.', 'branch_write', [
         'program-deterministic',

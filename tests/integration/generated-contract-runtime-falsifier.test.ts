@@ -1,7 +1,6 @@
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
@@ -12,6 +11,7 @@ import {
 } from '../../src/foundry-program/reasoning-contract.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 
 interface ParsedSpec {
   action_map: Record<string, { channel?: string }>;
@@ -200,13 +200,7 @@ function reviewContract(): ReasoningStageContract {
 }
 
 async function importProgramEntry(targetDir: string): Promise<ProgramEntry> {
-  const module = await import(pathToFileURL(join(targetDir, 'src/programs/contract-runtime/registration.ts')).href) as Record<string, unknown>;
-  const createEntry = Object.values(module).find((value): value is () => ProgramEntry =>
-    typeof value === 'function' && /^create[A-Z].*ProgramEntry$/u.test(value.name));
-  if (!createEntry) {
-    throw new Error(`generated registration did not export a create*ProgramEntry function: ${Object.keys(module).join(', ')}`);
-  }
-  return createEntry();
+  return loadRenderedGeneratedProgramEntry(targetDir, 'contract-runtime');
 }
 
 function effect(name: string, payload: Record<string, unknown>, channel: string): TestHarnessAuthorResponse {

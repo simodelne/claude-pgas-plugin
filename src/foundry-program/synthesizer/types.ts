@@ -197,6 +197,7 @@ export interface SynthesizedSpec {
 export interface SynthesizedChildArtifact extends Omit<SynthesizedSpec, 'child_artifacts' | 'synthesis_context'> {
   slug: string;
   name: string;
+  delegation_result_policy?: { fields: Array<{ path: string; key: string }> };
   synthesis_context: SynthesisContext;
 }
 

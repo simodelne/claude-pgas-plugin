@@ -51,3 +51,7 @@ export const handlers: Record<string, ToolHandler> = {
 // The generated scaffold has no foundry-driven reactions by default. Consumer
 // programs can add reactions by populating this map.
 export const reactionHandlers: Map<string, ReactionHandler> = new Map();
+
+export function createHandlerAdapterOverrides() {
+  return {};
+}

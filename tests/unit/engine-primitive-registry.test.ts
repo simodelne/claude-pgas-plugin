@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v4.10.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v4.12.3 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -218,7 +218,19 @@ describe('engine-primitive-registry', () => {
       status: 'available_unused',
     });
     expect(awarenessByConstruct.get('Specification.policies')).toMatchObject({
-      status: 'adopt_backlog',
+      status: 'emitted',
+    });
+    expect(awarenessByConstruct.get('Specification.import')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('SpecWiringValidationOptions.blueprint')).toMatchObject({
+      status: 'emitted',
+    });
+    expect(awarenessByConstruct.get('ObjectFanOut')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('PGAS-L.collection')).toMatchObject({
+      status: 'available_unused',
     });
     expect(awarenessByConstruct.get('EngineCapability.web_search')).toMatchObject({
       status: 'adopt_backlog',
@@ -227,7 +239,7 @@ describe('engine-primitive-registry', () => {
       status: 'adopt_backlog',
     });
     expect(awarenessByConstruct.get('registerProgramByConvention')).toMatchObject({
-      status: 'adopt_backlog',
+      status: 'emitted',
     });
   });
 

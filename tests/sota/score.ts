@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
 import { synthesizeDomainLogic, type DomainSynthesisOptions } from '../../src/foundry-program/domain-synthesis.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
 import { findExecutedPathStubMarkers } from '../../src/pgas-new/verify.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 import { loadOracle, type SotaBenchmark } from './harness.js';
 import type { SotaBenchmarkInput, SotaFunctionalActual, SotaStageActual } from './oracle-types.js';
 
@@ -338,17 +338,11 @@ async function runFixtureThroughProgram(
   input: SotaBenchmarkInput,
 ): Promise<SotaFunctionalActual> {
   const slug = String(benchmark.mandate['program.slug']);
-  const exportName = `create${toPascalCase(slug)}ProgramEntry`;
-  const registrationPath = join(targetDir, 'src/programs', slug, 'registration.ts');
-  const registration = await import(pathToFileURL(registrationPath).href) as Record<string, unknown>;
-  const createEntry = registration[exportName];
-  if (typeof createEntry !== 'function') {
-    throw new Error(`generated registration missing ${exportName}`);
-  }
+  const entry = await loadRenderedGeneratedProgramEntry(targetDir, slug);
 
   const actions = pathActionsFor(benchmark);
   let callIndex = 0;
-  const harness = await createTestHarness(createEntry(), {
+  const harness = await createTestHarness(entry, {
     programName: slug,
     defaultChannel: benchmark.meta.expected_topology.entry_channel,
     author: (() => {
@@ -637,14 +631,6 @@ function excerpt(value: string): string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function toPascalCase(value: string): string {
-  return value
-    .split(/[^a-zA-Z0-9]+/u)
-    .filter(Boolean)
-    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
-    .join('');
 }
 
 function renderScorecardMarkdown(scorecard: SotaScorecard): string {

@@ -65,38 +65,8 @@ export function renderRegistrationSource(
     : '';
   const viewSupport = renderGeneratedViewSupport(options.viewSections ?? []);
   const renderSupport = renderGeneratedRenderSupport(options.renderProfile);
-  const specLoadSnippet = options.exportHookChannel
-    ? `  const { spec: loadedSpec } = ${viewSupport.loader}(specPath);\n  const spec = withDecisionOnlyRegistryPrompts(loadedSpec);\n`
-    : `  const { spec } = ${viewSupport.loader}(specPath);\n`;
-  const decisionOnlyRegistryPromptHelper = options.exportHookChannel
-    ? `
-
-function withDecisionOnlyRegistryPrompts<T extends {
-  modes?: Map<string, { decisionOnly?: boolean }>;
-  prompts?: Map<string, string>;
-}>(spec: T): T {
-  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
-    return spec;
-  }
-  const prompts = new Map(spec.prompts);
-  for (const [modeName, mode] of spec.modes) {
-    if (mode.decisionOnly === true && !prompts.has(modeName)) {
-      prompts.set(modeName, 'Decision-only auto-transition mode.');
-    }
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(spec);
-  delete descriptors.prompts;
-  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
-  Object.defineProperties(clone, descriptors);
-  Object.defineProperty(clone, 'prompts', {
-    value: prompts,
-    enumerable: true,
-    configurable: true,
-  });
-  return clone;
-}
-`
-    : '';
+  const specLoadSnippet = `  const { spec } = ${viewSupport.loader}(specPath);\n`;
+  const decisionOnlyRegistryPromptHelper = '';
   return `import {
   createProgramAdapters,
   createToolRegistry,

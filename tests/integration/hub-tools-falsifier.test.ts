@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
@@ -17,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { synthesizeProgramSpecFromDomain, type SynthesizedSpec } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 import { loadGeneratedReactionHandlers, loadGeneratedToolRegistry } from '../unit/generated-handlers-loader.js';
 
 const PROGRAM_SLUG = 'hub-tools-falsifier';
@@ -121,8 +121,10 @@ describe('hub ad-hoc tools falsifier', () => {
       linkRootNodeModules(targetDir);
 
       const parent = await importProgramEntry(targetDir, PROGRAM_SLUG);
-      const research = await importProgramEntry(targetDir, 'research');
-      const review = await importProgramEntry(targetDir, 'review');
+      const researchArtifact = childArtifacts.find((child) => child.slug === 'research');
+      const reviewArtifact = childArtifacts.find((child) => child.slug === 'review');
+      const research = await importProgramEntry(targetDir, 'research', researchArtifact?.delegation_result_policy);
+      const review = await importProgramEntry(targetDir, 'review', reviewArtifact?.delegation_result_policy);
       const server = await createPgasServer({
         programs: [
           { name: PROGRAM_SLUG, entry: parent },
@@ -389,14 +391,14 @@ function promptText(messages: ConversationMessage[]): string {
     .join('\n');
 }
 
-async function importProgramEntry(targetDir: string, slug: string): Promise<ProgramEntry> {
-  const module = await import(pathToFileURL(join(targetDir, `src/programs/${slug}/registration.ts`)).href) as Record<string, unknown>;
-  const createEntry = Object.values(module).find((value): value is () => ProgramEntry =>
-    typeof value === 'function' && /^create[A-Z].*ProgramEntry$/u.test(value.name));
-  if (!createEntry) {
-    throw new Error(`generated registration for ${slug} did not export a create*ProgramEntry function: ${Object.keys(module).join(', ')}`);
-  }
-  return createEntry();
+async function importProgramEntry(
+  targetDir: string,
+  slug: string,
+  delegationResultPolicy?: { fields: Array<{ path: string; key: string }> },
+): Promise<ProgramEntry> {
+  return loadRenderedGeneratedProgramEntry(targetDir, slug, {
+    entryOverrides: delegationResultPolicy ? { delegationResultPolicy } : undefined,
+  });
 }
 
 async function readRouteState(client: PgasClient, sessionId: string): Promise<RouteState> {

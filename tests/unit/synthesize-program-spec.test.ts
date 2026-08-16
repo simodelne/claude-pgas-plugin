@@ -21,6 +21,7 @@ import {
   clearSynthesizedArtifact,
   getSynthesizedArtifact,
 } from '../../src/foundry-program/synthesizer-store.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -1298,7 +1299,7 @@ function generatedProgramEntry(artifact: SynthesizedSpec): ProgramEntry {
 function expectGeneratedHandlersToWire(specYaml: string, handlersSource: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-wire-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   const spec = loadSpecWithPatterns(specPath).spec;
   rmSync(dir, { recursive: true, force: true });
   expect(() => validateSpecWiring(spec, handlerMapFromSource(handlersSource))).not.toThrow();
@@ -1316,7 +1317,7 @@ function effect(name: string, payload: Record<string, unknown>, channel: string)
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-load-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   tempSpecDirs.push(dir);
   if (!tempSpecCleanupRegistered) {
     tempSpecCleanupRegistered = true;

@@ -11,6 +11,7 @@ import {
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 import { loadGeneratedReactionHandlers } from './generated-handlers-loader.js';
 
 const baseDomain = {
@@ -445,12 +446,12 @@ describe('collection_lifecycle descriptor synthesis', () => {
 
   it('keeps no-descriptor generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '53682309452bf3dc5cdeb981b5f23d8d394a9b8b885a36553e3054045b969991',
+      spec_yaml: '522499d2381a34e83e005a3970226ae63dddedea8b0dca41b395ea9ff6d374d7',
       contracts_ts: '9cf1c34fb09d664aef1bbb2b9cf31cb54a6e2943c81007cd561d0975dd2d43af',
-      handlers_ts: '3a199dedfb60608b43be6403ca002ed6d79a4fedc7cfa0ab27c02c0777eceab7',
+      handlers_ts: '14c54893ab1536af91ff364a5d1c74b58980b75e0a4377a2df8a714972f4b176',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
-      tools_ts: '33ddf30cb9b4787506ba6e9b332fb570e3dfa185470c000dbd429083e0630e7d',
-      smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
+      tools_ts: '3ed1f4169d371fa7d97653b2e0db141cb3898a8a69238c71e0d74ef3bcddf72e',
+      smoke_test_ts: '70f7451e5692c7c3c2723f90c08aabb99c06c9de67ff65cbdf14b71888b2750c',
     });
   });
 
@@ -470,12 +471,12 @@ describe('collection_lifecycle descriptor synthesis', () => {
     };
 
     expect(hashArtifact(synthesizeProgramSpecFromDomain(domainWithLifecycle(noLlmLifecycle)))).toEqual({
-      spec_yaml: '00b59a8faec5da288fb7e8aecb27136b302d8f550580bc2fc9181adc5a2430a2',
+      spec_yaml: '34639f7b2913cffdae1f3dd319d0c80b31075a1ed97633a544e82a9ab3261265',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
-      handlers_ts: '93389854076edd1764904f23b10dc3984cddec466b98c16c773e37f3eb954314',
+      handlers_ts: '9ba01879db03cd3706df3c1c5d053448f6ec54ed2ff305f894ef8d13d96b2433',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
-      tools_ts: 'ba348055c634de2e2f58dd88a696d53614266b13c29ed03a9568cf3a3545bfe7',
-      smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
+      tools_ts: '415ec26b27484070f867c13177d76e403a6ad49ba01e4b521c7d939b546f1d87',
+      smoke_test_ts: '70f7451e5692c7c3c2723f90c08aabb99c06c9de67ff65cbdf14b71888b2750c',
     });
   });
 });
@@ -588,7 +589,7 @@ function clone<T>(value: T): T {
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-lifecycle-load-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   return specPath;
 }

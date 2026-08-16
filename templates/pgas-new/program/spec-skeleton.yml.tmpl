@@ -258,3 +258,26 @@ control_plane:
         - op: render_help
       presentation:
         priority: secondary
+
+policies:
+  queryPolicy:
+    mode: enforce
+    allowedWorldQueryPrefixes:
+      - inputs.user_text
+      - inputs.query_result.kind
+      - inputs.query_result.value_json
+      - inputs.query_meta.source_path
+      - inputs.query_meta.source_channel
+      - inputs.query_meta.continuation_round
+      - inputs.query_meta.scope_redirect
+      - inputs.query_meta.message
+      - inputs.mode_entry
+      - inputs.mode_entry.mode
+      - inputs.mode_entry.from_mode
+      - inputs.mode_entry.entry_round
+      - inputs.domain_context
+      - governance.round_counter
+      - work.started
+      - work.example_ready
+      - work.example_result_json
+      - work.example_items_json

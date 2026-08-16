@@ -9,6 +9,7 @@ import {
   clearSynthesizedArtifact,
   getSynthesizedArtifact,
 } from '../../src/foundry-program/synthesizer-store.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 
 // The frozen v1 specs at docs/graduation-evidence/<name>/specs.yml.frozen
 // were produced by the legacy v1 template path which predates the FM1-FM5
@@ -392,7 +393,7 @@ function isSchemaDeclared(path: string, schemaPaths: string[]): boolean {
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synthesis-regression-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   return specPath;
 }

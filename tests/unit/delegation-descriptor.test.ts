@@ -531,6 +531,11 @@ describe('delegation children descriptor synthesis gate', () => {
     const parsed = load(artifact.spec_yaml) as ParsedDelegationSpec;
 
     expect(parsed.channels.research_call.target_spec).toBe('research');
+    expect(parsed.policies.delegationPolicy.allowedTargetPrograms).toEqual(['research']);
+    expect(parsed.policies.delegationPolicy.inputEnrichment).toEqual(expect.arrayContaining([
+      { source: 'intake.summary', target: 'request.topic' },
+      { source: 'inputs.initial_user_text', target: 'domain_context.original_request' },
+    ]));
     expect(artifact.smoke_test_ts).toContain('generated delegation smoke');
     expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
 
@@ -602,6 +607,12 @@ interface ParsedDelegationSpec {
   prompts: Record<string, string>;
   guidance: Record<string, string[]>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+  policies: {
+    delegationPolicy: {
+      allowedTargetPrograms: string[];
+      inputEnrichment: Array<{ source: string; target: string; targetProgram?: string }>;
+    };
+  };
   action_map: Record<string, {
     channel?: string;
     result_path?: string;

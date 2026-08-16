@@ -1,6 +1,81 @@
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import {
+  createToolRegistry,
+  loadProgramByConvention,
+  type ProgramAdapterOverride,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
 import { resolveAuthorDrivers } from './author-driver.js';
-import { create{{PASCAL_NAME}}ProgramEntry } from './programs/{{SLUG}}/registration.js';
+import { createHandlerAdapterOverrides, handlers, reactionHandlers } from './programs/{{SLUG}}/handlers.js';
+import { registeredToolNames, register{{PASCAL_NAME}}Tools } from './programs/{{SLUG}}/tools.js';
+
+const programsRoot = decodeURIComponent(new URL('.', import.meta.url).pathname);
+
+function create{{PASCAL_NAME}}ProgramEntry() {
+  const toolRegistry = createToolRegistry();
+  register{{PASCAL_NAME}}Tools(toolRegistry);
+  const loaded = loadProgramByConvention('{{SLUG}}', {
+    programsRoot,
+    additionalHandlers: {
+      ...handlers,
+      ...toolHandlerPlaceholders(toolRegistry),
+    },
+    reactionHandlers,
+    adapterOptions: {
+      overrides: {
+        ...createHandlerAdapterOverrides(),
+        ...toolAdapterOverrides(toolRegistry),
+      },
+    },
+  });
+  return { ...loaded.entry, spec: withDecisionOnlyRegistryPrompts(loaded.entry.spec) };
+}
+
+function toolHandlerPlaceholders(toolRegistry: ReturnType<typeof createToolRegistry>): Record<string, ToolHandler> {
+  const placeholders: Record<string, ToolHandler> = {};
+  for (const name of registeredToolNames) {
+    if (!toolRegistry.has(name)) continue;
+    placeholders[`invoke_tool_${name}`] = async () => {
+      throw new Error(`tool adapter for ${name} was not installed`);
+    };
+  }
+  return placeholders;
+}
+
+function toolAdapterOverrides(toolRegistry: ReturnType<typeof createToolRegistry>): Record<string, ProgramAdapterOverride> {
+  const overrides: Record<string, ProgramAdapterOverride> = {};
+  for (const name of registeredToolNames) {
+    if (toolRegistry.has(name)) {
+      overrides[`tool:${name}`] = toolRegistry.createAdapter(name);
+    }
+  }
+  return overrides;
+}
+
+function withDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
+}
 
 // Opt-in unified native-tools author driver (PGAS_AUTHOR_DRIVER=unified).
 // Default (env unset): `drivers` is undefined, no `drivers` key is passed,

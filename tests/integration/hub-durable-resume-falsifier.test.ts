@@ -1,7 +1,6 @@
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
@@ -10,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 import { startRouteHarness } from './foundry-test-utils.js';
 
 const PROGRAM_SLUG = 'hub-durable-resume-falsifier';
@@ -332,13 +332,7 @@ function modeOf(envelope: unknown): string | null {
 }
 
 async function importProgramEntry(targetDir: string): Promise<ProgramEntry> {
-  const module = await import(pathToFileURL(join(targetDir, `src/programs/${PROGRAM_SLUG}/registration.ts`)).href) as Record<string, unknown>;
-  const createEntry = Object.values(module).find((value): value is () => ProgramEntry =>
-    typeof value === 'function' && /^create[A-Z].*ProgramEntry$/u.test(value.name));
-  if (!createEntry) {
-    throw new Error(`generated registration did not export a create*ProgramEntry function: ${Object.keys(module).join(', ')}`);
-  }
-  return createEntry();
+  return loadRenderedGeneratedProgramEntry(targetDir, PROGRAM_SLUG);
 }
 
 function linkRootNodeModules(targetDir: string): void {

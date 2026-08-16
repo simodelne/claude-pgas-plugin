@@ -129,6 +129,7 @@ interface SynthesizedChildSourceInput {
   name: string;
   spec_yaml: string;
   registration_ts?: string;
+  delegation_result_policy?: DelegationResultPolicyInput;
   contracts_ts: string;
   handlers_ts: string;
   handlers_index_ts: string;
@@ -140,6 +141,11 @@ interface SynthesizedChildSourceInput {
 interface SynthesizedChildSources extends SynthesizedSources {
   slug: string;
   name: string;
+  delegationResultPolicy?: DelegationResultPolicyInput;
+}
+
+interface DelegationResultPolicyInput {
+  fields: Array<{ path: string; key: string }>;
 }
 
 interface ResolvedSynthesizedSources extends SynthesizedSources {
@@ -167,7 +173,6 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['NAME', 'SLUG']),
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
   'src/programs/{{SLUG}}/specs.yml': spec('program/spec-skeleton.yml.tmpl', ['NAME', 'SLUG']),
-  'src/programs/{{SLUG}}/registration.ts': spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']),
   'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers-skeleton.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/index.ts': spec('program/handlers-index.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/_resolver.ts': spec('program/handlers-resolver.ts.tmpl', []),
@@ -567,10 +572,10 @@ function templateForStandaloneArtifact(
     return inlineTemplate(renderCapabilityGapGraduationAudit(slug, synthesizedSources.capabilityGaps));
   }
   if (artifact.path === 'src/server.ts' && synthesizedSources.childArtifacts.length > 0) {
-    return inlineTemplate(renderMultiProgramServerSource(slug, synthesizedSources.childArtifacts.map((child) => child.slug)));
+    return inlineTemplate(renderMultiProgramServerSource(slug, synthesizedSources.childArtifacts));
   }
   if (artifact.path === 'tests/program-deterministic.test.ts' && synthesizedSources.childArtifacts.length > 0) {
-    return inlineTemplate(renderMultiProgramDeterministicTestSource(slug, synthesizedSources.childArtifacts.map((child) => child.slug)));
+    return inlineTemplate(renderMultiProgramDeterministicTestSource(slug, synthesizedSources.childArtifacts));
   }
   const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSources);
   if (synthesizedTemplate) {
@@ -605,9 +610,6 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   }
   if (path === `src/programs/${slug}/specs.yml`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
-  }
-  if (path === `src/programs/${slug}/registration.ts`) {
-    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/registration.ts'];
   }
   if (path === `src/programs/${slug}/handlers.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
@@ -1005,10 +1007,7 @@ function templateForSynthesizedArtifact(
     if (selected.registrationTs) {
       return inlineTemplate(selected.registrationTs);
     }
-    if (artifact.path !== `src/programs/${selected.slug}/registration.ts`) {
-      return inlineTemplate(renderAttachedRegistrationSource(selected.slug, selected.viewSections ?? []));
-    }
-    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
+    return inlineTemplate(renderAttachedRegistrationSource(selected.slug, selected.viewSections ?? []));
   }
   if (artifact.path.endsWith(`/${selected.slug}/projection.ts`) && selected.projectionTs) {
     return inlineTemplate(selected.projectionTs);
@@ -1104,9 +1103,6 @@ function childProgramArtifacts(child: SynthesizedChildSources): PlannedArtifact[
     plannedArtifact('spec', `src/programs/${slug}/specs.yml`, 'Declare synthesized delegated child PGAS program spec.', 'branch_write', [
       'spec-load',
     ]),
-    plannedArtifact('registration', `src/programs/${slug}/registration.ts`, 'Register synthesized delegated child program using public plugin.js helpers.', 'branch_write', [
-      'typecheck',
-    ]),
     ...(stageSlugs.length > 0
       ? [
           plannedArtifact('contract', `src/programs/${slug}/contracts.ts`, 'Declare delegated child stage contracts.', 'domain_synthesis', [
@@ -1193,18 +1189,149 @@ ${gaps.map((gap) => `- ${gap.capability} (${gap.stage}): ${gap.message}`).join('
 `;
 }
 
-function renderMultiProgramServerSource(primarySlug: string, childSlugs: string[]): string {
-  const imports = [
-    `import { create${toPascalCase(primarySlug)}ProgramEntry } from './programs/${primarySlug}/registration.js';`,
-    ...childSlugs.map((slug) => `import { create${toPascalCase(slug)}ProgramEntry } from './programs/${slug}/registration.js';`),
-  ].join('\n');
-  const programs = [
-    `{ name: '${primarySlug}', entry: create${toPascalCase(primarySlug)}ProgramEntry() }`,
-    ...childSlugs.map((slug) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`),
-  ].join(',\n    ');
+interface ConventionProgramSource {
+  slug: string;
+  delegationResultPolicy?: DelegationResultPolicyInput;
+}
+
+function renderConventionProgramImports(programs: ConventionProgramSource[], programImportRoot: string): string {
+  return programs.flatMap(({ slug }) => {
+    const pascal = toPascalCase(slug);
+    const camel = toCamelCase(slug);
+    return [
+      `import { createHandlerAdapterOverrides as create${pascal}HandlerAdapterOverrides, handlers as ${camel}Handlers, reactionHandlers as ${camel}ReactionHandlers } from '${programImportRoot}/${slug}/handlers.js';`,
+      `import { registeredToolNames as ${camel}RegisteredToolNames, register${pascal}Tools } from '${programImportRoot}/${slug}/tools.js';`,
+    ];
+  }).join('\n');
+}
+
+function renderConventionProgramHelpers(programs: ConventionProgramSource[], programsRootExpression: string): string {
+  const entryFactories = programs.map((program) => {
+    const pascal = toPascalCase(program.slug);
+    const camel = toCamelCase(program.slug);
+    const entryOverrides = program.delegationResultPolicy
+      ? `, ${renderTsValue({ delegationResultPolicy: program.delegationResultPolicy })}`
+      : '';
+    return `function create${pascal}ProgramEntry(): ProgramEntry {
+  return createConventionProgramEntry(
+    '${program.slug}',
+    ${camel}Handlers,
+    ${camel}ReactionHandlers,
+    register${pascal}Tools,
+    ${camel}RegisteredToolNames,
+    create${pascal}HandlerAdapterOverrides${entryOverrides},
+  );
+}`;
+  }).join('\n\n');
+
+  return `const programsRoot = ${programsRootExpression};
+
+type ToolRegistryInstance = ReturnType<typeof createToolRegistry>;
+type RegisterTools = (registry: ToolRegistryInstance) => void;
+type HandlerAdapterOverrides = () => Record<string, ProgramAdapterOverride>;
+
+${entryFactories}
+
+function createConventionProgramEntry(
+  name: string,
+  handlers: Record<string, ToolHandler>,
+  reactionHandlers: Map<string, ReactionHandler>,
+  registerTools: RegisterTools,
+  registeredToolNames: readonly string[],
+  createHandlerAdapterOverrides: HandlerAdapterOverrides,
+  entryOverrides?: RegisterProgramByConventionOptions['entryOverrides'],
+): ProgramEntry {
+  const toolRegistry = createToolRegistry();
+  registerTools(toolRegistry);
+  const loaded = loadProgramByConvention(name, {
+    programsRoot,
+    additionalHandlers: {
+      ...handlers,
+      ...toolHandlerPlaceholders(toolRegistry, registeredToolNames),
+    },
+    reactionHandlers,
+    adapterOptions: {
+      overrides: {
+        ...createHandlerAdapterOverrides(),
+        ...toolAdapterOverrides(toolRegistry, registeredToolNames),
+      },
+    },
+    ...(entryOverrides ? { entryOverrides } : {}),
+  });
+  return { ...loaded.entry, spec: withDecisionOnlyRegistryPrompts(loaded.entry.spec) };
+}
+
+function toolHandlerPlaceholders(toolRegistry: ToolRegistryInstance, registeredToolNames: readonly string[]): Record<string, ToolHandler> {
+  const placeholders: Record<string, ToolHandler> = {};
+  for (const name of registeredToolNames) {
+    if (!toolRegistry.has(name)) continue;
+    placeholders[\`invoke_tool_\${name}\`] = async () => {
+      throw new Error(\`tool adapter for \${name} was not installed\`);
+    };
+  }
+  return placeholders;
+}
+
+function toolAdapterOverrides(toolRegistry: ToolRegistryInstance, registeredToolNames: readonly string[]): Record<string, ProgramAdapterOverride> {
+  const overrides: Record<string, ProgramAdapterOverride> = {};
+  for (const name of registeredToolNames) {
+    if (toolRegistry.has(name)) {
+      overrides[\`tool:\${name}\`] = toolRegistry.createAdapter(name);
+    }
+  }
+  return overrides;
+}
+
+function withDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
+}`;
+}
+
+function renderMultiProgramServerSource(primarySlug: string, children: SynthesizedChildSources[]): string {
+  const programSources = [
+    { slug: primarySlug },
+    ...children.map((child) => ({ slug: child.slug, delegationResultPolicy: child.delegationResultPolicy })),
+  ];
+  const imports = renderConventionProgramImports(programSources, './programs');
+  const helpers = renderConventionProgramHelpers(programSources, "decodeURIComponent(new URL('.', import.meta.url).pathname)");
+  const programs = programSources
+    .map(({ slug }) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`)
+    .join(',\n    ');
   return `import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import {
+  createToolRegistry,
+  loadProgramByConvention,
+  type ProgramAdapterOverride,
+  type ProgramEntry,
+  type ReactionHandler,
+  type RegisterProgramByConventionOptions,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
 import { resolveAuthorDrivers } from './author-driver.js';
 ${imports}
+
+${helpers}
 
 // Opt-in unified native-tools author driver (PGAS_AUTHOR_DRIVER=unified).
 // Default (env unset): \`drivers\` is undefined, no \`drivers\` key is passed,
@@ -1223,20 +1350,32 @@ await server.start();
 `;
 }
 
-function renderMultiProgramDeterministicTestSource(primarySlug: string, childSlugs: string[]): string {
-  const imports = [
-    `import { create${toPascalCase(primarySlug)}ProgramEntry } from '../src/programs/${primarySlug}/registration.js';`,
-    ...childSlugs.map((slug) => `import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';`),
-  ].join('\n');
-  const programs = [
-    `{ name: '${primarySlug}', entry: create${toPascalCase(primarySlug)}ProgramEntry() }`,
-    ...childSlugs.map((slug) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`),
-  ].join(',\n    ');
+function renderMultiProgramDeterministicTestSource(primarySlug: string, children: SynthesizedChildSources[]): string {
+  const programSources = [
+    { slug: primarySlug },
+    ...children.map((child) => ({ slug: child.slug, delegationResultPolicy: child.delegationResultPolicy })),
+  ];
+  const imports = renderConventionProgramImports(programSources, '../src/programs');
+  const helpers = renderConventionProgramHelpers(programSources, "decodeURIComponent(new URL('../src', import.meta.url).pathname)");
+  const programs = programSources
+    .map(({ slug }) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`)
+    .join(',\n      ');
   return `import { describe, expect, it } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import type { ProgramEntry, Specification } from '@simodelne/pgas-server/plugin.js';
+import {
+  createToolRegistry,
+  loadProgramByConvention,
+  type ProgramAdapterOverride,
+  type ProgramEntry,
+  type ReactionHandler,
+  type RegisterProgramByConventionOptions,
+  type Specification,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
 ${imports}
+
+${helpers}
 
 interface Snapshot {
   mode: string | null;
@@ -1764,6 +1903,7 @@ function synthesizedSourcesFor(options: {
     childArtifacts: (options.synthesizedChildArtifacts ?? []).map((child) => ({
       slug: child.slug,
       name: child.name,
+      delegationResultPolicy: child.delegation_result_policy,
       specYaml: child.spec_yaml,
       viewSections: [],
       registrationTs: child.registration_ts,

@@ -101,7 +101,6 @@ describe('foundry branch_write', () => {
           'src/programs/incident-triage/handlers/_resolver.ts',
           'src/programs/incident-triage/stages/triage.ts',
           'src/programs/incident-triage/tools.ts',
-          'src/programs/incident-triage/registration.ts',
           'src/repl/index.ts',
           'tests/spec-load.test.ts',
           'tests/generated-program-smoke.test.ts',
@@ -121,7 +120,6 @@ describe('foundry branch_write', () => {
         'src/programs/incident-triage/handlers/_resolver.ts',
         'src/programs/incident-triage/stages/triage.ts',
         'src/programs/incident-triage/tools.ts',
-        'src/programs/incident-triage/registration.ts',
         'src/repl/index.ts',
         'tests/spec-load.test.ts',
         'tests/generated-program-smoke.test.ts',
@@ -131,6 +129,7 @@ describe('foundry branch_write', () => {
       ]) {
         expect(existsSync(join(targetDir, path)), `${path} should be written`).toBe(true);
       }
+      expect(existsSync(join(targetDir, 'src/programs/incident-triage/registration.ts'))).toBe(false);
 
       expect(readFileSync(join(targetDir, 'src/programs/incident-triage/specs.yml'), 'utf8')).toContain(
         'Program: Incident Triage.',

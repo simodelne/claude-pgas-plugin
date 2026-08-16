@@ -12,6 +12,7 @@ import {
   synthesizeProgramSpecFromDomain,
 } from '../../src/foundry-program/synthesizer.js';
 import type { DelegationDescriptor } from '../../src/foundry-program/synthesizer-store.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -383,7 +384,7 @@ describe('documents descriptor intake capture', () => {
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-documents-load-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   return specPath;
 }
