@@ -148,7 +148,7 @@ describe('generated live-drive choreography helpers', () => {
 
     // Updated when runner crash-logging (console.error + unhandledRejection handler) was added
     // uniformly to all runner variants for observability — see the upload live-drive silent-crash fix.
-    expect(hash(source)).toBe('0bdfc0b24b93810c4ae8698fcd724b9d54a5456bc4de02c2bcfbbd622ca39f61');
+    expect(hash(source)).toBe('871ea355ee1169ea2da7299dd40603413b5e778fb0a008e3f51a3192a222de7e');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');

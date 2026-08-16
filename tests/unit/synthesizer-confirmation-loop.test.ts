@@ -13,6 +13,7 @@ import {
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 import { loadGeneratedReactionHandlers } from './generated-handlers-loader.js';
 
 const baseDomain = {
@@ -993,12 +994,12 @@ describe('confirmation_loop descriptor synthesis', () => {
 
   it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: 'c47246cf23e73399c22f07eebb2014c4d8016de950b4ad9d20c393dc228fac87',
+      spec_yaml: '67c61eafa32547704c489002c4fa5fec6003cb0334f700fe7f9330193631066b',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
-      handlers_ts: '3a199dedfb60608b43be6403ca002ed6d79a4fedc7cfa0ab27c02c0777eceab7',
+      handlers_ts: '14c54893ab1536af91ff364a5d1c74b58980b75e0a4377a2df8a714972f4b176',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
-      tools_ts: 'ba348055c634de2e2f58dd88a696d53614266b13c29ed03a9568cf3a3545bfe7',
-      smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
+      tools_ts: '415ec26b27484070f867c13177d76e403a6ad49ba01e4b521c7d939b546f1d87',
+      smoke_test_ts: '70f7451e5692c7c3c2723f90c08aabb99c06c9de67ff65cbdf14b71888b2750c',
     });
   });
 });
@@ -1288,7 +1289,7 @@ function clone<T>(value: T): T {
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-confirmation-loop-load-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   return specPath;
 }

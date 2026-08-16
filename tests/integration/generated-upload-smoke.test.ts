@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -166,8 +166,8 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       expect(artifact.smoke_test_ts).toContain('client.files.upload');
       expect(artifact.smoke_test_ts).not.toContain('createTestHarness');
 
-      const registration = readFileSync(join(targetDir, 'src/programs/document-upload-hermetic/registration.ts'), 'utf8');
-      expect(registration).toContain('loadSpecWithPatterns');
+      expect(existsSync(join(targetDir, 'src/programs/document-upload-hermetic/registration.ts'))).toBe(false);
+      expect(artifact.smoke_test_ts).toContain('loadSmokeProgramByConvention');
 
       const output = runGeneratedSmokeTest(targetDir);
       expect(output).toContain('2 passed');
@@ -245,7 +245,7 @@ function linkRootNodeModules(targetDir: string): void {
 
 function runGeneratedSmokeTest(targetDir: string): string {
   const vitestBin = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  return execFileSync(process.execPath, [vitestBin, 'run', '--pool=forks', '--maxWorkers=1', 'tests/generated-program-smoke.test.ts'], {
+  return execFileSync(process.execPath, [vitestBin, 'run', '--pool=threads', '--maxWorkers=1', 'tests/generated-program-smoke.test.ts'], {
     cwd: targetDir,
     encoding: 'utf8',
     env: { ...process.env, CI: '1', RAYON_NUM_THREADS: '1' },

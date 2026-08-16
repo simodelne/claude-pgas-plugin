@@ -223,6 +223,176 @@ function liveDriveProgramImportPath(
   return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
 }
 
+interface LiveDriveProgramSource {
+  readonly slug: string;
+  readonly inferDelegationResultPolicy?: boolean;
+}
+
+function renderLiveDriveProgramEntryPrelude(
+  programs: readonly LiveDriveProgramSource[],
+  layout: GeneratedLiveDriveRunnerLayout | undefined,
+): string {
+  if (resolveRunnerLayout(layout).targetKind === 'existing_repo') {
+    return programs
+      .map(({ slug }) =>
+        `import { create${toPascalCase(slug)}ProgramEntry } from '${liveDriveProgramImportPath(slug, layout, 'registration.js')}';`)
+      .join('\n');
+  }
+  const programImports = programs.flatMap(({ slug }) => {
+    const pascal = toPascalCase(slug);
+    const camel = toCamelCase(slug);
+    return [
+      `import { createHandlerAdapterOverrides as create${pascal}HandlerAdapterOverrides, handlers as ${camel}Handlers, reactionHandlers as ${camel}ReactionHandlers } from '${liveDriveProgramImportPath(slug, layout, 'handlers.js')}';`,
+      `import { registeredToolNames as ${camel}RegisteredToolNames, register${pascal}Tools } from '${liveDriveProgramImportPath(slug, layout, 'tools.js')}';`,
+    ];
+  }).join('\n');
+  const entryFactories = programs.map(({ slug, inferDelegationResultPolicy }) => {
+    const pascal = toPascalCase(slug);
+    const camel = toCamelCase(slug);
+    const entryOverrides = inferDelegationResultPolicy ? `, inferLiveDriveDelegationResultPolicy('${slug}')` : '';
+    return `function create${pascal}ProgramEntry(): LiveDriveProgramEntry {
+  return createLiveDriveConventionProgramEntry(
+    '${slug}',
+    ${camel}Handlers,
+    ${camel}ReactionHandlers,
+    register${pascal}Tools,
+    ${camel}RegisteredToolNames,
+    create${pascal}HandlerAdapterOverrides${entryOverrides},
+  );
+}`;
+  }).join('\n\n');
+  return `import { readFileSync as readLiveDriveSpecFileSync } from 'node:fs';
+import {
+  createToolRegistry as createLiveDriveToolRegistry,
+  loadProgramByConvention as loadLiveDriveProgramByConvention,
+  type ProgramAdapterOverride as LiveDriveProgramAdapterOverride,
+  type ProgramEntry as LiveDriveProgramEntry,
+  type ReactionHandler as LiveDriveReactionHandler,
+  type RegisterProgramByConventionOptions as LiveDriveRegisterProgramByConventionOptions,
+  type ToolHandler as LiveDriveToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
+${programImports}
+
+const liveDriveProgramsRoot = decodeURIComponent(new URL('../src', import.meta.url).pathname);
+
+type LiveDriveToolRegistryInstance = ReturnType<typeof createLiveDriveToolRegistry>;
+type LiveDriveRegisterTools = (registry: LiveDriveToolRegistryInstance) => void;
+type LiveDriveHandlerAdapterOverrides = () => Record<string, LiveDriveProgramAdapterOverride>;
+
+${entryFactories}
+
+function createLiveDriveConventionProgramEntry(
+  name: string,
+  handlers: Record<string, LiveDriveToolHandler>,
+  reactionHandlers: Map<string, LiveDriveReactionHandler>,
+  registerTools: LiveDriveRegisterTools,
+  registeredToolNames: readonly string[],
+  createHandlerAdapterOverrides: LiveDriveHandlerAdapterOverrides,
+  entryOverrides?: LiveDriveRegisterProgramByConventionOptions['entryOverrides'],
+): LiveDriveProgramEntry {
+  const toolRegistry = createLiveDriveToolRegistry();
+  registerTools(toolRegistry);
+  const loaded = loadLiveDriveProgramByConvention(name, {
+    programsRoot: liveDriveProgramsRoot,
+    additionalHandlers: {
+      ...handlers,
+      ...liveDriveToolHandlerPlaceholders(toolRegistry, registeredToolNames),
+    },
+    reactionHandlers,
+    adapterOptions: {
+      overrides: {
+        ...createHandlerAdapterOverrides(),
+        ...liveDriveToolAdapterOverrides(toolRegistry, registeredToolNames),
+      },
+    },
+    ...(entryOverrides ? { entryOverrides } : {}),
+  });
+  return { ...loaded.entry, spec: withLiveDriveDecisionOnlyRegistryPrompts(loaded.entry.spec) };
+}
+
+function liveDriveToolHandlerPlaceholders(
+  toolRegistry: LiveDriveToolRegistryInstance,
+  registeredToolNames: readonly string[],
+): Record<string, LiveDriveToolHandler> {
+  const placeholders: Record<string, LiveDriveToolHandler> = {};
+  for (const name of registeredToolNames) {
+    if (!toolRegistry.has(name)) continue;
+    placeholders[\`invoke_tool_\${name}\`] = async () => {
+      throw new Error(\`tool adapter for \${name} was not installed\`);
+    };
+  }
+  return placeholders;
+}
+
+function liveDriveToolAdapterOverrides(
+  toolRegistry: LiveDriveToolRegistryInstance,
+  registeredToolNames: readonly string[],
+): Record<string, LiveDriveProgramAdapterOverride> {
+  const overrides: Record<string, LiveDriveProgramAdapterOverride> = {};
+  for (const name of registeredToolNames) {
+    if (toolRegistry.has(name)) {
+      overrides[\`tool:\${name}\`] = toolRegistry.createAdapter(name);
+    }
+  }
+  return overrides;
+}
+
+function inferLiveDriveDelegationResultPolicy(
+  name: string,
+): LiveDriveRegisterProgramByConventionOptions['entryOverrides'] | undefined {
+  const specText = readLiveDriveSpecFileSync(new URL(\`../src/programs/\${name}/specs.yml\`, import.meta.url), 'utf8');
+  const fields: Array<{ path: string; key: string }> = [];
+  const resultRoots = new Set<string>();
+  let inSchema = false;
+  for (const line of specText.split(/\\r?\\n/u)) {
+    if (/^\\S/u.test(line)) {
+      inSchema = line.trim() === 'schema:';
+      continue;
+    }
+    if (!inSchema) continue;
+    const resultMatch = /^\\s+([A-Za-z0-9_]+\\.result\\.([A-Za-z0-9_]+)):/u.exec(line);
+    if (resultMatch) {
+      resultRoots.add(resultMatch[1].replace(/\\.[^.]+$/u, ''));
+      fields.push({ path: resultMatch[1], key: resultMatch[2] });
+      continue;
+    }
+    const outputMatch = /^\\s+([A-Za-z0-9_]+\\.output\\.(result_json|adapter_kind)):/u.exec(line);
+    if (outputMatch) {
+      fields.push({ path: outputMatch[1], key: outputMatch[2] });
+    }
+  }
+  for (const root of resultRoots) {
+    fields.unshift({ path: root, key: 'result' });
+  }
+  return fields.length > 0 ? { delegationResultPolicy: { fields } } : undefined;
+}
+
+function withLiveDriveDecisionOnlyRegistryPrompts<T extends {
+  modes?: Map<string, { decisionOnly?: boolean }>;
+  prompts?: Map<string, string>;
+}>(spec: T): T {
+  if (!(spec.modes instanceof Map) || !(spec.prompts instanceof Map)) {
+    return spec;
+  }
+  const prompts = new Map(spec.prompts);
+  for (const [modeName, mode] of spec.modes) {
+    if (mode.decisionOnly === true && !prompts.has(modeName)) {
+      prompts.set(modeName, 'Decision-only auto-transition mode.');
+    }
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(spec);
+  delete descriptors.prompts;
+  const clone = Object.create(Object.getPrototypeOf(spec)) as T;
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, 'prompts', {
+    value: prompts,
+    enumerable: true,
+    configurable: true,
+  });
+  return clone;
+}`;
+}
+
 function trimRepoRelativePath(path: string): string {
   return path.replace(/^\/+|\/+$/gu, '');
 }
@@ -1069,8 +1239,8 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
 /**
  * The runner executes INSIDE the rendered scaffold (cwd = targetDir) via
  * `node --import tsx`, so it resolves the scaffold's own dependencies and
- * imports the generated program registration exactly as the scaffold's
- * production server does. It boots a real engine (no scripted authorResponses,
+ * builds generated program entries through the same public convention path as
+ * the production server. It boots a real engine (no scripted authorResponses,
  * no stub drivers — the env-configured provider makes every decision) and
  * drives the session to the completion stage over the entry channel.
  */
@@ -1130,10 +1300,10 @@ function renderCompositeLiveDriveRunnerSource(
 ): string {
   const pascal = toPascalCase(slug);
   const childPascal = childProgram ? toPascalCase(childProgram) : '';
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
-  const childImport = childProgram
-    ? `import { create${childPascal}ProgramEntry } from '${liveDriveProgramImportPath(childProgram, runnerLayout, 'registration.js')}';\n`
-    : '';
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([
+    { slug },
+    ...(childProgram ? [{ slug: childProgram, inferDelegationResultPolicy: true }] : []),
+  ], runnerLayout);
   const extractionImports = hasExtractionScript
     ? "import { deflateRawSync } from 'node:zlib';\n" +
       `import { renderStructuredDocxDocument } from '${liveDriveProgramImportPath(slug, runnerLayout, 'export/docx.js')}';\n`
@@ -1163,8 +1333,8 @@ function renderCompositeLiveDriveRunnerSource(
   return `import { writeFileSync } from 'node:fs';
 ${extractionImports}import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
-${childImport}
+${entryPrelude}
+
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
 const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
@@ -2249,11 +2419,11 @@ function renderEntryOnlyLiveDriveRunnerSource(
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const pascal = toPascalCase(slug);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
+${entryPrelude}
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -2407,13 +2577,14 @@ export function renderDelegationLiveDriveRunnerSource(
 ): string {
   const pascal = toPascalCase(slug);
   const childPascal = toPascalCase(childProgram);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
-  const childRegistrationImport = liveDriveProgramImportPath(childProgram, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([
+    { slug },
+    { slug: childProgram, inferDelegationResultPolicy: true },
+  ], runnerLayout);
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
-import { create${childPascal}ProgramEntry } from '${childRegistrationImport}';
+${entryPrelude}
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -2750,13 +2921,13 @@ export function renderExtractionLiveDriveRunnerSource(
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const pascal = toPascalCase(slug);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
   const docxImport = liveDriveProgramImportPath(slug, runnerLayout, 'export/docx.js');
   return `import { writeFileSync } from 'node:fs';
 import { deflateRawSync } from 'node:zlib';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
+${entryPrelude}
 import { renderStructuredDocxDocument } from '${docxImport}';
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
@@ -3315,11 +3486,11 @@ export function renderUploadLiveDriveRunnerSource(
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const pascal = toPascalCase(slug);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
+${entryPrelude}
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -3740,11 +3911,11 @@ export function renderExportLiveDriveRunnerSource(
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const pascal = toPascalCase(slug);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
+${entryPrelude}
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -4128,11 +4299,11 @@ function renderConfirmationLiveDriveRunnerSource(
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
 ): string {
   const pascal = toPascalCase(slug);
-  const registrationImport = liveDriveProgramImportPath(slug, runnerLayout, 'registration.js');
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
   return `import { writeFileSync } from 'node:fs';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { create${pascal}ProgramEntry } from '${registrationImport}';
+${entryPrelude}
 
 const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
 const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
@@ -4823,6 +4994,11 @@ function toPascalCase(value: string): string {
     .filter(Boolean)
     .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
     .join('');
+}
+
+function toCamelCase(value: string): string {
+  const pascal = toPascalCase(value);
+  return pascal.length === 0 ? 'program' : `${pascal.charAt(0).toLowerCase()}${pascal.slice(1)}`;
 }
 
 function isNonEmptyString(value: unknown): value is string {

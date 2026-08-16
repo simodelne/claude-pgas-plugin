@@ -53,7 +53,6 @@ describe('artifact planner', () => {
       'src/repl/index.ts',
       'src/repl/renderer.ts',
       'src/programs/pgas-new/specs.yml',
-      'src/programs/pgas-new/registration.ts',
       'src/programs/pgas-new/contracts.ts',
       'src/programs/pgas-new/stages/triage.ts',
       'src/programs/pgas-new/handlers.ts',

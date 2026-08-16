@@ -36,6 +36,15 @@ describe('program purity registry', () => {
     ])).not.toThrow();
   });
 
+  it('accepts a convention-registered standalone program directory with no registration.ts', () => {
+    expect(() => assertProgramDirPurity([
+      { path: 'src/programs/lead-research-agent/specs.yml', kind: 'spec' },
+      { path: 'src/programs/lead-research-agent/handlers.ts', kind: 'handler' },
+      { path: 'src/programs/lead-research-agent/handlers/index.ts', kind: 'handler' },
+      { path: 'src/programs/lead-research-agent/tools.ts', kind: 'tool' },
+    ])).not.toThrow();
+  });
+
   it('tracks every non-terminal allowed code kind with an engine ask', () => {
     const terminalAllowed = new Set(['contract']);
     const missingDebt = [...ALLOWED_PROGRAM_ARTIFACT_KINDS]

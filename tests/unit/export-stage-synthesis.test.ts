@@ -23,6 +23,15 @@ describe('PR-E2 export stage synthesis', () => {
       channels: Record<string, Record<string, unknown>>;
       reactions: Record<string, Record<string, unknown>>;
       integrations: Record<string, { channel: string; hooks: Array<Record<string, unknown>> }>;
+      policies: {
+        artifactPolicy: {
+          rules: Array<Record<string, unknown>>;
+        };
+        queryPolicy: {
+          mode: string;
+          allowedWorldQueryPrefixes: string[];
+        };
+      };
       proceed_to: Record<string, string>;
       action_map: Record<string, Record<string, unknown>>;
       prompts: Record<string, string>;
@@ -62,6 +71,15 @@ describe('PR-E2 export stage synthesis', () => {
           result_path: 'export_document.output',
         },
       ],
+    });
+    expect(spec.policies.artifactPolicy.rules).toContainEqual(expect.objectContaining({
+      artifactType: 'docx_export',
+      payloadRef: 'export_document.output',
+      whenAllPaths: ['export_document.output.result_json'],
+    }));
+    expect(spec.policies.queryPolicy).toMatchObject({
+      mode: 'enforce',
+      allowedWorldQueryPrefixes: expect.arrayContaining(['export_document.output']),
     });
 
     expect(artifact.registration_ts).toContain('artifactPolicy');

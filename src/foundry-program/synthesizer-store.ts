@@ -214,6 +214,7 @@ export interface SynthesizedArtifact {
   child_artifacts?: Array<Omit<SynthesizedArtifact, 'created_at' | 'child_artifacts'> & {
     slug: string;
     name: string;
+    delegation_result_policy?: { fields: Array<{ path: string; key: string }> };
   }>;
   stage_classification: unknown[];
   body_stage_slugs: string[];

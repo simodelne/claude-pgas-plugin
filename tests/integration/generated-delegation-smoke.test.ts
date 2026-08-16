@@ -120,14 +120,14 @@ describe('generated delegation smoke test', () => {
       expect(serverSource).toContain("{ name: 'delegation-parent-hermetic'");
       expect(serverSource).toContain("{ name: 'research'");
 
-      const parentRegistration = readFileSync(join(targetDir, 'src/programs/delegation-parent-hermetic/registration.ts'), 'utf8');
-      expect(parentRegistration).toContain('delegationPolicy');
-      expect(parentRegistration).toContain("allowedTargetPrograms: ['research']");
-      expect(parentRegistration).toContain("source: 'inputs.initial_user_text'");
-
-      const childRegistration = readFileSync(join(targetDir, 'src/programs/research/registration.ts'), 'utf8');
-      expect(childRegistration).toContain('delegationResultPolicy');
-      expect(childRegistration).toContain("path: 'work.result.seeded_topic'");
+      expect(existsSync(join(targetDir, 'src/programs/delegation-parent-hermetic/registration.ts'))).toBe(false);
+      expect(existsSync(join(targetDir, 'src/programs/research/registration.ts'))).toBe(false);
+      expect(artifact.spec_yaml).toContain('delegationPolicy:');
+      expect(artifact.spec_yaml).toContain('- research');
+      expect(artifact.spec_yaml).toContain('source: inputs.initial_user_text');
+      expect(childArtifacts.find((child) => child.slug === 'research')?.delegation_result_policy?.fields).toEqual(expect.arrayContaining([
+        { path: 'work.result.seeded_topic', key: 'seeded_topic' },
+      ]));
 
       expect(artifact.smoke_test_ts).toContain('runs synthesized delegation hermetically through the route');
       expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
@@ -211,9 +211,10 @@ describe('generated delegation smoke test', () => {
       expect(childSpec).toContain('research.result.seeded_topic');
       expect(childSpec).toContain('from_state: inputs.request.topic');
 
-      const childRegistration = readFileSync(join(targetDir, 'src/programs/research/registration.ts'), 'utf8');
-      expect(childRegistration).toContain('delegationResultPolicy');
-      expect(childRegistration).toContain("path: 'research.result.seeded_topic'");
+      expect(existsSync(join(targetDir, 'src/programs/research/registration.ts'))).toBe(false);
+      expect(childArtifacts.find((child) => child.slug === 'research')?.delegation_result_policy?.fields).toEqual(expect.arrayContaining([
+        { path: 'research.result.seeded_topic', key: 'seeded_topic' },
+      ]));
 
       expect(artifact.smoke_test_ts).toContain('runs synthesized delegation hermetically through the route');
       expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
@@ -273,8 +274,10 @@ describe('generated delegation smoke test', () => {
       expect(childContracts).toContain('export const capabilityGaps');
       const childStage = readFileSync(join(targetDir, 'src/programs/research/stages/research.ts'), 'utf8');
       expect(childStage).toContain("adapter_kind: 'in_memory_mock'");
-      const childRegistration = readFileSync(join(targetDir, 'src/programs/research/registration.ts'), 'utf8');
-      expect(childRegistration).toContain("path: 'research.output.result_json'");
+      expect(existsSync(join(targetDir, 'src/programs/research/registration.ts'))).toBe(false);
+      expect(childArtifacts.find((child) => child.slug === 'research')?.delegation_result_policy?.fields).toEqual(expect.arrayContaining([
+        { path: 'research.output.result_json', key: 'result_json' },
+      ]));
       expect(readFileSync(join(targetDir, 'README.md'), 'utf8')).toContain('research backend is host-required');
       expect(readFileSync(join(targetDir, 'audit/PGAS-NEW-GRADUATION.md'), 'utf8')).toContain('research backend is host-required');
 
@@ -294,7 +297,7 @@ describe('generated delegation smoke test', () => {
       'Dispatch one host-backed research-agent child through a manifest-reused program.',
       researchAgentDescriptor('host_connector'),
     ), {
-      targetKind: 'existing_repo',
+      targetKind: 'standalone_repo',
       availablePrograms: [
         {
           slug: 'research',
@@ -341,6 +344,9 @@ interface DelegationArtifactExtension {
   child_artifacts?: Array<SynthesizedSpec & {
     slug: string;
     name: string;
+    delegation_result_policy?: {
+      fields: Array<{ path: string; key: string }>;
+    };
     registration_ts?: string;
     stage_sources?: Record<string, string>;
   }>;
@@ -369,7 +375,7 @@ function linkRootNodeModules(targetDir: string): void {
 
 function runGeneratedSmokeTest(targetDir: string): string {
   const vitestBin = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  return execFileSync(process.execPath, [vitestBin, 'run', '--pool=forks', '--maxWorkers=1', 'tests/generated-program-smoke.test.ts'], {
+  return execFileSync(process.execPath, [vitestBin, 'run', '--pool=threads', '--maxWorkers=1', 'tests/generated-program-smoke.test.ts'], {
     cwd: targetDir,
     encoding: 'utf8',
     env: { ...process.env, CI: '1', RAYON_NUM_THREADS: '1' },

@@ -5,9 +5,10 @@ import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { load } from 'js-yaml';
-import { loadSpecWithPatterns, type ProgramEntry } from '@simodelne/pgas-server/plugin.js';
+import { loadProgramByConvention } from '@simodelne/pgas-server/plugin.js';
 
 import { assertSynthesizableCapabilities } from '../../src/foundry-program/capability-registry.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 import { startRouteHarness } from './foundry-test-utils.js';
 
 const DOMAIN_PATH = new URL('../../.dd-report-exp/lead-research/lead-research-agent-domain.json', import.meta.url);
@@ -66,12 +67,17 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/persistence.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(false);
-      const registration = readFileSync(join(tempDir, 'src/programs/lead-research-agent/registration.ts'), 'utf8');
-      expect(registration).toContain('renderProfile: RENDER_PROFILE');
+      expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/registration.ts'))).toBe(false);
       const parentSpecPath = join(tempDir, 'src/programs/lead-research-agent/specs.yml');
       const childSpecPath = join(tempDir, 'src/programs/lead-research-source-navigation/specs.yml');
-      expect(() => loadSpecWithPatterns(parentSpecPath)).not.toThrow();
-      expect(() => loadSpecWithPatterns(childSpecPath)).not.toThrow();
+      expect(() => loadProgramByConvention('lead-research-agent', {
+        programsRoot: join(tempDir, 'src'),
+        validationOptions: { blueprint: 'off' },
+      })).not.toThrow();
+      expect(() => loadProgramByConvention('lead-research-source-navigation', {
+        programsRoot: join(tempDir, 'src'),
+        validationOptions: { blueprint: 'off' },
+      })).not.toThrow();
       const parentSpec = load(readFileSync(parentSpecPath, 'utf8')) as ParsedSpec;
       expect(parentSpec.features).toContain('keyed_collection');
       expect(parentSpec.keyed_collections).toEqual([
@@ -212,18 +218,10 @@ describe('lead-research-agent hermetic smoke', () => {
       };
       await renderLeadResearchScaffold({ targetRoot: tempDir, runTypecheck: false });
 
-      const parentModule = await import(pathToFileURL(join(
-        tempDir,
-        'src/programs/lead-research-agent/registration.ts',
-      )).href) as {
-        createLeadResearchAgentProgramEntry(): ProgramEntry;
-      };
-      const childModule = await import(pathToFileURL(join(
-        tempDir,
-        'src/programs/lead-research-source-navigation/registration.ts',
-      )).href) as {
-        createLeadResearchSourceNavigationProgramEntry(): ProgramEntry;
-      };
+      const parentEntry = await loadRenderedGeneratedProgramEntry(tempDir, 'lead-research-agent');
+      const childEntry = await loadRenderedGeneratedProgramEntry(tempDir, 'lead-research-source-navigation', {
+        inferDelegationResultPolicy: true,
+      });
       const webNavigationModule = await import(pathToFileURL(join(
         tempDir,
         'src/programs/lead-research-agent/connectors/web-navigation.ts',
@@ -233,8 +231,8 @@ describe('lead-research-agent hermetic smoke', () => {
 
       const { client, close } = await startRouteHarness({
         programs: [
-          { name: 'lead-research-agent', entry: parentModule.createLeadResearchAgentProgramEntry() },
-          { name: 'lead-research-source-navigation', entry: childModule.createLeadResearchSourceNavigationProgramEntry() },
+          { name: 'lead-research-agent', entry: parentEntry },
+          { name: 'lead-research-source-navigation', entry: childEntry },
         ],
         authorHandle: createLeadResearchDriveAuthor({
           config,

@@ -2,7 +2,6 @@ import { File } from 'node:buffer';
 import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
@@ -11,6 +10,8 @@ import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 
 interface ParsedSpec {
   channels: Record<string, Record<string, unknown>>;
@@ -117,6 +118,10 @@ describe('dynamic document delegation fan-out synthesis', () => {
 
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-dynamic-doc-fanout-render-'));
     try {
+      const childArtifacts = (
+        artifact as typeof artifact & { child_artifacts?: RenderStandaloneOptions['synthesizedChildArtifacts'] }
+      ).child_artifacts;
+      const workerChild = childArtifacts?.find((child) => child.slug === 'document-review-worker');
       renderStandaloneScaffold({
         slug: 'dynamic-document-review',
         name: 'Dynamic Document Review',
@@ -142,13 +147,11 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
         },
         synthesizedToolsTs: artifact.tools_ts,
         synthesizedSmokeTestTs: artifact.smoke_test_ts,
-        synthesizedChildArtifacts: (
-          artifact as typeof artifact & { child_artifacts?: RenderStandaloneOptions['synthesizedChildArtifacts'] }
-        ).child_artifacts,
+        synthesizedChildArtifacts: childArtifacts,
       } satisfies RenderStandaloneOptions);
       linkRootNodeModules(targetDir);
 
-      const runtime = await runRenderedFanOutScenario(targetDir);
+      const runtime = await runRenderedFanOutScenario(targetDir, workerChild?.delegation_result_policy);
       expect(runtime.resultKeys).toEqual(runtime.documentIds);
       expect(runtime.sessionCount).toBe(5);
     } finally {
@@ -251,7 +254,7 @@ function dynamicDocumentReviewDomain(): Record<string, unknown> {
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-dynamic-doc-fanout-'));
   const specPath = join(dir, 'specs.yml');
-  writeFileSync(specPath, specYaml);
+  writeFileSync(specPath, stripConventionSidecars(specYaml));
   process.once('exit', () => {
     rmSync(dir, { recursive: true, force: true });
   });
@@ -266,9 +269,10 @@ function linkRootNodeModules(targetDir: string): void {
   symlinkSync(rootNodeModules, join(targetDir, 'node_modules'), 'dir');
 }
 
-async function runRenderedFanOutScenario(targetDir: string): Promise<{ resultKeys: string[]; documentIds: string[]; sessionCount: number }> {
-  const parentModule = await import(pathToFileURL(join(targetDir, 'src/programs/dynamic-document-review/registration.ts')).href);
-  const childModule = await import(pathToFileURL(join(targetDir, 'src/programs/document-review-worker/registration.ts')).href);
+async function runRenderedFanOutScenario(
+  targetDir: string,
+  childDelegationResultPolicy: { fields: Array<{ path: string; key: string }> } | undefined,
+): Promise<{ resultKeys: string[]; documentIds: string[]; sessionCount: number }> {
   const tempDir = mkdtempSync(join(tmpdir(), 'pgas-new-dynamic-doc-fanout-upload-'));
   const fixtures = [
     { name: 'doc-1.txt', content: 'Document one material contract text.' },
@@ -279,8 +283,13 @@ async function runRenderedFanOutScenario(targetDir: string): Promise<{ resultKey
   ];
   const server = await createPgasServer({
     programs: [
-      { name: 'dynamic-document-review', entry: parentModule.createDynamicDocumentReviewProgramEntry() },
-      { name: 'document-review-worker', entry: childModule.createDocumentReviewWorkerProgramEntry() },
+      { name: 'dynamic-document-review', entry: await loadRenderedGeneratedProgramEntry(targetDir, 'dynamic-document-review') },
+      {
+        name: 'document-review-worker',
+        entry: await loadRenderedGeneratedProgramEntry(targetDir, 'document-review-worker', {
+          entryOverrides: childDelegationResultPolicy ? { delegationResultPolicy: childDelegationResultPolicy } : undefined,
+        }),
+      },
     ],
     drivers: {
       authorHandle: createFanOutAuthor(fixtures),

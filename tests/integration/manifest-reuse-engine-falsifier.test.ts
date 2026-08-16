@@ -14,6 +14,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 import { startRouteHarness } from './foundry-test-utils.js';
 
 interface AgentScenario {
@@ -233,7 +234,7 @@ async function withManifestReuseServer<T>(
 function createParentEntry(tempDir: string, agent: AgentScenario, allowedTargetPrograms: string[]): ProgramEntry {
   const artifact = synthesizeProgramSpecFromDomain(parentDomain(agent));
   const specPath = path.join(tempDir, `parent-${randomUUID()}.yml`);
-  writeFileSync(specPath, artifact.spec_yaml, 'utf8');
+  writeFileSync(specPath, stripConventionSidecars(artifact.spec_yaml), 'utf8');
   const { spec } = loadSpecWithPatterns(specPath);
   return {
     spec,

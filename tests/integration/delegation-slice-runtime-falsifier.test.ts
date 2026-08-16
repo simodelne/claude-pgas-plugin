@@ -2,17 +2,16 @@ import { File } from 'node:buffer';
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
-import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 import { dump, load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain, type SynthesizedSpec } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
+import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
 
 const PROGRAM_SLUG = 'document-slice-runtime';
 const PROGRAM_NAME = 'Document Slice Runtime';
@@ -95,7 +94,7 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       } satisfies RenderStandaloneOptions & DelegationRenderOptions);
       linkRootNodeModules(targetDir);
 
-      const evidence = await runRenderedSliceScenario(targetDir);
+      const evidence = await runRenderedSliceScenario(targetDir, targetChild?.delegation_result_policy);
       expect(evidence.target.parentRequestTopic).toBe(TARGET_DOCUMENT.text);
       expect(evidence.target.seededTopic).toBe(TARGET_DOCUMENT.text);
       expect(evidence.target.documentId).toBe(TARGET_DOCUMENT.id);
@@ -121,6 +120,9 @@ interface DelegationArtifactExtension {
   child_artifacts?: Array<SynthesizedSpec & {
     slug: string;
     name: string;
+    delegation_result_policy?: {
+      fields: Array<{ path: string; key: string }>;
+    };
     registration_ts?: string;
     stage_sources?: Record<string, string>;
   }>;
@@ -324,15 +326,21 @@ function perDocumentReviewDomain(): Record<string, unknown> {
   };
 }
 
-async function runRenderedSliceScenario(targetDir: string): Promise<SliceEvidence> {
-  const parentModule = await import(pathToFileURL(join(targetDir, `src/programs/${PROGRAM_SLUG}/registration.ts`)).href);
-  const childModule = await import(pathToFileURL(join(targetDir, `src/programs/${TARGET_DOCUMENT.id}/registration.ts`)).href);
+async function runRenderedSliceScenario(
+  targetDir: string,
+  childDelegationResultPolicy: { fields: Array<{ path: string; key: string }> } | undefined,
+): Promise<SliceEvidence> {
   const uploadDir = mkdtempSync(join(tmpdir(), 'pgas-new-slice-runtime-upload-'));
   const author = createProjectionEchoAuthor();
   const server = await createPgasServer({
     programs: [
-      { name: PROGRAM_SLUG, entry: programEntryFromModule(parentModule) },
-      { name: TARGET_DOCUMENT.id, entry: programEntryFromModule(childModule) },
+      { name: PROGRAM_SLUG, entry: await loadRenderedGeneratedProgramEntry(targetDir, PROGRAM_SLUG) },
+      {
+        name: TARGET_DOCUMENT.id,
+        entry: await loadRenderedGeneratedProgramEntry(targetDir, TARGET_DOCUMENT.id, {
+          entryOverrides: childDelegationResultPolicy ? { delegationResultPolicy: childDelegationResultPolicy } : undefined,
+        }),
+      },
     ],
     drivers: {
       authorHandle: author,
@@ -546,17 +554,6 @@ function sliceEvidence(mode: string | null, domain: Record<string, unknown>): Sl
       sessionId: String(result.sessionId ?? ''),
     },
   };
-}
-
-function programEntryFromModule(module: Record<string, unknown>): ProgramEntry {
-  const factory = Object.values(module).find((value) =>
-    typeof value === 'function' &&
-    /^create[A-Z].*ProgramEntry$/u.test(value.name)
-  );
-  if (typeof factory !== 'function') {
-    throw new Error(`generated registration did not export a create*ProgramEntry function: ${Object.keys(module).join(', ')}`);
-  }
-  return factory() as ProgramEntry;
 }
 
 function linkRootNodeModules(targetDir: string): void {

@@ -79,8 +79,8 @@ export const DECLARATIVE_DEBT: readonly DeclarativeDebtEntry[] = [
   {
     kind: 'registration',
     bucket: 'boilerplate',
-    engine_ask: 'manifest-driven shared registrar',
-    north_star: 'genericized',
+    engine_ask: 'existing-repo residual registrar only; standalone uses registerProgramByConvention',
+    north_star: 'delete residual registration.ts once attached targets have a convention home',
   },
 ];
 

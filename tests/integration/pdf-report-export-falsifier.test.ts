@@ -57,7 +57,8 @@ describe('PDF report export', () => {
     expect(artifact.registration_ts).toContain("from: 'aggregate.result.per_source'");
     expect(artifact.registration_ts).toContain("from: 'persist.result.new_vs_existing'");
     expect(artifact.registration_ts).toContain("from: 'report.total_found'");
-    expect(artifact.spec_yaml).not.toContain('\nrender:');
+    expect(artifact.spec_yaml).toContain('\nrender:');
+    expect(artifact.spec_yaml).toContain('artifactType: pdf_report');
     const parsed = load(artifact.spec_yaml) as {
       derived_paths?: Array<{ target: string; set: { kind: string; params?: Record<string, unknown> } }>;
       schema?: Record<string, string>;

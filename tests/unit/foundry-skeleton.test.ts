@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -25,7 +25,7 @@ const ENGINE_OWNED_SCHEMA_PATHS = [
 
 const SPEC_SKELETON = 'templates/pgas-new/program/spec-skeleton.yml.tmpl';
 const HANDLERS_SKELETON = 'templates/pgas-new/program/handlers-skeleton.ts.tmpl';
-const REGISTRATION_SKELETON = 'templates/pgas-new/program/registration-skeleton.ts.tmpl';
+const TOOLS_SKELETON = 'templates/pgas-new/program/tools-skeleton.ts.tmpl';
 const FOUNDRY_SPEC = 'src/foundry-program/specs.yml';
 
 interface SkeletonSpec {
@@ -61,12 +61,12 @@ describe('foundry generic program skeleton', () => {
     expect(spec.modes.start.channels ?? []).toContain('system_mode_entry');
   });
 
-  it('uses the createAdapters override convention in registration', () => {
-    const registration = readFileSync(REGISTRATION_SKELETON, 'utf8');
+  it('exposes convention adapter and tool hooks without a registration skeleton', () => {
+    const handlers = readFileSync(HANDLERS_SKELETON, 'utf8');
+    const tools = readFileSync(TOOLS_SKELETON, 'utf8');
 
-    expect(registration).toContain('createAdapters');
-    expect(registration).toContain('createProgramAdapters');
-    expect(registration).toContain('adapters.outputs.set');
+    expect(handlers).toContain('createHandlerAdapterOverrides');
+    expect(tools).toContain('registeredToolNames');
   });
 });
 
@@ -79,14 +79,19 @@ describe('foundry generic program skeleton engine loader', () => {
     const specText = renderSkeletonSpec();
     const dir = mkdtempSync(join(tmpdir(), 'pgas-new-skeleton-load-'));
     try {
-      const specPath = join(dir, 'specs.yml');
+      const programDir = join(dir, 'programs/pgas-new');
+      mkdirSync(programDir, { recursive: true });
+      const specPath = join(programDir, 'specs.yml');
       writeFileSync(specPath, specText);
       await import(/* @vite-ignore */ pathToFileURL(engineTestingPath as string).href);
       const plugin = await import(/* @vite-ignore */ pathToFileURL(enginePluginPath as string).href) as Record<string, unknown>;
-      const loadSpecWithPatterns = plugin.loadSpecWithPatterns as ((path: string) => unknown) | undefined;
+      const loadProgramByConvention = plugin.loadProgramByConvention as ((name: string, opts: { programsRoot: string; validationOptions: { blueprint: 'off' } }) => unknown) | undefined;
 
-      expect(typeof loadSpecWithPatterns).toBe('function');
-      expect(() => loadSpecWithPatterns?.(specPath)).not.toThrow();
+      expect(typeof loadProgramByConvention).toBe('function');
+      expect(() => loadProgramByConvention?.('pgas-new', {
+        programsRoot: dir,
+        validationOptions: { blueprint: 'off' },
+      })).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

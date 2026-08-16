@@ -21,6 +21,7 @@ import {
   type ReasoningStageContract,
 } from '../../src/foundry-program/reasoning-contract.js';
 import { leadResearchDomain } from '../fixtures/lead-research-domain.js';
+import { stripConventionSidecars } from '../fixtures/convention-sidecars.js';
 
 const branchDomain = {
   'program.slug': 'memo-review',
@@ -235,7 +236,7 @@ describe('reasoning contract weave', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pgas-new-weave-load-'));
     try {
       const specPath = join(dir, 'specs.yml');
-      writeFileSync(specPath, woven.spec_yaml);
+      writeFileSync(specPath, stripConventionSidecars(woven.spec_yaml));
       expect(() => loadSpecWithPatterns(specPath)).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -364,7 +365,7 @@ function generatedProgramEntry(artifact: { spec_yaml: string; handlers_ts: strin
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-arg-schema-load-'));
   try {
     const specPath = join(dir, 'specs.yml');
-    writeFileSync(specPath, artifact.spec_yaml);
+    writeFileSync(specPath, stripConventionSidecars(artifact.spec_yaml));
     const spec = loadSpecWithPatterns(specPath).spec;
     const handlerMap = handlerMapFromSource(artifact.handlers_ts);
     validateSpecWiring(spec, handlerMap);

@@ -348,7 +348,6 @@ describe('template renderer', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-imports-'));
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
-      const registration = readFileSync(join(outDir, 'src/programs/pgas-new/registration.ts'), 'utf8');
       const server = readFileSync(join(outDir, 'src/server.ts'), 'utf8');
       const authorDriver = readFileSync(join(outDir, 'src/author-driver.ts'), 'utf8');
       const repl = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
@@ -356,22 +355,24 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.10.0"');
+      expect(existsSync(join(outDir, 'src/programs/pgas-new/registration.ts'))).toBe(false);
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.12.3"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
+      expect(server).toContain("from '@simodelne/pgas-server/plugin.js'");
+      expect(server).toContain('loadProgramByConvention');
+      expect(server).toContain("const programsRoot = decodeURIComponent(new URL('.', import.meta.url).pathname)");
+      expect(server).toContain('additionalHandlers:');
+      expect(server).toContain('...handlers');
+      expect(server).toContain('reactionHandlers');
+      expect(server).not.toContain('/registration.js');
       expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
-      expect(registration).toContain("from '@simodelne/pgas-server/plugin.js'");
-      expect(registration).toContain('type ProgramEntry');
-      expect(registration).toContain('createProgramAdapters');
-      expect(registration).toContain('createToolRegistry');
-      expect(registration).toContain('loadSpecWithPatterns');
-      expect(registration).toContain('createPgasNewProgramEntry');
-      expect(registration).toContain('registerPgasNewTools');
-      expect(registration).toContain('reactionHandlers');
-      expect(registration).not.toContain('enableNotebook');
       expect(repl).toContain("from '@simodelne/pgas-server/client.js'");
       expect(repl).toContain('connectNotifications');
       expect(apiTest).toContain("from '@simodelne/pgas-server/client.js'");
+      expect(apiTest).toContain("from '@simodelne/pgas-server/plugin.js'");
+      expect(apiTest).toContain('loadProgramByConvention');
+      expect(apiTest).not.toContain('/registration.js');
       expect(apiTest).toContain('createPgasClient');
       expect(apiTest).toContain('appTransport');
       expect(apiTest).toContain('fetchTransport');
@@ -403,7 +404,10 @@ describe('template renderer', () => {
       expect(liveTest).not.toContain('expect(liveIt).toBe(it.skip)');
       expect(liveTest).not.toContain(['domain_context', ':'].join(''));
       expect(liveTest).not.toContain('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation');
+      expect(deterministicTest).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
+      expect(deterministicTest).toContain('loadProgramByConvention');
+      expect(deterministicTest).not.toContain('/registration.js');
       expect(deterministicTest).toContain('createTestHarness');
       expect(deterministicTest).toContain('type TestHarnessAuthorResponse');
       expect(deterministicTest).toContain('buildDeterministicPath');
@@ -415,7 +419,7 @@ describe('template renderer', () => {
       expect(deterministicTest).not.toContain("'work.example_ready'");
       expect(deterministicTest).not.toContain('expect(harness).toBeDefined()');
 
-      const renderedText = [registration, server, authorDriver, repl, apiTest, deterministicTest].join('\n');
+      const renderedText = [server, authorDriver, repl, apiTest, deterministicTest].join('\n');
       expect(renderedText).not.toMatch(/@simodelne\/pgas-server\/api/);
       expect(renderedText).not.toMatch(/@simodelne\/pgas-server\/src/);
       expect(renderedText).not.toMatch(/@simodelne\/pgas-runtime/);
@@ -737,7 +741,6 @@ describe('template renderer', () => {
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
       const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
-      const registration = readFileSync(join(outDir, 'src/programs/pgas-new/registration.ts'), 'utf8');
       const parsed = load(spec) as {
         initial: string;
         terminal: string[];
@@ -749,6 +752,12 @@ describe('template renderer', () => {
       }>;
       proceed_to: Record<string, string>;
       schema: Record<string, string>;
+      policies: {
+        queryPolicy: {
+          mode: string;
+          allowedWorldQueryPrefixes: string[];
+        };
+      };
       control_plane: { controls: Record<string, unknown> };
     };
     const tests = [
@@ -801,7 +810,14 @@ describe('template renderer', () => {
     expect(spec).toContain('inline_world_query');
     expect(spec).toContain('notebook.*');
     expect(spec).toContain('notebook_pins');
-    expect(registration).toContain('queryPolicy');
+    expect(spec).toContain('policies:');
+    expect(parsed.policies.queryPolicy).toMatchObject({
+      mode: 'enforce',
+      allowedWorldQueryPrefixes: expect.arrayContaining(['inputs.user_text', 'work.example_result_json']),
+    });
+    expect(existsSync(join(outDir, 'src/programs/pgas-new/registration.ts'))).toBe(false);
+    expect(tests.join('\n')).toContain('loadProgramByConvention');
+    expect(tests.join('\n')).not.toContain('/registration.js');
     expect(parsed.projection.start.include).toEqual(
       expect.arrayContaining(['inputs.user_text', 'notebook.*', 'notebook_pins', 'work.started']),
     );
@@ -1384,7 +1400,6 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       const webNavigation = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/web-navigation.ts'), 'utf8');
       const persistence = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/persistence.ts'), 'utf8');
       const pdfReport = readFileSync(join(outDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'), 'utf8');
-      const registration = readFileSync(join(outDir, 'src/programs/lead-research-agent/registration.ts'), 'utf8');
       const spec = readFileSync(join(outDir, 'src/programs/lead-research-agent/specs.yml'), 'utf8');
 
       expect(webNavigation).toContain('export interface WebNavigationHostConnector');
@@ -1396,6 +1411,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect(pdfReport).toContain('export interface PdfReportHostConnector');
       expect(pdfReport).toContain('export class MockPdfReportConnector');
       expect(pdfReport).not.toContain("from './pdf-report-connector.js'");
+      expect(existsSync(join(outDir, 'src/programs/lead-research-agent/registration.ts'))).toBe(false);
       expect(existsSync(join(outDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(false);
       expect(spec).not.toContain('\nrender:');
     } finally {
