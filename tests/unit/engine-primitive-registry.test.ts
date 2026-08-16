@@ -221,7 +221,7 @@ describe('engine-primitive-registry', () => {
       status: 'emitted',
     });
     expect(awarenessByConstruct.get('Specification.import')).toMatchObject({
-      status: 'available_unused',
+      status: 'emitted',
     });
     expect(awarenessByConstruct.get('SpecWiringValidationOptions.blueprint')).toMatchObject({
       status: 'emitted',

@@ -39,6 +39,9 @@ describe('program purity registry', () => {
   it('accepts a convention-registered standalone program directory with no registration.ts', () => {
     expect(() => assertProgramDirPurity([
       { path: 'src/programs/lead-research-agent/specs.yml', kind: 'spec' },
+      { path: 'src/programs/lead-research-agent/identity.yml', kind: 'spec' },
+      { path: 'src/programs/lead-research-agent/domain.yml', kind: 'spec' },
+      { path: 'src/programs/lead-research-agent/policy.yml', kind: 'spec' },
       { path: 'src/programs/lead-research-agent/handlers.ts', kind: 'handler' },
       { path: 'src/programs/lead-research-agent/handlers/index.ts', kind: 'handler' },
       { path: 'src/programs/lead-research-agent/tools.ts', kind: 'tool' },

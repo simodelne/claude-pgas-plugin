@@ -207,9 +207,10 @@ describe('generated delegation smoke test', () => {
       } as RenderStandaloneOptions & DelegationRenderOptions);
       linkRootNodeModules(targetDir);
 
-      const childSpec = readFileSync(join(targetDir, 'src/programs/research/specs.yml'), 'utf8');
-      expect(childSpec).toContain('research.result.seeded_topic');
-      expect(childSpec).toContain('from_state: inputs.request.topic');
+      const childDomainSpec = readFileSync(join(targetDir, 'src/programs/research/domain.yml'), 'utf8');
+      const childActionSpec = readFileSync(join(targetDir, 'src/programs/research/actions.yml'), 'utf8');
+      expect(childDomainSpec).toContain('research.result.seeded_topic');
+      expect(childActionSpec).toContain('from_state: inputs.request.topic');
 
       expect(existsSync(join(targetDir, 'src/programs/research/registration.ts'))).toBe(false);
       expect(childArtifacts.find((child) => child.slug === 'research')?.delegation_result_policy?.fields).toEqual(expect.arrayContaining([
@@ -266,8 +267,8 @@ describe('generated delegation smoke test', () => {
       } as RenderStandaloneOptions & DelegationRenderOptions);
       linkRootNodeModules(targetDir);
 
-      const childSpec = readFileSync(join(targetDir, 'src/programs/research/specs.yml'), 'utf8');
-      expect(childSpec).toContain('research.output.adapter_kind');
+      const childDomainSpec = readFileSync(join(targetDir, 'src/programs/research/domain.yml'), 'utf8');
+      expect(childDomainSpec).toContain('research.output.adapter_kind');
       const childContracts = readFileSync(join(targetDir, 'src/programs/research/contracts.ts'), 'utf8');
       expect(childContracts).toContain('export interface ResearchHostConnector');
       expect(childContracts).toContain('export const researchHostConnectorContract');

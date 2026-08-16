@@ -72,6 +72,17 @@ describe('foundry deterministic artifact planning', () => {
         // All non-terminal stages are planned (bootstrap `intake` + `triage`;
         // `resolved` is terminal). Previously only non-LLM stages were planned.
         stageSlugs: ['intake', 'triage'],
+        specBlockFiles: [
+          'identity.yml',
+          'domain.yml',
+          'lifecycle.yml',
+          'channels.yml',
+          'actions.yml',
+          'guidance.yml',
+          'validation.yml',
+          'view.yml',
+          'policy.yml',
+        ],
       }).artifacts;
 
       expect(snapshot.domain['artifact_plan.status']).toBe('draft');

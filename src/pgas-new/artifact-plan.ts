@@ -33,6 +33,7 @@ export interface ProgramIdentity {
 
 const SAFE_PROGRAM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SAFE_PROGRAM_NAME = /^[A-Za-z0-9][A-Za-z0-9 .,_()/&+-]*$/;
+const MODULAR_SPEC_BLOCK_FILE = /^(?:identity|domain|lifecycle|channels|actions|guidance|delegation|validation|view|render|policy)\.ya?ml$/u;
 
 export function validateProgramIdentity(program: ProgramIdentity): ProgramIdentity {
   if (!SAFE_PROGRAM_SLUG.test(program.slug)) {
@@ -71,6 +72,7 @@ export interface ArtifactPlan {
 
 export interface GeneratedArtifactPlanOptions {
   stageSlugs?: string[];
+  specBlockFiles?: string[];
   includeSmokeTest?: boolean;
   capabilityGaps?: readonly CapabilityGap[];
   requestedArtifactPaths?: string[];
@@ -140,6 +142,7 @@ export function createStandaloneArtifactPlan(
       artifact('spec', `src/programs/${slug}/specs.yml`, 'Declare PGAS modes, governance, notebook, and control_plane.', 'branch_write', [
         'spec-load',
       ]),
+      ...modularSpecBlockArtifacts(`src/programs/${slug}`, options.specBlockFiles),
       ...generatedDomainArtifacts(`src/programs/${slug}`, stageSlugs),
       artifact('handler', `src/programs/${slug}/handlers.ts`, 'Implement stubbed action handlers and attachment points.', 'branch_write', [
         'program-deterministic',
@@ -260,6 +263,7 @@ export function createExistingRepoArtifactPlan(
     artifact('spec', `${programPath}/specs.yml`, 'Declare the attached PGAS program spec.', 'branch_write', [
       'spec-load',
     ]),
+    ...modularSpecBlockArtifacts(programPath, options.specBlockFiles),
     artifact('registration', `${programPath}/registration.ts`, 'Register the attached PGAS program through public plugin.js helpers.', 'branch_write', [
       'typecheck',
     ]),
@@ -456,6 +460,17 @@ function existingRepoUserFacingArtifacts(programPath: string, manifest: WiringMa
   ];
 }
 
+function modularSpecBlockArtifacts(programPath: string, blockFiles: readonly string[] | undefined): PlannedArtifact[] {
+  return [...new Set(blockFiles ?? [])].map((fileName) => {
+    if (!MODULAR_SPEC_BLOCK_FILE.test(fileName)) {
+      throw new Error(`invalid modular spec block file: ${fileName}`);
+    }
+    return artifact('spec', `${programPath}/${fileName}`, `Declare modular PGAS spec ${fileName} fragment.`, 'branch_write', [
+      'spec-load',
+    ]);
+  });
+}
+
 function generatedDomainArtifacts(programPath: string, stageSlugs: string[]): PlannedArtifact[] {
   if (stageSlugs.length === 0) {
     return [];
@@ -541,6 +556,7 @@ function isProgramRelativeArtifactPath(path: string): boolean {
   return path === 'projection.ts'
     || path === 'frontend.spec.yml'
     || path === 'specs.yml'
+    || MODULAR_SPEC_BLOCK_FILE.test(path)
     || path === 'registration.ts'
     || path === 'contracts.ts'
     || path === 'handlers.ts'
@@ -573,6 +589,7 @@ export function kindForRequestedArtifact(path: string): ArtifactKind {
   if (path.endsWith('/handlers.ts') || path.includes('/handlers/')) return 'handler';
   if (path.endsWith('/tools.ts')) return 'tool';
   if (path.endsWith('/specs.yml')) return 'spec';
+  if (MODULAR_SPEC_BLOCK_FILE.test(path.split('/').pop() ?? '')) return 'spec';
   if (path.endsWith('/registration.ts')) return 'registration';
   if (path.startsWith('audit/')) return 'audit';
   return 'metadata';
