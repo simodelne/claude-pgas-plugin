@@ -131,7 +131,7 @@ describe('synthesize_program_spec handler', () => {
       initial: string;
       terminal: string[];
       channels: Record<string, { direction: string; sync: string }>;
-      modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+      modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; when?: { path?: string } }>; vocabulary?: string[] }>;
       projection: Record<string, { include: string[]; exclude: string[] }>;
       ingestion: Record<string, string[]>;
       schema: Record<string, string>;
@@ -140,7 +140,7 @@ describe('synthesize_program_spec handler', () => {
         result_path?: string;
         mutations: Array<{ path: string; value?: unknown; from_arg?: string }>;
       }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
       reactions: Record<string, { event: string; watch: string[]; write_scope: string[] }>;
       guidance: Record<string, string[]>;
     };
@@ -153,10 +153,10 @@ describe('synthesize_program_spec handler', () => {
     expect(Object.keys(parsed.modes)).toEqual(['intake', 'triage', 'resolved']);
     expect(parsed.modes.intake.channels).toEqual(expect.arrayContaining(['seed', 'user_text']));
     expect(parsed.modes.intake.transitions).toEqual([
-      { target: 'triage', guard: { kind: 'FieldTruthy', path: 'intake.started' } },
+      { target: 'triage', when: { kind: 'FieldTruthy', path: 'intake.started' } },
     ]);
     expect(parsed.modes.triage.transitions).toEqual([
-      { target: 'resolved', guard: { kind: 'FieldTruthy', path: 'triage.summary_ready' } },
+      { target: 'resolved', when: { kind: 'FieldTruthy', path: 'triage.summary_ready' } },
     ]);
     expect(parsed.schema).toMatchObject({
       'intake.started': 'boolean',
@@ -176,7 +176,7 @@ describe('synthesize_program_spec handler', () => {
     });
     expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
     expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
-    expect(parsed.proceed_to.complete_triage).toBe('resolved');
+    expect(parsed.proceeds_to.complete_triage).toBe('resolved');
     expect(parsed.action_map).toHaveProperty('begin_work');
     expect(parsed.action_map).not.toHaveProperty('example_action');
     expect(parsed.action_map.complete_triage.channel).toBe('stage_output');
@@ -255,15 +255,15 @@ describe('synthesize_program_spec handler', () => {
       'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'alpha_path.ready' }),
     }));
     const parsed = load(artifact.spec_yaml) as {
-      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { path?: string } }> }>;
       action_map: Record<string, { mutations: Array<{ path?: string }> }>;
     };
 
     expect(parsed.modes.alpha_path.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'alpha_path.ready' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'alpha_path.ready' } },
     ]);
     expect(parsed.modes.beta_path.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'beta_path.ready' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'beta_path.ready' } },
     ]);
     expect(parsed.action_map.complete_alpha_path.mutations.map((mutation) => mutation.path)).toContain('alpha_path.ready');
     expect(parsed.action_map.complete_beta_path.mutations.map((mutation) => mutation.path)).toContain('beta_path.ready');
@@ -280,6 +280,71 @@ describe('synthesize_program_spec handler', () => {
       expectedReadyPath: 'beta_path.ready',
       otherReadyPath: 'alpha_path.ready',
     });
+  });
+
+  it('keeps generated v5 transitions blocked until their when predicate is true', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'program.slug': 'guard-parity',
+      'program.name': 'Guard Parity',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'triage' },
+        { slug: 'resolved', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'triage', trigger: 'ready', guard_field: 'intake.started' },
+        { from: 'triage', to: 'resolved', trigger: 'done', guard_field: 'triage.done' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.done' }),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { kind: string; path?: string } }> }>;
+      proceeds_to: Record<string, string>;
+    };
+
+    expect(parsed.modes.intake.transitions).toEqual([
+      { target: 'triage', when: { kind: 'FieldTruthy', path: 'intake.started' } },
+    ]);
+    expect(parsed.proceeds_to.begin_work).toBe('triage');
+
+    const blockedHarness = await createTestHarness(withProgramName(
+      generatedProgramEntry(artifact),
+      'guard-parity-blocked',
+    ), {
+      programName: 'guard-parity-blocked',
+      defaultChannel: 'user_text',
+      authorResponses: [
+        proposedEffect('session_status', 'triage', {}, 'widget_output'),
+      ],
+    });
+    try {
+      await blockedHarness.trigger('try to start without arming guard');
+      const snapshot = await blockedHarness.snapshot();
+      expect(snapshot.mode).toBe('intake');
+      expect(snapshot.domain['intake.started']).toBeUndefined();
+    } finally {
+      await blockedHarness.close();
+    }
+
+    const allowedHarness = await createTestHarness(withProgramName(
+      generatedProgramEntry(artifact),
+      'guard-parity-allowed',
+    ), {
+      programName: 'guard-parity-allowed',
+      defaultChannel: 'user_text',
+      authorResponses: [
+        effect('begin_work', {}, 'widget_output'),
+      ],
+    });
+    try {
+      await allowedHarness.trigger('start after arming guard');
+      const snapshot = await allowedHarness.snapshot();
+      expect(snapshot.mode).toBe('triage');
+      expect(snapshot.domain['intake.started']).toBe(true);
+    } finally {
+      await allowedHarness.close();
+    }
   });
 
   it('emits artifactPolicy rules for non-export stage artifacts declared on stage descriptors', () => {
@@ -740,16 +805,16 @@ describe('synthesize_program_spec handler', () => {
 
     const artifact = getSynthesizedArtifact(sessionId);
     const parsed = load(artifact?.spec_yaml ?? '') as {
-      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { path?: string } }> }>;
     };
 
     expect(parsed.modes.alpha.transitions).toEqual([{ target: 'beta' }]);
     expect(parsed.modes.beta.transitions).toEqual([
-      { target: 'charlie', guard: { kind: 'FieldTruthy', path: 'beta.done' } },
+      { target: 'charlie', when: { kind: 'FieldTruthy', path: 'beta.done' } },
     ]);
     expect(parsed.modes.charlie.transitions).toEqual([{ target: 'delta' }]);
     expect(parsed.modes.delta.transitions).toEqual([
-      { target: 'terminal', guard: { kind: 'FieldTruthy', path: 'delta.ready' } },
+      { target: 'terminal', when: { kind: 'FieldTruthy', path: 'delta.ready' } },
     ]);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -791,7 +856,7 @@ describe('synthesize_program_spec handler', () => {
       modes: Record<string, { vocabulary?: string[] }>;
       schema: Record<string, string>;
       action_map: Record<string, { result_path?: string; mutations: Array<{ path: string }> }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
     };
 
     expect(result).toMatchObject({ mode_names: stageNames });
@@ -800,7 +865,7 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.modes.classify.vocabulary).toEqual(expect.arrayContaining(['complete_classify']));
     expect(parsed.modes.investigate.vocabulary).toEqual(expect.arrayContaining(['complete_investigate']));
     expect(parsed.modes.resolve.vocabulary).toEqual(expect.arrayContaining(['complete_resolve']));
-    expect(parsed.proceed_to).toMatchObject({
+    expect(parsed.proceeds_to).toMatchObject({
       complete_classify: 'investigate',
       complete_investigate: 'resolve',
       complete_resolve: 'closed',
@@ -861,26 +926,26 @@ describe('synthesize_program_spec handler', () => {
 
     const artifact = getSynthesizedArtifact(sessionId);
     const parsed = load(artifact?.spec_yaml ?? '') as {
-      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { path?: string } }>; vocabulary?: string[] }>;
       action_map: Record<string, { result_path?: string; mutations: Array<{ path: string }> }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
     };
 
     expect(parsed.modes.review.transitions).toEqual([
-      { target: 'revision', guard: { kind: 'FieldTruthy', path: 'review.needs_revision' } },
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.approved' } },
+      { target: 'revision', when: { kind: 'FieldTruthy', path: 'review.needs_revision' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'review.approved' } },
     ]);
     expect(parsed.modes.revision.transitions).toEqual([
-      { target: 'review', guard: { kind: 'FieldTruthy', path: 'revision.ready' } },
+      { target: 'review', when: { kind: 'FieldTruthy', path: 'revision.ready' } },
     ]);
     expect(parsed.modes.review.vocabulary).toEqual(expect.arrayContaining([
       'advance_review_to_revision',
       'advance_review_to_complete',
     ]));
     expect(parsed.modes.review.vocabulary).not.toContain('complete_review');
-    expect(parsed.proceed_to.advance_review_to_revision).toBe('revision');
-    expect(parsed.proceed_to.advance_review_to_complete).toBe('complete');
-    expect(parsed.proceed_to.complete_revision).toBe('review');
+    expect(parsed.proceeds_to.advance_review_to_revision).toBe('revision');
+    expect(parsed.proceeds_to.advance_review_to_complete).toBe('complete');
+    expect(parsed.proceeds_to.complete_revision).toBe('review');
     expect(parsed.action_map.advance_review_to_revision.mutations.map((mutation) => mutation.path)).toEqual([
       'review.needs_revision',
       'review.result_json',
@@ -931,7 +996,7 @@ describe('synthesize_program_spec handler', () => {
       }),
     }));
     const parsed = load(artifact.spec_yaml) as {
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
     };
     const smokeActionNames = smokeEffectNames(artifact.smoke_test_ts);
 
@@ -944,7 +1009,7 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(smokeActionNames).not.toContain('advance_partner_review_to_revision');
     expect(smokeActionNames).not.toContain('complete_revision');
-    expect(parsed.proceed_to[smokeActionNames.at(-1) as string]).toBe('complete');
+    expect(parsed.proceeds_to[smokeActionNames.at(-1) as string]).toBe('complete');
     expect(artifact.smoke_test_ts).toContain("expect(snapshot.mode).toBe('complete')");
   });
 
@@ -974,14 +1039,14 @@ describe('synthesize_program_spec handler', () => {
 
     const artifact = getSynthesizedArtifact(sessionId);
     const parsed = load(artifact?.spec_yaml ?? '') as {
-      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { path?: string } }> }>;
     };
 
     expect(Object.keys(parsed.modes)).toEqual(['intake', 'review', 'remediation', 'resolved']);
     expect(parsed.modes.intake.transitions).toEqual([{ target: 'review' }]);
     expect(parsed.modes.review.transitions).toEqual([{ target: 'remediation' }]);
     expect(parsed.modes.remediation.transitions).toEqual([
-      { target: 'resolved', guard: { kind: 'FieldTruthy', path: 'triage.summary_ready' } },
+      { target: 'resolved', when: { kind: 'FieldTruthy', path: 'triage.summary_ready' } },
     ]);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -1014,7 +1079,7 @@ describe('synthesize_program_spec handler', () => {
     const artifact = getSynthesizedArtifact('session-nonfinal-completion');
     const parsed = load(artifact?.spec_yaml ?? '') as {
       terminal: string[];
-      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+      modes: Record<string, { transitions?: Array<{ target: string; when?: { path?: string } }>; vocabulary?: string[] }>;
     };
 
     expect(Object.keys(parsed.modes)).toEqual(stageNames);
@@ -1022,7 +1087,7 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.modes.complete.transitions).toEqual([]);
     expect(parsed.modes.blocked.transitions).toEqual([]);
     expect(parsed.modes.review.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.approved' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'review.approved' } },
     ]);
     expect(parsed.modes.complete.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
     expect(parsed.modes.blocked.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
@@ -1296,6 +1361,16 @@ function generatedProgramEntry(artifact: SynthesizedSpec): ProgramEntry {
   };
 }
 
+function withProgramName(entry: ProgramEntry, name: string): ProgramEntry {
+  return {
+    ...entry,
+    spec: {
+      ...entry.spec,
+      name,
+    },
+  };
+}
+
 function expectGeneratedHandlersToWire(specYaml: string, handlersSource: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-wire-'));
   const specPath = join(dir, 'specs.yml');
@@ -1312,6 +1387,10 @@ function handlerMapFromSource(source: string): Map<string, ToolHandler> {
 
 function effect(name: string, payload: Record<string, unknown>, channel: string): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function proposedEffect(name: string, proposedMode: string, payload: Record<string, unknown>, channel: string): TestHarnessAuthorResponse {
+  return { proposedMode, actions: [{ kind: 'EffectAction', name, channel, payload }] };
 }
 
 function writeTempSpec(specYaml: string): string {

@@ -69,7 +69,7 @@ export interface IntakeTransition {
   from: string;
   to: string;
   trigger?: string;
-  guard?: Record<string, unknown>;
+  when?: Record<string, unknown>;
   guard_field?: string;
 }
 

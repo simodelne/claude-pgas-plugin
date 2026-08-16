@@ -32,7 +32,7 @@ describe('PR-E2 export stage synthesis', () => {
           allowedWorldQueryPrefixes: string[];
         };
       };
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
       action_map: Record<string, Record<string, unknown>>;
       prompts: Record<string, string>;
       guidance: Record<string, string[]>;
@@ -54,7 +54,7 @@ describe('PR-E2 export stage synthesis', () => {
       transitions: [{ target: 'complete' }],
     });
     expect(spec.action_map.complete_export_document).toBeUndefined();
-    expect(spec.proceed_to.complete_export_document).toBeUndefined();
+    expect(spec.proceeds_to.complete_export_document).toBeUndefined();
     expect(spec.prompts.export_document).toBeUndefined();
     expect(spec.guidance.export_document).toBeUndefined();
     expect(spec.channels.export_stage_hook).toEqual({ direction: 'Out', sync: 'Sync' });
@@ -193,9 +193,9 @@ describe('PR-E2 export stage synthesis', () => {
   it('preserves all externally guarded decision-only export transitions from one source mode', () => {
     const artifact = synthesizeProgramSpecFromDomain(branchedExportDomain());
     const spec = load(artifact.spec_yaml) as {
-      modes: Record<string, { decision_only?: boolean; vocabulary?: string[]; channels?: string[]; transitions?: Array<{ target: string; guard?: { kind: string; path: string } }> }>;
+      modes: Record<string, { decision_only?: boolean; vocabulary?: string[]; channels?: string[]; transitions?: Array<{ target: string; when?: { kind: string; path: string } }> }>;
       action_map: Record<string, unknown>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
     };
 
     expect(spec.modes.export_document).toMatchObject({
@@ -204,11 +204,11 @@ describe('PR-E2 export stage synthesis', () => {
       channels: [],
     });
     expect(spec.modes.export_document.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'routing.export_ready' } },
-      { target: 'blocked', guard: { kind: 'FieldTruthy', path: 'routing.export_blocked' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'routing.export_ready' } },
+      { target: 'blocked', when: { kind: 'FieldTruthy', path: 'routing.export_blocked' } },
     ]);
     expect(Object.keys(spec.action_map).filter((name) => name.startsWith('advance_export_document'))).toEqual([]);
-    expect(Object.keys(spec.proceed_to).filter((name) => name.startsWith('advance_export_document'))).toEqual([]);
+    expect(Object.keys(spec.proceeds_to).filter((name) => name.startsWith('advance_export_document'))).toEqual([]);
   });
 
   it('rejects branched decision-only export transitions with source-local guards', () => {

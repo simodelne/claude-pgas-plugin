@@ -112,7 +112,7 @@ interface ParsedSpec {
   modes: Record<string, {
     channels?: string[];
     vocabulary?: string[];
-    transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+    transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
     preconditions?: Record<string, Array<Record<string, unknown>>>;
   }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
@@ -135,7 +135,7 @@ interface ParsedSpec {
   }>;
   derived_paths?: Array<{
     target: string;
-    when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
+    when: { kind: 'Always' } | { kind: 'FieldTruthy'; path: string } | { kind: 'FieldEquals'; path: string; value: unknown };
     set: {
       kind: string;
       params?: {
@@ -147,7 +147,7 @@ interface ParsedSpec {
     };
   }>;
   ingestion: Record<string, string[]>;
-  proceed_to: Record<string, string>;
+  proceeds_to: Record<string, string>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
   action_map: Record<string, {
     channel?: string;
@@ -165,7 +165,7 @@ describe('confirmation_loop descriptor synthesis', () => {
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
 
     expect(parsed.modes.review_work.transitions).toEqual(expect.arrayContaining([
-      { target: 'assemble_work', guard: { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true } },
+      { target: 'assemble_work', when: { kind: 'AllItemsStatus', path: 'work_units.items_terminal_status', value: true } },
     ]));
     expect(parsed.action_map.propose_item.awaits_user_decision).toEqual({
       channel: 'user_confirmation',
@@ -176,7 +176,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       mutations: [],
     });
     expect(parsed.action_map.complete_review_work.awaits_user_decision).toBeUndefined();
-    expect(parsed.proceed_to.complete_review_work).toBe('assemble_work');
+    expect(parsed.proceeds_to.complete_review_work).toBe('assemble_work');
     expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining([
       'propose_item',
       'complete_review_work',
@@ -275,7 +275,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       transitions: [],
     });
     expect(parsed.modes.review_work.transitions).toEqual(expect.arrayContaining([
-      { target: blockedMode, guard: blockedPredicate },
+      { target: blockedMode, when: blockedPredicate },
     ]));
     expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining([blockedAction]));
     expect(parsed.modes.review_work.preconditions?.[blockedAction]).toEqual([
@@ -289,7 +289,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       channel: 'widget_output',
       mutations: [],
     });
-    expect(parsed.proceed_to[blockedAction]).toBe(blockedMode);
+    expect(parsed.proceeds_to[blockedAction]).toBe(blockedMode);
     expect(declaredWriterCount(parsed, escape.counter)).toBe(1);
     expect(declaredWriterCount(parsed, escape.arm)).toBe(1);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
@@ -316,7 +316,7 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(parsed.derived_paths).toEqual(expect.arrayContaining([
       {
         target: 'work_units.all_terminal',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'all_items_field_eq',
           params: {
@@ -328,7 +328,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       },
       {
         target: 'summary.confirmation_loop.active_item_id',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'first_item_where_field_ne',
           params: {
@@ -341,7 +341,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       },
       {
         target: 'summary.confirmation_loop.has_proposed_item',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'any_item_field_eq',
           params: {
@@ -353,7 +353,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       },
       {
         target: 'summary.confirmation_loop.status_buckets.accepted',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'items_where_field_eq',
           params: {
@@ -365,7 +365,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       },
       {
         target: 'summary.confirmation_loop.status_buckets.skipped',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'items_where_field_eq',
           params: {
@@ -471,7 +471,7 @@ describe('confirmation_loop descriptor synthesis', () => {
       mutations: [],
       channel: 'widget_output',
     });
-    expect(parsed.proceed_to.complete_review_work).toBe('complete');
+    expect(parsed.proceeds_to.complete_review_work).toBe('complete');
     expect(parsed.modes.review_work.vocabulary).toEqual([
       'propose_item',
       'complete_review_work',
@@ -994,7 +994,7 @@ describe('confirmation_loop descriptor synthesis', () => {
 
   it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '67c61eafa32547704c489002c4fa5fec6003cb0334f700fe7f9330193631066b',
+      spec_yaml: '5b934b661a57065daa231737a95ce439a6d9e27422eeef6943e7e67d4d6f6296',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '14c54893ab1536af91ff364a5d1c74b58980b75e0a4377a2df8a714972f4b176',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',

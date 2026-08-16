@@ -362,24 +362,24 @@ modes:
     channels: [user_text, widget_output]
     transitions:
       - target: ingest_stage
-        guard: { kind: FieldTruthy, path: parent.ready }
+        when: { kind: FieldTruthy, path: parent.ready }
   ingest_stage:
     vocabulary: [request_ingest, advance_ingest]
     channels: [user_text, widget_output, ingest_call]
     transitions:
       - target: review_stage
-        guard: { kind: FieldTruthy, path: parent.ingest_done }
+        when: { kind: FieldTruthy, path: parent.ingest_done }
   review_stage:
     vocabulary: [request_review, complete_parent]
     channels: [user_text, widget_output, review_call]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: parent.complete_ready }
+        when: { kind: FieldTruthy, path: parent.complete_ready }
   complete:
     vocabulary: []
     channels: [widget_output]
 
-proceed_to:
+proceeds_to:
   enter_dispatch: ingest_stage
   advance_ingest: review_stage
   complete_parent: complete
@@ -549,18 +549,18 @@ modes:
     channels: [user_text, child_output]
     transitions:
       - target: work
-        guard: { kind: FieldTruthy, path: child.received }
+        when: { kind: FieldTruthy, path: child.received }
   work:
     vocabulary: [finish_work]
     channels: [user_text, child_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: work.done }
+        when: { kind: FieldTruthy, path: work.done }
   complete:
     vocabulary: []
     channels: [child_output]
 
-proceed_to:
+proceeds_to:
   accept_request: work
   finish_work: complete
 

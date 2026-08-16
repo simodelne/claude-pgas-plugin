@@ -1696,6 +1696,71 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       expect(second.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({ cache_hit: true }));
     });
   });
+
+  it('replays stage body cache across v5 PGAS-L terminology-only prompt shifts', async () => {
+    await withCache(async (cacheDir) => {
+      const v4Artifact = {
+        ...artifactWithContext(),
+        spec_yaml: [
+          'name: fee-calculator',
+          'modes:',
+          '  intake:',
+          '    transitions:',
+          '      - target: calculate',
+          '        guard:',
+          '          kind: FieldTruthy',
+          '          path: intake.started',
+          'proceed_to:',
+          '  begin_work: calculate',
+          'derived_paths:',
+          '  - path: intake.started',
+          '    triggerSet:',
+          '      - user_text',
+        ].join('\n'),
+      };
+      const v5Artifact = {
+        ...v4Artifact,
+        spec_yaml: [
+          'name: fee-calculator',
+          'modes:',
+          '  intake:',
+          '    transitions:',
+          '      - target: calculate',
+          '        when:',
+          '          kind: FieldTruthy',
+          '          path: intake.started',
+          'proceeds_to:',
+          '  begin_work: calculate',
+          'derived_paths:',
+          '  - path: intake.started',
+          '    triggers:',
+          '      - user_text',
+        ].join('\n'),
+      };
+      let calls = 0;
+      const first = await synthesizeDomainLogic(v4Artifact, {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => {
+          calls += 1;
+          return validBody;
+        },
+      });
+      const second = await synthesizeDomainLogic(v5Artifact, {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => {
+          throw new Error('provider must not be called for declaration-only cache bridge');
+        },
+      });
+
+      expect(calls).toBe(1);
+      expect(second.stage_sources).toEqual(first.stage_sources);
+      expect(second.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({ cache_hit: true }));
+    });
+  });
 });
 
 function loadRunStageForUnitTest(body: string): (input: unknown, runtime: unknown) => Promise<unknown> | unknown {

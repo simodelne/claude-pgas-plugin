@@ -58,9 +58,9 @@ modes:
         - { kind: FieldEquals, path: inputs.no_real_credentials, value: true }
     transitions:
       - target: mock_adapter_check
-        guard: { kind: FieldTruthy, path: intake.complete }
+        when: { kind: FieldTruthy, path: intake.complete }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   mock_adapter_check:
     vocabulary: [confirm_mock_adapter, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -74,9 +74,9 @@ modes:
         - { kind: FieldEquals, path: inputs.adapter_kind, value: mock }
     transitions:
       - target: session_bootstrap
-        guard: { kind: FieldTruthy, path: browser.mock_confirmed }
+        when: { kind: FieldTruthy, path: browser.mock_confirmed }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   session_bootstrap:
     vocabulary: [bootstrap_mock_session, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -86,9 +86,9 @@ modes:
         - { kind: FieldEquals, path: browser.adapter_kind, value: mock }
     transitions:
       - target: monitor_feed
-        guard: { kind: FieldTruthy, path: session.mock_authenticated }
+        when: { kind: FieldTruthy, path: session.mock_authenticated }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   monitor_feed:
     vocabulary: [capture_feed_snapshot, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -98,9 +98,9 @@ modes:
         - { kind: FieldEquals, path: browser.adapter_kind, value: mock }
     transitions:
       - target: draft_review
-        guard: { kind: FieldTruthy, path: feed.snapshot_captured }
+        when: { kind: FieldTruthy, path: feed.snapshot_captured }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   draft_review:
     vocabulary: [draft_post, propose_publish, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -111,30 +111,30 @@ modes:
         - { kind: FieldTruthy, path: draft.proposal_id }
     transitions:
       - target: human_approval
-        guard: { kind: FieldTruthy, path: draft.awaiting_approval }
+        when: { kind: FieldTruthy, path: draft.awaiting_approval }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   human_approval:
     vocabulary: [approve_draft, reject_draft, revise_draft, request_user_action, record_user_note]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       approve_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
         - { kind: FieldTruthy, path: draft.proposal_id }
       reject_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       revise_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: revise }
     transitions:
       - target: post_publish
-        guard: { kind: FieldTruthy, path: approval.user_approved }
+        when: { kind: FieldTruthy, path: approval.user_approved }
       - target: draft_review
-        guard: { kind: FieldTruthy, path: draft.revision_requested }
+        when: { kind: FieldTruthy, path: draft.revision_requested }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   post_publish:
     vocabulary: [publish_one_draft, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -145,9 +145,9 @@ modes:
         - { kind: FieldEquals, path: post.last_post_verified, value: true }
     transitions:
       - target: post_verification
-        guard: { kind: FieldTruthy, path: post.last_post_id }
+        when: { kind: FieldTruthy, path: post.last_post_id }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   post_verification:
     vocabulary: [verify_post, append_post_ledger, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -158,11 +158,11 @@ modes:
         - { kind: FieldEquals, path: verification.last_status, value: pass }
     transitions:
       - target: draft_review
-        guard: { kind: FieldEquals, path: post.last_post_verified, value: true }
+        when: { kind: FieldEquals, path: post.last_post_verified, value: true }
       - target: complete
-        guard: { kind: FieldTruthy, path: post.budget_exhausted }
+        when: { kind: FieldTruthy, path: post.budget_exhausted }
       - target: blocked
-        guard: { kind: FieldTruthy, path: verification.requires_user_decision }
+        when: { kind: FieldTruthy, path: verification.requires_user_decision }
   complete:
     vocabulary: [complete_run, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -170,7 +170,7 @@ modes:
     vocabulary: [request_user_action, record_user_note]
     channels: [system_mode_entry, widget_output]
 
-proceed_to:
+proceeds_to:
   record_intake: mock_adapter_check
   confirm_mock_adapter: session_bootstrap
   bootstrap_mock_session: monitor_feed

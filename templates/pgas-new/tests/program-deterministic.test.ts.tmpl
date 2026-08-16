@@ -88,7 +88,7 @@ interface DeterministicStep {
 interface DeterministicMode {
   decision_only?: boolean;
   vocabulary: readonly string[];
-  transitions: ReadonlyArray<{ target: string; guard?: unknown }>;
+  transitions: ReadonlyArray<{ target: string; when?: unknown }>;
   preconditions?: Map<string, readonly unknown[]> | { readonly [actionName: string]: readonly unknown[] | undefined };
 }
 
@@ -177,7 +177,7 @@ function nextTransitionAction(spec: Specification, modeName: string): { name: st
   }
 
   const transitionTargets = new Set(mode.transitions.map((transition) => transition.target));
-  const candidates = [...(spec.proceed_to?.entries() ?? [])]
+  const candidates = [...(spec.proceeds_to?.entries() ?? [])]
     .filter(([name, target]) => transitionTargets.has(target) && mode.vocabulary.includes(name))
     .filter(([name]) => canDriveActionLinearly(mode, name))
     .filter(([name]) => !CONTROL_ACTIONS.has(name));
@@ -194,7 +194,7 @@ function automaticDecisionOnlyTarget(mode: DeterministicMode): string | undefine
     return undefined;
   }
   const transition = mode.transitions[0];
-  if (!transition || transition.guard !== undefined) {
+  if (!transition || transition.when !== undefined) {
     return undefined;
   }
   return transition.target;

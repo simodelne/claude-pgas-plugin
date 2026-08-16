@@ -20,7 +20,7 @@ preamble: |
   history as state.
 
 initial: intake
-terminal: [complete]
+terminal: [ complete ]
 
 features:
   - base
@@ -34,25 +34,32 @@ channels:
 
 modes:
   intake:
-    vocabulary: [record_intake, request_user_input, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ record_intake, request_user_input, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     transitions:
       - target: outline
-        guard: { kind: FieldTruthy, path: intake.complete }
+        when: { kind: FieldTruthy, path: intake.complete }
   outline:
-    vocabulary: [propose_outline, approve_outline, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    vocabulary: [ propose_outline, approve_outline, request_user_input, record_user_note ]
+    channels: [ user_text, user_confirmation, system_mode_entry, widget_output ]
     preconditions:
       approve_outline:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
         - { kind: FieldTruthy, path: outline.sections }
     transitions:
       - target: drafting
-        guard: { kind: FieldTruthy, path: outline.approved }
+        when: { kind: FieldTruthy, path: outline.approved }
   drafting:
-    vocabulary: [draft_section, request_revision, render_policy_outputs, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    vocabulary:
+      [
+        draft_section,
+        request_revision,
+        render_policy_outputs,
+        request_user_input,
+        record_user_note
+      ]
+    channels: [ user_text, user_confirmation, system_mode_entry, widget_output ]
     preconditions:
       draft_section:
         - { kind: FieldTruthy, path: outline.approved }
@@ -60,25 +67,31 @@ modes:
         - { kind: FieldTruthy, path: draft.sections }
     transitions:
       - target: revision
-        guard: { kind: FieldTruthy, path: revision.requested }
+        when: { kind: FieldTruthy, path: revision.requested }
       - target: complete
-        guard: { kind: FieldTruthy, path: outputs.ready }
+        when: { kind: FieldTruthy, path: outputs.ready }
   revision:
-    vocabulary: [revise_section, render_policy_outputs, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    vocabulary:
+      [
+        revise_section,
+        render_policy_outputs,
+        request_user_input,
+        record_user_note
+      ]
+    channels: [ user_text, user_confirmation, system_mode_entry, widget_output ]
     preconditions:
       render_policy_outputs:
         - { kind: FieldTruthy, path: draft.sections }
     transitions:
       - target: drafting
-        guard: { kind: FieldTruthy, path: revision.applied }
+        when: { kind: FieldTruthy, path: revision.applied }
       - target: complete
-        guard: { kind: FieldTruthy, path: outputs.ready }
+        when: { kind: FieldTruthy, path: outputs.ready }
   complete:
-    vocabulary: [request_user_input]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [ request_user_input ]
+    channels: [ system_mode_entry, widget_output ]
 
-proceed_to:
+proceeds_to:
   record_intake: outline
   approve_outline: drafting
   request_revision: revision
@@ -86,31 +99,75 @@ proceed_to:
 
 projection:
   intake:
-    include: [inputs.user_text, intake.fields, intake.complete, notebook.entries, notebook.pins]
+    include:
+      [
+        inputs.user_text,
+        intake.fields,
+        intake.complete,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   outline:
-    include: [inputs.user_text, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, intake.fields, outline.sections, outline.approved, decisions.reasoning, notebook.entries, notebook.pins]
+    include:
+      [
+        inputs.user_text,
+        inputs.user_decision,
+        inputs.user_decision.decision,
+        inputs.user_decision.instruction,
+        inputs.user_decision.note_mode,
+        inputs.user_decision.timestamp,
+        intake.fields,
+        outline.sections,
+        outline.approved,
+        decisions.reasoning,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   drafting:
-    include: [inputs.user_text, outline.sections, draft.sections, revision.requested, outputs.html, outputs.word, notebook.entries, notebook.pins]
+    include:
+      [
+        inputs.user_text,
+        outline.sections,
+        draft.sections,
+        revision.requested,
+        outputs.html,
+        outputs.word,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   revision:
-    include: [inputs.user_text, draft.sections, revision.instructions, revision.applied, outputs.html, outputs.word, notebook.entries, notebook.pins]
+    include:
+      [
+        inputs.user_text,
+        draft.sections,
+        revision.instructions,
+        revision.applied,
+        outputs.html,
+        outputs.word,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   complete:
-    include: [outputs.html, outputs.word, work.status]
+    include: [ outputs.html, outputs.word, work.status ]
     exclude: []
 
 prompts:
-  intake: "Collect policy objectives, policy type, organization profile, risk appetite, available resources, audience, and jurisdiction."
+  intake: "Collect policy objectives, policy type, organization profile, risk
+    appetite, available resources, audience, and jurisdiction."
   outline: "Propose a risk-based policy outline and request approval before drafting."
-  drafting: "Draft the approved policy section-by-section and prepare output attachment payloads."
-  revision: "Apply user-requested revisions while preserving the approved outline unless changed by the user."
+  drafting: "Draft the approved policy section-by-section and prepare output
+    attachment payloads."
+  revision: "Apply user-requested revisions while preserving the approved outline
+    unless changed by the user."
   complete: "Report completion and the available output artifacts."
 
 ingestion:
-  user_text: [inputs.user_text]
-  system_mode_entry: [inputs.mode_entry]
+  user_text: [ inputs.user_text ]
+  system_mode_entry: [ inputs.mode_entry ]
   user_confirmation:
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
@@ -120,7 +177,7 @@ ingestion:
 action_map:
   record_user_note:
     description: "Record a durable policy drafting note."
-    mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }]
+    mutations: [ { op: MAppend, path: notebook.entries, from_arg: note } ]
     channel: widget_output
   request_user_input:
     description: "Ask the user for missing intake, outline approval, or revision decisions."
@@ -129,11 +186,23 @@ action_map:
   record_intake:
     description: "Record complete policy intake."
     mutations:
-      - { op: MSet, path: intake.fields.policy_objectives, from_arg: policy_objectives }
+      - {
+          op: MSet,
+          path: intake.fields.policy_objectives,
+          from_arg: policy_objectives
+        }
       - { op: MSet, path: intake.fields.policy_type, from_arg: policy_type }
-      - { op: MSet, path: intake.fields.organization_profile, from_arg: organization_profile }
+      - {
+          op: MSet,
+          path: intake.fields.organization_profile,
+          from_arg: organization_profile
+        }
       - { op: MSet, path: intake.fields.risk_appetite, from_arg: risk_appetite }
-      - { op: MSet, path: intake.fields.available_resources, from_arg: available_resources }
+      - {
+          op: MSet,
+          path: intake.fields.available_resources,
+          from_arg: available_resources
+        }
       - { op: MSet, path: intake.fields.target_audience, from_arg: target_audience }
       - { op: MSet, path: intake.fields.jurisdiction, from_arg: jurisdiction }
       - { op: MSet, path: intake.complete, value: true }
@@ -225,20 +294,34 @@ fallback:
 
 guidance:
   intake:
-    - "First read inputs.user_text. If it contains every required intake field, call record_intake with extracted values. Do not ask again for facts already present in inputs.user_text."
-    - "If any required intake field is missing, call request_user_input with intent=\"collect_structured_data\" and fields for only the missing facts."
+    - "First read inputs.user_text. If it contains every required intake field,
+      call record_intake with extracted values. Do not ask again for facts
+      already present in inputs.user_text."
+    - "If any required intake field is missing, call request_user_input with
+      intent=\"collect_structured_data\" and fields for only the missing facts."
     - "If all fields are present, call record_intake."
   outline:
-    - "Only approve the outline on user_confirmation when inputs.user_decision.decision=\"approve\" and outline.sections is already populated; call approve_outline with inputs.user_decision.instruction or a concise approval note."
-    - "On a current user_confirmation approval, never call record_user_note; the only valid action is approve_outline."
-    - "Propose a concrete section outline calibrated to risk appetite and jurisdiction, then call request_user_input with intent=\"present_for_approval\"."
+    - "Only approve the outline on user_confirmation when
+      inputs.user_decision.decision=\"approve\" and outline.sections is already
+      populated; call approve_outline with inputs.user_decision.instruction or a
+      concise approval note."
+    - "On a current user_confirmation approval, never call record_user_note; the
+      only valid action is approve_outline."
+    - "Propose a concrete section outline calibrated to risk appetite and
+      jurisdiction, then call request_user_input with
+      intent=\"present_for_approval\"."
     - "Do not draft sections until approve_outline is called."
   drafting:
     - "Draft one section at a time."
-    - "Draft exactly seven policy sections before calling render_policy_outputs; the render gate requires draft.sections to be present and guidance requires seven sections."
-    - "After all seven approved outline sections are drafted, call render_policy_outputs to hand HTML and Word payloads to repo-owned renderers."
+    - "Draft exactly seven policy sections before calling render_policy_outputs;
+      the render gate requires draft.sections to be present and guidance
+      requires seven sections."
+    - "After all seven approved outline sections are drafted, call
+      render_policy_outputs to hand HTML and Word payloads to repo-owned
+      renderers."
   revision:
-    - "Apply the requested change to the relevant section and return to drafting unless all outputs are ready."
+    - "Apply the requested change to the relevant section and return to drafting
+      unless all outputs are ready."
 
 control_plane:
   version: 1
@@ -255,7 +338,7 @@ control_plane:
   controls:
     ask:
       title: Ask
-      aliases: ["/ask"]
+      aliases: [ "/ask" ]
       args:
         query:
           type: string
@@ -274,7 +357,7 @@ control_plane:
           mode: async
     abort:
       title: Abort run
-      aliases: ["/abort", "/stop"]
+      aliases: [ "/abort", "/stop" ]
       availability:
         when: "active_session.running"
       dispatch:
@@ -285,7 +368,7 @@ control_plane:
         confirm: true
     new:
       title: New session
-      aliases: ["/new", "/reset", "/restart"]
+      aliases: [ "/new", "/reset", "/restart" ]
       dispatch:
         - op: create_session
           as: session
@@ -294,7 +377,7 @@ control_plane:
         priority: secondary
     history:
       title: Recent sessions
-      aliases: ["/history", "/recent"]
+      aliases: [ "/history", "/recent" ]
       dispatch:
         - op: list_sessions
           as: sessions
@@ -302,7 +385,7 @@ control_plane:
         priority: secondary
     status:
       title: Status
-      aliases: ["/status"]
+      aliases: [ "/status" ]
       availability:
         when: "active_session"
       dispatch:
@@ -313,7 +396,7 @@ control_plane:
         priority: contextual
     resume:
       title: Resume
-      aliases: ["/resume"]
+      aliases: [ "/resume" ]
       availability:
         when: "active_session"
       dispatch:
@@ -324,7 +407,7 @@ control_plane:
         priority: contextual
     help:
       title: Help
-      aliases: ["/help"]
+      aliases: [ "/help" ]
       dispatch:
         - op: render_help
       presentation:

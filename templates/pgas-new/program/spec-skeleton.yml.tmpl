@@ -28,18 +28,18 @@ modes:
     channels: [seed, user_text, system_mode_entry, widget_output]
     transitions:
       - target: working
-        guard: { kind: FieldTruthy, path: work.started }
+        when: { kind: FieldTruthy, path: work.started }
   working:
     vocabulary: [example_action, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: work.example_ready }
+        when: { kind: FieldTruthy, path: work.example_ready }
   complete:
     vocabulary: [session_status, session_history, session_help]
     channels: [system_mode_entry, widget_output]
 
-proceed_to:
+proceeds_to:
   begin_work: working
   example_action: complete
 

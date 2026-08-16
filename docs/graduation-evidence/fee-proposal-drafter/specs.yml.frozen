@@ -39,7 +39,7 @@ modes:
       - widget_output
     transitions:
       - target: scope_analysis
-        guard:
+        when:
           kind: FieldTruthy
           path: request.captured
   scope_analysis:
@@ -57,7 +57,7 @@ modes:
       - widget_output
     transitions:
       - target: rate_card_lookup
-        guard:
+        when:
           kind: FieldTruthy
           path: scope.analyzed
   rate_card_lookup:
@@ -75,7 +75,7 @@ modes:
       - widget_output
     transitions:
       - target: effort_estimation
-        guard:
+        when:
           kind: FieldTruthy
           path: rates.loaded
   effort_estimation:
@@ -93,7 +93,7 @@ modes:
       - widget_output
     transitions:
       - target: fee_modeling
-        guard:
+        when:
           kind: FieldTruthy
           path: effort.estimated
   fee_modeling:
@@ -111,7 +111,7 @@ modes:
       - widget_output
     transitions:
       - target: risk_adjustment
-        guard:
+        when:
           kind: FieldTruthy
           path: fee.modeled
   risk_adjustment:
@@ -129,7 +129,7 @@ modes:
       - widget_output
     transitions:
       - target: draft_assembly
-        guard:
+        when:
           kind: FieldTruthy
           path: risk.adjusted
   draft_assembly:
@@ -147,7 +147,7 @@ modes:
       - widget_output
     transitions:
       - target: partner_review
-        guard:
+        when:
           kind: FieldTruthy
           path: draft.assembled
   partner_review:
@@ -166,11 +166,11 @@ modes:
       - widget_output
     transitions:
       - target: revision
-        guard:
+        when:
           kind: FieldTruthy
           path: review.changes_requested
       - target: client_delivery
-        guard:
+        when:
           kind: FieldTruthy
           path: delivery.sent
   revision:
@@ -188,7 +188,7 @@ modes:
       - widget_output
     transitions:
       - target: partner_review
-        guard:
+        when:
           kind: FieldTruthy
           path: revision.completed
   client_delivery:
@@ -199,7 +199,7 @@ modes:
     channels:
       - widget_output
     transitions: []
-proceed_to:
+proceeds_to:
   begin_work: scope_analysis
   complete_scope_analysis: rate_card_lookup
   complete_rate_card_lookup: effort_estimation
@@ -376,10 +376,15 @@ action_map:
     mutations: []
     channel: widget_output
   complete_scope_analysis:
-    description: TODO stub for completing scope_analysis and advancing exactly one hop to rate_card_lookup. Writes only scope_analysis's own guard/result fields.
+    description: TODO stub for completing scope_analysis and advancing exactly one
+      hop to rate_card_lookup. Writes only scope_analysis's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the scope_analysis stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the scope_analysis stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the scope_analysis stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        scope_analysis stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: scope.analyzed
@@ -392,10 +397,15 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_rate_card_lookup:
-    description: TODO stub for completing rate_card_lookup and advancing exactly one hop to effort_estimation. Writes only rate_card_lookup's own guard/result fields.
+    description: TODO stub for completing rate_card_lookup and advancing exactly one
+      hop to effort_estimation. Writes only rate_card_lookup's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the rate_card_lookup stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the rate_card_lookup stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the rate_card_lookup stage. TODO: replace
+        the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        rate_card_lookup stage. TODO: replace the generated stub with real
+        domain output.'
     mutations:
       - op: MSet
         path: rates.loaded
@@ -408,10 +418,15 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_effort_estimation:
-    description: TODO stub for completing effort_estimation and advancing exactly one hop to fee_modeling. Writes only effort_estimation's own guard/result fields.
+    description: TODO stub for completing effort_estimation and advancing exactly
+      one hop to fee_modeling. Writes only effort_estimation's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the effort_estimation stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the effort_estimation stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the effort_estimation stage. TODO: replace
+        the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        effort_estimation stage. TODO: replace the generated stub with real
+        domain output.'
     mutations:
       - op: MSet
         path: effort.estimated
@@ -424,10 +439,14 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_fee_modeling:
-    description: TODO stub for completing fee_modeling and advancing exactly one hop to risk_adjustment. Writes only fee_modeling's own guard/result fields.
+    description: TODO stub for completing fee_modeling and advancing exactly one hop
+      to risk_adjustment. Writes only fee_modeling's own guard/result fields.
     arg_descriptions:
-      result_json: 'JSON string result for the fee_modeling stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the fee_modeling stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the fee_modeling stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        fee_modeling stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: fee.modeled
@@ -440,10 +459,15 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_risk_adjustment:
-    description: TODO stub for completing risk_adjustment and advancing exactly one hop to draft_assembly. Writes only risk_adjustment's own guard/result fields.
+    description: TODO stub for completing risk_adjustment and advancing exactly one
+      hop to draft_assembly. Writes only risk_adjustment's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the risk_adjustment stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the risk_adjustment stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the risk_adjustment stage. TODO: replace
+        the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        risk_adjustment stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: risk.adjusted
@@ -456,10 +480,15 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_draft_assembly:
-    description: TODO stub for completing draft_assembly and advancing exactly one hop to partner_review. Writes only draft_assembly's own guard/result fields.
+    description: TODO stub for completing draft_assembly and advancing exactly one
+      hop to partner_review. Writes only draft_assembly's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the draft_assembly stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the draft_assembly stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the draft_assembly stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        draft_assembly stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: draft.assembled
@@ -472,10 +501,14 @@ action_map:
         from_arg: items_json
     channel: widget_output
   advance_partner_review_to_revision:
-    description: TODO stub for completing partner_review and advancing exactly one hop to revision. Writes only partner_review's own guard/result fields.
+    description: TODO stub for completing partner_review and advancing exactly one
+      hop to revision. Writes only partner_review's own guard/result fields.
     arg_descriptions:
-      result_json: 'JSON string result for the partner_review stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the partner_review stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the partner_review stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        partner_review stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: review.changes_requested
@@ -488,10 +521,15 @@ action_map:
         from_arg: items_json
     channel: widget_output
   advance_partner_review_to_client_delivery:
-    description: TODO stub for completing partner_review and advancing exactly one hop to client_delivery. Writes only partner_review's own guard/result fields.
+    description: TODO stub for completing partner_review and advancing exactly one
+      hop to client_delivery. Writes only partner_review's own guard/result
+      fields.
     arg_descriptions:
-      result_json: 'JSON string result for the partner_review stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the partner_review stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the partner_review stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the
+        partner_review stage. TODO: replace the generated stub with real domain
+        output.'
     mutations:
       - op: MSet
         path: delivery.sent
@@ -504,10 +542,13 @@ action_map:
         from_arg: items_json
     channel: widget_output
   complete_revision:
-    description: TODO stub for completing revision and advancing exactly one hop to partner_review. Writes only revision's own guard/result fields.
+    description: TODO stub for completing revision and advancing exactly one hop to
+      partner_review. Writes only revision's own guard/result fields.
     arg_descriptions:
-      result_json: 'JSON string result for the revision stage. TODO: replace the generated stub with real domain output.'
-      items_json: 'JSON string array of item ids or summaries produced by the revision stage. TODO: replace the generated stub with real domain output.'
+      result_json: 'JSON string result for the revision stage. TODO: replace the
+        generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the revision
+        stage. TODO: replace the generated stub with real domain output.'
     mutations:
       - op: MSet
         path: revision.completed
@@ -569,21 +610,29 @@ fallback:
     ok: false
 guidance:
   scope_analysis:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   rate_card_lookup:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   effort_estimation:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   fee_modeling:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   risk_adjustment:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   draft_assembly:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   partner_review:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
   revision:
-    - Use the synthesized JSON-string scalar fields for structured handler results.
+    - Use the synthesized JSON-string scalar fields for structured handler
+      results.
 control_plane:
   version: 1
   session:

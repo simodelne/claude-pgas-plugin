@@ -236,7 +236,7 @@ describe('documents descriptor capability routing', () => {
     }));
     const parsed = load(artifact.spec_yaml) as {
       modes: Record<string, {
-        transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+        transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
       }>;
     };
     expect(artifact.spec_yaml).toContain('document_upload:');
@@ -244,7 +244,7 @@ describe('documents descriptor capability routing', () => {
     expect(parsed.modes.ingest_source.transitions).toEqual([
       {
         target: 'complete',
-        guard: {
+        when: {
           kind: 'All',
           subs: [
             { kind: 'FieldTruthy', path: 'work.source_ready' },
@@ -264,14 +264,14 @@ describe('documents descriptor capability routing', () => {
     }));
     const parsed = load(artifact.spec_yaml) as {
       modes: Record<string, {
-        transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+        transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
       }>;
     };
 
     expect(parsed.modes.ingest_source.transitions).toEqual([
       {
         target: 'complete',
-        guard: {
+        when: {
           kind: 'All',
           subs: [
             { kind: 'FieldTruthy', path: 'work.source_ready' },

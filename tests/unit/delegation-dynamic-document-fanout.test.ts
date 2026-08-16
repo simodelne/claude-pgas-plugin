@@ -19,7 +19,7 @@ interface ParsedSpec {
     vocabulary?: string[];
     channels?: string[];
     preconditions?: Record<string, unknown[]>;
-    transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+    transitions?: Array<{ target: string; when?: { kind: string; path: string } }>;
   }>;
   schema: Record<string, string>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
@@ -58,7 +58,7 @@ describe('dynamic document delegation fan-out synthesis', () => {
       { kind: 'FieldTruthy', path: 'review_documents.fan_out.complete' },
     ]);
     expect(parsed.modes.review_documents.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review_documents.fan_out.complete' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'review_documents.fan_out.complete' } },
     ]);
 
     expect(parsed.schema).toMatchObject({

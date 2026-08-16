@@ -1898,7 +1898,7 @@ async function runWebNavigationBehavioralGate(
     min_delay_ms: 0,
     max_concurrency: 1,
   };
-  const guard = { ...inputGuard, allowed_domains: ['example.com'] };
+  const guardContext = { ...inputGuard, allowed_domains: ['example.com'] };
   const connectorCalls: Array<{
     source: string;
     purpose: string;
@@ -2000,7 +2000,7 @@ async function runWebNavigationBehavioralGate(
       source,
       purpose,
       extractionSchema,
-      guard,
+      guardContext,
       connectorCalls,
     });
     if (error) {
@@ -2023,7 +2023,7 @@ function assertWebNavigationStageOutput(
     source: string;
     purpose: string;
     extractionSchema: Record<string, string>;
-    guard: Record<string, unknown>;
+    guardContext: Record<string, unknown>;
     connectorCalls: Array<{
       source: string;
       purpose: string;
@@ -2053,7 +2053,7 @@ function assertWebNavigationStageOutput(
   if (!Array.isArray(result.items) || result.items.length === 0) {
     return 'result_json.items must be a non-empty array';
   }
-  if (typeof result.pages_visited !== 'number' || result.pages_visited > Number(expected.guard.max_pages)) {
+  if (typeof result.pages_visited !== 'number' || result.pages_visited > Number(expected.guardContext.max_pages)) {
     return 'result_json.pages_visited must be numeric and no greater than GuardContext.max_pages';
   }
   if (!Array.isArray(result.audit) || result.audit.length === 0) {
@@ -2073,7 +2073,8 @@ function assertWebNavigationStageOutput(
   if (JSON.stringify(call.extraction_schema) !== JSON.stringify(expected.extractionSchema)) {
     return 'connector call did not use extraction_schema from input.domain';
   }
-  if (JSON.stringify(call.guard) !== JSON.stringify(expected.guard)) {
+  const callGuardContext = Reflect.get(call, 'guard');
+  if (JSON.stringify(callGuardContext) !== JSON.stringify(expected.guardContext)) {
     return 'connector call did not use GuardContext from input.domain';
   }
   return undefined;
@@ -4542,17 +4543,22 @@ function legacyStageBodyCachePaths(input: {
   model: string;
   providerUrl: string;
 }): string[] {
-  const prompts = new Set<string>();
-  const worldWritePrompt = legacyWorldWriteCachePrompt(input.prompt);
-  if (worldWritePrompt) {
-    prompts.add(worldWritePrompt);
-  }
-  for (const prompt of [input.prompt, ...(worldWritePrompt ? [worldWritePrompt] : [])]) {
-    const argSchemaPrompt = legacyArgSchemaCachePrompt(prompt);
-    if (argSchemaPrompt) {
-      prompts.add(argSchemaPrompt);
+  const prompts = new Set<string>([input.prompt]);
+  const overlays = [
+    legacyPgasLUnificationCachePrompt,
+    legacyWorldWriteCachePrompt,
+    legacyArgSchemaCachePrompt,
+  ];
+  for (const overlay of overlays) {
+    for (const prompt of [...prompts]) {
+      const legacyPrompt = overlay(prompt);
+      if (legacyPrompt) {
+        prompts.add(legacyPrompt);
+      }
     }
   }
+
+  prompts.delete(input.prompt);
   return [...prompts].map((prompt) =>
     join(input.cacheDir, `${cacheKeyFor({
       stage: input.stage,
@@ -4561,6 +4567,21 @@ function legacyStageBodyCachePaths(input: {
       model: input.model,
       providerUrl: input.providerUrl,
     })}.json`));
+}
+
+function legacyPgasLUnificationCachePrompt(prompt: string): string | undefined {
+  // v5 PGAS-L key unification changes declaration text embedded in stage-body
+  // prompts. Stage bodies depend on domain contracts, not guard-vs-when names,
+  // so replay old cache entries through a declaration-only key alias.
+  const normalized = prompt
+    .replace(/^(\s*)proceeds_to:/gmu, '$1proceed_to:')
+    .replace(/^(\s*)triggers:/gmu, '$1triggerSet:')
+    .replace(/^(\s*)collection:/gmu, '$1collections:')
+    .replace(
+      /(^[ \t]*- target:[^\n]*\n(?:[ \t]+[^\n]*\n){0,8}?)([ \t]*)when:/gmu,
+      '$1$2guard:',
+    );
+  return normalized === prompt ? undefined : normalized;
 }
 
 function legacyWorldWriteCachePrompt(prompt: string): string | undefined {
