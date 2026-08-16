@@ -110,7 +110,7 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
         transitions: [
           {
             target: model.body.slug,
-            guard: { kind: 'FieldTruthy', path: model.intakeTransition.guard_field },
+            when: { kind: 'FieldTruthy', path: model.intakeTransition.guard_field },
           },
         ],
       },
@@ -120,7 +120,7 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
         transitions: [
           {
             target: model.terminal.slug,
-            guard: { kind: 'FieldTruthy', path: model.completionTransition.guard_field },
+            when: { kind: 'FieldTruthy', path: model.completionTransition.guard_field },
           },
         ],
       },
@@ -129,7 +129,7 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
         channels: ['system_mode_entry', 'widget_output'],
       },
     },
-    proceed_to: {
+    proceeds_to: {
       record_intake: model.body.slug,
       [model.body.slug]: model.terminal.slug,
     },

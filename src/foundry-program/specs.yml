@@ -10,7 +10,7 @@ preamble: |
   user decisions in the notebook-backed domain.
 
 initial: intake_intelligence
-terminal: [pr_graduation]
+terminal: [ pr_graduation ]
 
 features:
   - base
@@ -29,8 +29,41 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_documents_descriptor, record_q6_completion, record_skill_catalog, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [seed, user_text, user_confirmation, system_mode_entry, widget_output]
+    vocabulary:
+      [
+        record_program_target,
+        choose_design_path,
+        apply_default_skeleton,
+        ask_design_question,
+        record_q1_purpose,
+        record_q2_entry_channel,
+        record_q3_stages,
+        record_q4_transitions,
+        record_q5_delegation,
+        record_documents_descriptor,
+        record_q6_completion,
+        record_skill_catalog,
+        record_program_intake_finalize,
+        confirm_design,
+        reject_design_and_revise_q1,
+        reject_design_and_revise_q2,
+        reject_design_and_revise_q3,
+        reject_design_and_revise_q4,
+        reject_design_and_revise_q5,
+        reject_design_and_revise_q6,
+        record_user_note,
+        pin_notebook_note,
+        confirm_research_scope,
+        record_user_requested_research,
+        web_research,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ seed, user_text, user_confirmation, system_mode_entry, widget_output ]
     preconditions:
       record_program_target:
         - { kind: FieldFalsy, path: program.target_dir_confirmed }
@@ -81,40 +114,53 @@ modes:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
         - { kind: FieldTruthy, path: program.target_dir_confirmed }
         - { kind: FieldFalsy, path: program.design_confirmed }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
       reject_design_and_revise_q1:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       reject_design_and_revise_q2:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       reject_design_and_revise_q3:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       reject_design_and_revise_q4:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       reject_design_and_revise_q5:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       reject_design_and_revise_q6:
         - { kind: FieldTruthy, path: intake.program_intake_finalized }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       web_research:
         - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
       - target: repo_targeting
-        guard: { kind: FieldTruthy, path: program.design_confirmed }
+        when: { kind: FieldTruthy, path: program.design_confirmed }
   repo_targeting:
-    vocabulary: [select_repo_target, authorize_standalone_target, load_wiring_manifest, authorize_existing_repo_target, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        select_repo_target,
+        authorize_standalone_target,
+        load_wiring_manifest,
+        authorize_existing_repo_target,
+        create_curator_request,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       select_repo_target:
         - { kind: FieldTruthy, path: program.target_dir_confirmed }
@@ -127,18 +173,34 @@ modes:
       authorize_existing_repo_target:
         - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
         - { kind: FieldEquals, path: repo.wiring_manifest.status, value: valid }
-        - { kind: FieldEquals, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
+        - {
+            kind: FieldEquals,
+            path: repo.wiring_manifest.path,
+            value: .pgas/wiring.yml
+          }
       create_curator_request:
         - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
         - { kind: FieldFalsy, path: repo.write_authorized }
     transitions:
       - target: architecture_design
-        guard: { kind: FieldTruthy, path: repo.write_authorized }
+        when: { kind: FieldTruthy, path: repo.write_authorized }
       - target: curator_request
-        guard: { kind: FieldTruthy, path: repo.blocked }
+        when: { kind: FieldTruthy, path: repo.blocked }
   architecture_design:
-    vocabulary: [synthesize_program_spec, design_architecture, record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        synthesize_program_spec,
+        design_architecture,
+        record_user_note,
+        web_research,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       synthesize_program_spec:
         - { kind: FieldTruthy, path: program.design_confirmed }
@@ -146,48 +208,80 @@ modes:
         - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
       - target: scaffold_plan
-        guard: { kind: FieldTruthy, path: program.synthesis_complete }
+        when: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
-    vocabulary: [approve_artifact_plan, revise_artifact_plan, plan_artifacts, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
+    vocabulary:
+      [
+        approve_artifact_plan,
+        revise_artifact_plan,
+        plan_artifacts,
+        create_curator_request,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ user_confirmation, system_mode_entry, widget_output, artifact_plan_output ]
     preconditions:
       plan_artifacts:
         - { kind: FieldTruthy, path: repo.write_authorized }
         - { kind: FieldTruthy, path: program.synthesis_complete }
         - { kind: FieldFalsy, path: artifact_plan.status }
-        - { kind: TriggerType, triggerSet: [system_mode_entry] }
+        - { kind: TriggerType, triggers: [ system_mode_entry ] }
       approve_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
         - { kind: FieldTruthy, path: program.synthesis_complete }
         - { kind: FieldEquals, path: artifact_plan.status, value: draft }
         - { kind: FieldFalsy, path: artifact_plan.approved }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
       revise_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
         - { kind: FieldTruthy, path: program.synthesis_complete }
         - { kind: FieldEquals, path: artifact_plan.status, value: draft }
         - { kind: FieldFalsy, path: artifact_plan.approved }
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
     transitions:
       - target: domain_synthesis
-        guard: { kind: FieldEquals, path: artifact_plan.status, value: approved }
+        when: { kind: FieldEquals, path: artifact_plan.status, value: approved }
   domain_synthesis:
-    vocabulary: [synthesize_domain_logic, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        synthesize_domain_logic,
+        record_user_note,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       synthesize_domain_logic:
         - { kind: FieldEquals, path: artifact_plan.status, value: approved }
         - { kind: FieldTruthy, path: artifact_plan.write_authorized }
         - { kind: FieldFalsy, path: program.domain_synthesis_complete }
-        - { kind: TriggerType, triggerSet: [system_mode_entry] }
+        - { kind: TriggerType, triggers: [ system_mode_entry ] }
     transitions:
       - target: branch_write
-        guard: { kind: FieldTruthy, path: program.domain_synthesis_complete }
+        when: { kind: FieldTruthy, path: program.domain_synthesis_complete }
   branch_write:
-    vocabulary: [write_scaffold_artifacts, git_status, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        write_scaffold_artifacts,
+        git_status,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       write_scaffold_artifacts:
         - { kind: FieldEquals, path: artifact_plan.status, value: approved }
@@ -195,16 +289,39 @@ modes:
         - { kind: FieldTruthy, path: program.domain_synthesis_complete }
     transitions:
       - target: static_verify
-        guard: { kind: FieldTruthy, path: artifacts.written }
+        when: { kind: FieldTruthy, path: artifacts.written }
   static_verify:
-    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, run_parallel_static_checks, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output, composite_checks_output]
+    vocabulary:
+      [
+        npm_install,
+        npm_typecheck,
+        npm_test,
+        run_static_verification,
+        run_parallel_static_checks,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output, composite_checks_output ]
     transitions:
       - target: smoke_verify
-        guard: { kind: FieldEquals, path: graduation.static_verification, value: passed }
+        when: { kind: FieldEquals, path: graduation.static_verification, value: passed }
   smoke_verify:
-    vocabulary: [run_smoke_verification, confirm_live_provider_intent, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        run_smoke_verification,
+        confirm_live_provider_intent,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       run_smoke_verification:
         - { kind: FieldEquals, path: graduation.static_verification, value: passed }
@@ -212,10 +329,21 @@ modes:
         - { kind: FieldEquals, path: graduation.smoke_verification, value: passed }
     transitions:
       - target: live_verify
-        guard: { kind: FieldTruthy, path: graduation.ready_for_live }
+        when: { kind: FieldTruthy, path: graduation.ready_for_live }
   live_verify:
-    vocabulary: [run_api_blackbox_verification, run_live_provider_verification, run_generated_live_drive_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output, live_drive_output]
+    vocabulary:
+      [
+        run_api_blackbox_verification,
+        run_live_provider_verification,
+        run_generated_live_drive_verification,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output, live_drive_output ]
     preconditions:
       run_api_blackbox_verification:
         - { kind: FieldTruthy, path: graduation.live_provider_intent }
@@ -234,27 +362,57 @@ modes:
         - { kind: FieldTruthy, path: graduation.live_provider_intent }
     transitions:
       - target: rebase_verify
-        guard: { kind: FieldEquals, path: graduation.live_verification, value: passed }
+        when: { kind: FieldEquals, path: graduation.live_verification, value: passed }
   rebase_verify:
-    vocabulary: [git_status, git_rebase_latest, run_rebase_static_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        git_status,
+        git_rebase_latest,
+        run_rebase_static_verification,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       run_rebase_static_verification:
         - { kind: FieldEquals, path: graduation.rebase_status, value: passed }
     transitions:
       - target: pr_graduation
-        guard: { kind: FieldEquals, path: graduation.rebase_verification, value: passed }
+        when: { kind: FieldEquals, path: graduation.rebase_verification, value: passed }
   pr_graduation:
-    vocabulary: [open_pull_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        open_pull_request,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
   curator_request:
-    vocabulary: [create_curator_request, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary:
+      [
+        create_curator_request,
+        record_user_note,
+        session_new,
+        session_abort_current,
+        session_status,
+        session_history,
+        session_resume,
+        session_help
+      ]
+    channels: [ system_mode_entry, widget_output ]
     transitions:
       - target: repo_targeting
-        guard: { kind: FieldTruthy, path: repo.curator_request_lodged }
+        when: { kind: FieldTruthy, path: repo.curator_request_lodged }
 
-proceed_to:
+proceeds_to:
   authorize_standalone_target: architecture_design
   authorize_existing_repo_target: architecture_design
   design_architecture: scaffold_plan
@@ -312,37 +470,139 @@ projection:
       - notebook.pins
     exclude: []
   repo_targeting:
-    include: [program.slug, program.name, program.target_dir, program.target_dir_confirmed, repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.wiring_manifest_json, repo.allowed_imports, repo.write_authorized, repo.required_facilities_missing]
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.target_dir_confirmed,
+        repo.target_kind,
+        repo.wiring_manifest.status,
+        repo.wiring_manifest.path,
+        repo.wiring_manifest_json,
+        repo.allowed_imports,
+        repo.write_authorized,
+        repo.required_facilities_missing
+      ]
     exclude: []
   architecture_design:
-    include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete, intake.skills_json, intake.skills_recorded]
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.runtime,
+        program.design_confirmed,
+        program.synthesis_complete,
+        intake.skills_json,
+        intake.skills_recorded
+      ]
     exclude: []
   scaffold_plan:
-    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, notebook.entries, notebook.pins]
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.synthesis_complete,
+        inputs.user_decision,
+        inputs.user_decision.decision,
+        inputs.user_decision.instruction,
+        inputs.user_decision.note_mode,
+        inputs.user_decision.timestamp,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.approved,
+        artifact_plan.write_authorized,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   domain_synthesis:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, intake.skills_json, intake.skills_recorded]
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        repo.target_kind,
+        program.synthesis_complete,
+        program.domain_synthesis_complete,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.write_authorized,
+        intake.skills_json,
+        intake.skills_recorded
+      ]
     exclude: []
   branch_write:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        repo.target_kind,
+        program.synthesis_complete,
+        program.domain_synthesis_complete,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.write_authorized,
+        artifacts.written,
+        artifacts.generated_paths
+      ]
     exclude: []
   static_verify:
-    include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.composite_checks]
+    include:
+      [
+        program.target_dir,
+        graduation.static_verification,
+        graduation.static_evidence_id,
+        graduation.composite_checks
+      ]
     exclude: []
   smoke_verify:
-    include: [program.target_dir, graduation.static_verification, graduation.smoke_verification, graduation.smoke_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
+    include:
+      [
+        program.target_dir,
+        graduation.static_verification,
+        graduation.smoke_verification,
+        graduation.smoke_evidence_id,
+        graduation.live_provider_intent,
+        graduation.ready_for_live
+      ]
     exclude: []
   live_verify:
-    include: [program.target_dir, graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id, graduation.generated_live_drive, graduation.generated_live_drive_evidence_id]
+    include:
+      [
+        program.target_dir,
+        graduation.live_verification,
+        graduation.live_provider_intent,
+        graduation.live_evidence_id,
+        graduation.generated_live_drive,
+        graduation.generated_live_drive_evidence_id
+      ]
     exclude: []
   rebase_verify:
-    include: [program.target_dir, graduation.rebase_status, graduation.rebase_evidence_id, graduation.rebase_verification, graduation.rebase_static_evidence_id]
+    include:
+      [
+        program.target_dir,
+        graduation.rebase_status,
+        graduation.rebase_evidence_id,
+        graduation.rebase_verification,
+        graduation.rebase_static_evidence_id
+      ]
     exclude: []
   pr_graduation:
-    include: [program.target_dir, graduation.rebase_verification]
+    include: [ program.target_dir, graduation.rebase_verification ]
     exclude: []
   curator_request:
-    include: [program.slug, repo.curator_request_lodged, repo.wiring_manifest_json, repo.required_facilities_missing, curator_requests.requests]
+    include:
+      [
+        program.slug,
+        repo.curator_request_lodged,
+        repo.wiring_manifest_json,
+        repo.required_facilities_missing,
+        curator_requests.requests
+      ]
     exclude: []
 
 prompts:
@@ -476,11 +736,18 @@ prompts:
       call revise_artifact_plan. Do NOT call approve_artifact_plan on rejection.
       The revision instruction in inputs.user_decision.instruction is mandatory
       feedback to preserve in the regenerated artifact list.
-  domain_synthesis: "Run synthesize_domain_logic once after artifact-plan approval. This fills accepted stage bodies in transit before branch_write."
-  branch_write: "Write only planned artifacts after domain_synthesis has accepted all generated bodies."
+  domain_synthesis: "Run synthesize_domain_logic once after artifact-plan
+    approval. This fills accepted stage bodies in transit before branch_write."
+  branch_write: "Write only planned artifacts after domain_synthesis has accepted
+    all generated bodies."
   static_verify: "Run static verification and record evidence."
-  smoke_verify: "Run deterministic generated-program smoke verification before live-provider verification."
-  live_verify: "Run run_generated_live_drive_verification FIRST (drives the generated program to its completion stage against the live provider), then run_live_provider_verification (real provider round trip). run_live_provider_verification is precondition-blocked until the generated live drive has recorded 'passed'."
+  smoke_verify: "Run deterministic generated-program smoke verification before
+    live-provider verification."
+  live_verify: "Run run_generated_live_drive_verification FIRST (drives the
+    generated program to its completion stage against the live provider), then
+    run_live_provider_verification (real provider round trip).
+    run_live_provider_verification is precondition-blocked until the generated
+    live drive has recorded 'passed'."
   rebase_verify: "Rebase on latest target repo state and rerun static verification."
   pr_graduation: "Open the PR after post-rebase verification."
   curator_request: "Prepare a curator request for missing repo wiring."
@@ -514,18 +781,19 @@ ingestion:
     - artifact_plan.artifacts
     - artifacts.written
     - artifacts.generated_paths
-  user_text: [inputs.user_text]
+  user_text: [ inputs.user_text ]
   user_confirmation:
     - inputs.user_decision
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
     - inputs.user_decision.note_mode
     - inputs.user_decision.timestamp
-  system_mode_entry: [inputs.mode_entry]
+  system_mode_entry: [ inputs.mode_entry ]
 
 action_map:
   record_program_target:
-    description: "Tool call for capturing program identity. Arguments must be string fields {slug, name, target_dir}; confirms program.target_dir_confirmed."
+    description: "Tool call for capturing program identity. Arguments must be string
+      fields {slug, name, target_dir}; confirms program.target_dir_confirmed."
     arg_descriptions:
       slug: "Lowercase kebab-case program slug."
       name: "Human-readable program name."
@@ -537,31 +805,48 @@ action_map:
       - { op: MSet, path: program.target_dir_confirmed, value: true }
     channel: widget_output
   choose_design_path:
-    description: "Tool call for selecting intake path after target capture. Argument {choice} must be the string 'default' or 'design'."
+    description: "Tool call for selecting intake path after target capture. Argument
+      {choice} must be the string 'default' or 'design'."
     arg_descriptions:
-      choice: "Either 'default' for the standard skeleton or 'design' for the six-question interview."
+      choice: "Either 'default' for the standard skeleton or 'design' for the
+        six-question interview."
     mutations:
       - { op: MSet, path: program.design_path, from_arg: choice }
     channel: widget_output
   apply_default_skeleton:
-    description: "Tool call with no required arguments. Populates intake.* JSON-string scalar fields with the default start->working->complete skeleton."
+    description: "Tool call with no required arguments. Populates intake.*
+      JSON-string scalar fields with the default start->working->complete
+      skeleton."
     mutations:
       - { op: MSet, path: intake.purpose, value: '' }
       - { op: MSet, path: intake.q1_recorded, value: true }
       - { op: MSet, path: intake.entry_channel, value: user_text }
       - { op: MSet, path: intake.q2_recorded, value: true }
-      - { op: MSet, path: intake.stages_json, value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]' }
+      - {
+          op: MSet,
+          path: intake.stages_json,
+          value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]'
+        }
       - { op: MSet, path: intake.q3_recorded, value: true }
-      - { op: MSet, path: intake.transitions_json, value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]' }
+      - {
+          op: MSet,
+          path: intake.transitions_json,
+          value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]'
+        }
       - { op: MSet, path: intake.q4_recorded, value: true }
       - { op: MSet, path: intake.delegation_json, value: '{}' }
       - { op: MSet, path: intake.q5_recorded, value: true }
-      - { op: MSet, path: intake.completion_json, value: '{"final_stage":"complete","guard_field":"work.example_ready"}' }
+      - {
+          op: MSet,
+          path: intake.completion_json,
+          value: '{"final_stage":"complete","guard_field":"work.example_ready"}'
+        }
       - { op: MSet, path: intake.q6_recorded, value: true }
       - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
   ask_design_question:
-    description: "Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round's inputs.user_text carries the answer."
+    description: "Ask the user a single design-interview question (Q1-Q6). Pauses
+      the round; the next round's inputs.user_text carries the answer."
     arg_descriptions:
       question_number: "Which Q is being asked (1-6)."
       question_text: "The question prompt to display to the user."
@@ -570,7 +855,8 @@ action_map:
       - { op: MSet, path: intake.last_question_text, from_arg: question_text }
     channel: widget_output
   record_q1_purpose:
-    description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does."
+    description: "Capture the user's answer to Q1 (program purpose). One short
+      paragraph describing what the program does."
     arg_descriptions:
       purpose: "User's answer to Q1: the program purpose."
     mutations:
@@ -578,7 +864,8 @@ action_map:
       - { op: MSet, path: intake.q1_recorded, value: true }
     channel: widget_output
   record_q2_entry_channel:
-    description: "Capture Q2 (entry channel -- how does work arrive: user_text, webhook, scheduled tick, another program delegating)."
+    description: "Capture Q2 (entry channel -- how does work arrive: user_text,
+      webhook, scheduled tick, another program delegating)."
     arg_descriptions:
       entry_channel: "User's answer to Q2: how work enters the program."
     mutations:
@@ -586,7 +873,8 @@ action_map:
       - { op: MSet, path: intake.q2_recorded, value: true }
     channel: widget_output
   record_q3_stages:
-    description: "Capture Q3 (stage list -- the named modes the program transitions through)."
+    description: "Capture Q3 (stage list -- the named modes the program transitions
+      through)."
     arg_descriptions:
       stages_json: |
         Provide a JSON-encoded value. The strict format is required for
@@ -610,7 +898,8 @@ action_map:
       - { op: MSet, path: intake.q3_recorded, value: true }
     channel: widget_output
   record_q4_transitions:
-    description: "Capture Q4 (transition list -- how stages advance, branch, loop, or guard)."
+    description: "Capture Q4 (transition list -- how stages advance, branch, loop,
+      or guard)."
     arg_descriptions:
       transitions_json: |
         Provide a JSON-encoded value. The strict format is required for
@@ -672,7 +961,8 @@ action_map:
       - { op: MSet, path: intake.q5_recorded, value: true }
     channel: widget_output
   record_documents_descriptor:
-    description: "Optionally capture the documents upload descriptor after Q5 when the program needs document upload or ingestion."
+    description: "Optionally capture the documents upload descriptor after Q5 when
+      the program needs document upload or ingestion."
     arg_descriptions:
       documents_json: |
         Provide a JSON-encoded object. Use raw "none" only when the program
@@ -726,7 +1016,9 @@ action_map:
       - { op: MSet, path: intake.q6_recorded, value: true }
     channel: widget_output
   record_skill_catalog:
-    description: "Optionally capture the skill catalog for programs that need opt-in skill activation. Arguments must include skills_json as a JSON-string array of {name, body} entries."
+    description: "Optionally capture the skill catalog for programs that need opt-in
+      skill activation. Arguments must include skills_json as a JSON-string
+      array of {name, body} entries."
     arg_descriptions:
       skills_json: |
         Provide a JSON-encoded array. Each array item must be an object with
@@ -749,17 +1041,22 @@ action_map:
       - { op: MSet, path: intake.skills_recorded, value: true }
     channel: widget_output
   record_program_intake_finalize:
-    description: "Final commit of the design interview once all 6 Q-answers and any requested skill catalog are recorded. Idempotent. The LLM should call this after record_q6_completion, and after record_skill_catalog when skills are needed."
+    description: "Final commit of the design interview once all 6 Q-answers and any
+      requested skill catalog are recorded. Idempotent. The LLM should call this
+      after record_q6_completion, and after record_skill_catalog when skills are
+      needed."
     mutations:
       - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
   confirm_design:
-    description: "Tool call after explicit user approval. Confirms the proposed mode and transition list before repo_targeting."
+    description: "Tool call after explicit user approval. Confirms the proposed mode
+      and transition list before repo_targeting."
     mutations:
       - { op: MSet, path: program.design_confirmed, value: true }
     channel: widget_output
   reject_design_and_revise_q1:
-    description: "Reopen design intake from Q1 onward after explicit confirm_design rejection."
+    description: "Reopen design intake from Q1 onward after explicit confirm_design
+      rejection."
     mutations:
       - { op: MSet, path: intake.q1_recorded, value: false }
       - { op: MSet, path: intake.q2_recorded, value: false }
@@ -771,7 +1068,8 @@ action_map:
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q2:
-    description: "Reopen design intake from Q2 onward after explicit confirm_design rejection."
+    description: "Reopen design intake from Q2 onward after explicit confirm_design
+      rejection."
     mutations:
       - { op: MSet, path: intake.q2_recorded, value: false }
       - { op: MSet, path: intake.q3_recorded, value: false }
@@ -782,13 +1080,15 @@ action_map:
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q3:
-    description: "Reopen design intake for Q3 after explicit confirm_design rejection while preserving later recorded answers."
+    description: "Reopen design intake for Q3 after explicit confirm_design
+      rejection while preserving later recorded answers."
     mutations:
       - { op: MSet, path: intake.q3_recorded, value: false }
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q4:
-    description: "Reopen design intake from Q4 onward after explicit confirm_design rejection."
+    description: "Reopen design intake from Q4 onward after explicit confirm_design
+      rejection."
     mutations:
       - { op: MSet, path: intake.q4_recorded, value: false }
       - { op: MSet, path: intake.q5_recorded, value: false }
@@ -797,7 +1097,8 @@ action_map:
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q5:
-    description: "Reopen design intake from Q5 onward after explicit confirm_design rejection."
+    description: "Reopen design intake from Q5 onward after explicit confirm_design
+      rejection."
     mutations:
       - { op: MSet, path: intake.q5_recorded, value: false }
       - { op: MSet, path: intake.q6_recorded, value: false }
@@ -805,14 +1106,25 @@ action_map:
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q6:
-    description: "Reopen design intake from Q6 onward after explicit confirm_design rejection."
+    description: "Reopen design intake from Q6 onward after explicit confirm_design
+      rejection."
     mutations:
       - { op: MSet, path: intake.q6_recorded, value: false }
       - { op: MSet, path: intake.program_intake_finalized, value: false }
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
-  record_user_note: { description: "Record a notebook note.", mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }], channel: widget_output }
-  pin_notebook_note: { description: "Pin a notebook note for next-turn projection.", mutations: [{ op: MAppend, path: notebook.pins, from_arg: key }], channel: widget_output }
+  record_user_note:
+    {
+      description: "Record a notebook note.",
+      mutations: [ { op: MAppend, path: notebook.entries, from_arg: note } ],
+      channel: widget_output
+    }
+  pin_notebook_note:
+    {
+      description: "Pin a notebook note for next-turn projection.",
+      mutations: [ { op: MAppend, path: notebook.pins, from_arg: key } ],
+      channel: widget_output
+    }
   confirm_research_scope:
     description: "Confirm discretionary web research for the current mandate."
     mutations:
@@ -828,17 +1140,53 @@ action_map:
       - { op: MSet, path: intake.user_research_authorized, value: true }
       - { op: MAppend, path: research.queries, from_arg: query }
     channel: widget_output
-  web_research: { description: "Run user-confirmed web research.", mutations: [], channel: widget_output }
-  session_new: { description: "Control-plane new session command.", mutations: [], channel: widget_output }
-  session_abort_current: { description: "Control-plane abort current session command.", mutations: [], channel: widget_output }
-  session_status: { description: "Control-plane status command.", mutations: [], channel: widget_output }
-  session_history: { description: "Control-plane history command.", mutations: [], channel: widget_output }
-  session_resume: { description: "Control-plane resume command.", mutations: [], channel: widget_output }
-  session_help: { description: "Control-plane help command.", mutations: [], channel: widget_output }
+  web_research:
+    {
+      description: "Run user-confirmed web research.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_new:
+    {
+      description: "Control-plane new session command.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_abort_current:
+    {
+      description: "Control-plane abort current session command.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_status:
+    {
+      description: "Control-plane status command.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_history:
+    {
+      description: "Control-plane history command.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_resume:
+    {
+      description: "Control-plane resume command.",
+      mutations: [],
+      channel: widget_output
+    }
+  session_help:
+    {
+      description: "Control-plane help command.",
+      mutations: [],
+      channel: widget_output
+    }
   select_repo_target:
     description: "Select standalone or existing-repo target."
     arg_descriptions:
-      target_kind: "Either 'standalone_repo' for a new generated repo or 'existing_repo' for attachment to a repo with .pgas/wiring.yml."
+      target_kind: "Either 'standalone_repo' for a new generated repo or
+        'existing_repo' for attachment to a repo with .pgas/wiring.yml."
     mutations:
       - { op: MSet, path: repo.target_kind, from_arg: target_kind }
       - { op: MSet, path: repo.write_authorized, value: false }
@@ -855,7 +1203,8 @@ action_map:
   load_wiring_manifest:
     description: "Load and validate fixed .pgas/wiring.yml for existing-repo writes."
     arg_descriptions:
-      repo_root: "The absolute path to the existing repository root. Read this from program.target_dir in the current state."
+      repo_root: "The absolute path to the existing repository root. Read this from
+        program.target_dir in the current state."
     mutations:
       - { op: MSet, path: repo.target_kind, value: existing_repo }
       - { op: MSet, path: repo.wiring_manifest.repo_root, from_arg: repo_root }
@@ -873,18 +1222,22 @@ action_map:
     description: "Prepare a repo curator request."
     arg_descriptions:
       message: "Additional optional context to include in the curator request body."
-      repo_root: "Optional override for the repository root; normally read from repo.wiring_manifest.repo_root or program.target_dir."
+      repo_root: "Optional override for the repository root; normally read from
+        repo.wiring_manifest.repo_root or program.target_dir."
       slug: "Optional program slug override for the curator request artifact name."
-      title: "Optional curator request title. Defaults from program.name or program.slug."
-      body: "Optional curator request body. Defaults from program identity, repo root, and message."
-    mutations: [{ op: MSet, path: repo.curator_request_lodged, value: true }]
+      title: "Optional curator request title. Defaults from program.name or
+        program.slug."
+      body: "Optional curator request body. Defaults from program identity, repo root,
+        and message."
+    mutations: [ { op: MSet, path: repo.curator_request_lodged, value: true } ]
     channel: widget_output
   design_architecture:
     description: "Mark architecture ready."
-    mutations: [{ op: MSet, path: program.architecture_ready, value: true }]
+    mutations: [ { op: MSet, path: program.architecture_ready, value: true } ]
     channel: widget_output
   synthesize_program_spec:
-    description: "Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete."
+    description: "Run the mechanical synthesizer (no LLM call). Writes the spec to
+      in-process transit; flips program.synthesis_complete."
     channel: widget_output
     mutations:
       - { op: MSet, path: program.synthesis_complete, value: true }
@@ -951,9 +1304,19 @@ action_map:
     # failing attempts). This mirrors Phase 3.26's architecture: explicit
     # notice continuations via widget_output for deterministic actions.
     channel: widget_output
-  write_scaffold_artifacts: { description: "Write planned artifacts.", mutations: [{ op: MSet, path: artifacts.written, value: true }], channel: widget_output }
+  write_scaffold_artifacts:
+    {
+      description: "Write planned artifacts.",
+      mutations: [ { op: MSet, path: artifacts.written, value: true } ],
+      channel: widget_output
+    }
   git_status: { description: "Read git status.", mutations: [], channel: widget_output }
-  npm_install: { description: "Install dependencies.", mutations: [], channel: widget_output }
+  npm_install:
+    {
+      description: "Install dependencies.",
+      mutations: [],
+      channel: widget_output
+    }
   npm_typecheck: { description: "Run typecheck.", mutations: [], channel: widget_output }
   npm_test: { description: "Run tests.", mutations: [], channel: widget_output }
   run_static_verification:
@@ -963,7 +1326,8 @@ action_map:
       completed" are accepted and retained separately as status evidence.
       Ambiguous status text is rejected before leaving static_verify.
     arg_descriptions:
-      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      status: 'Verification result. Use passed or failed; verbose text must begin with
+        passed: or failed: (or include status: passed / result: failed).'
       evidence_id: 'Stable evidence identifier for the static verification run.'
     mutations:
       - { op: MSet, path: graduation.static_verification, from_arg: status }
@@ -992,7 +1356,8 @@ action_map:
       forms are retained separately as status evidence. Ambiguous status text is
       rejected before leaving smoke_verify.
     arg_descriptions:
-      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      status: 'Verification result. Use passed or failed; verbose text must begin with
+        passed: or failed: (or include status: passed / result: failed).'
       evidence_id: 'Stable evidence identifier for the smoke verification run.'
     mutations:
       - { op: MSet, path: graduation.smoke_verification, from_arg: status }
@@ -1005,7 +1370,12 @@ action_map:
       - { op: MSet, path: graduation.live_provider_intent, value: true }
       - { op: MSet, path: graduation.ready_for_live, value: true }
     channel: widget_output
-  run_api_blackbox_verification: { description: "Run black-box API verification.", mutations: [], channel: widget_output }
+  run_api_blackbox_verification:
+    {
+      description: "Run black-box API verification.",
+      mutations: [],
+      channel: widget_output
+    }
   run_live_provider_verification:
     description: |
       Record live provider verification evidence. Status is stored canonically as
@@ -1013,7 +1383,8 @@ action_map:
       status evidence. Ambiguous status text is rejected before leaving
       live_verify.
     arg_descriptions:
-      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      status: 'Verification result. Use passed or failed; verbose text must begin with
+        passed: or failed: (or include status: passed / result: failed).'
       evidence_id: 'Stable evidence identifier for the live-provider verification run.'
     mutations:
       - { op: MSet, path: graduation.live_verification, from_arg: status }
@@ -1031,12 +1402,18 @@ action_map:
       Rides the Sync live_drive_output channel because result_path requires a
       Sync Out channel (ER-2) — same pattern as run_parallel_static_checks.
     arg_descriptions:
-      status: 'Predicted live-drive result. Handler output is authoritative; verbose passed:/failed: text is canonicalized and retained as status evidence.'
-      evidence_id: 'Stable evidence identifier for the generated live-drive verification run.'
+      status: 'Predicted live-drive result. Handler output is authoritative; verbose
+        passed:/failed: text is canonicalized and retained as status evidence.'
+      evidence_id: 'Stable evidence identifier for the generated live-drive
+        verification run.'
     result_path: graduation.generated_live_drive_report
     mutations:
       - { op: MSet, path: graduation.generated_live_drive, from_arg: status }
-      - { op: MSet, path: graduation.generated_live_drive_evidence_id, from_arg: evidence_id }
+      - {
+          op: MSet,
+          path: graduation.generated_live_drive_evidence_id,
+          from_arg: evidence_id
+        }
       - { op: MSet, path: graduation.generated_live_drive_recorded, value: true }
     channel: live_drive_output
   git_rebase_latest:
@@ -1046,7 +1423,8 @@ action_map:
       text is retained separately as status evidence. Ambiguous status text is
       rejected before leaving rebase_verify.
     arg_descriptions:
-      status: 'Rebase result. Use passed or failed when known; verbose text must begin with passed: or failed: to be retained as status evidence.'
+      status: 'Rebase result. Use passed or failed when known; verbose text must begin
+        with passed: or failed: to be retained as status evidence.'
       evidence_id: 'Stable evidence identifier for the rebase operation.'
     mutations:
       - { op: MSet, path: graduation.rebase_status, from_arg: status }
@@ -1063,12 +1441,21 @@ action_map:
       forms are retained separately as status evidence. Ambiguous status text is
       rejected before leaving rebase_verify.
     arg_descriptions:
-      status: 'Verification result. Use passed or failed; verbose text must begin with passed: or failed: (or include status: passed / result: failed).'
+      status: 'Verification result. Use passed or failed; verbose text must begin with
+        passed: or failed: (or include status: passed / result: failed).'
       evidence_id: 'Stable evidence identifier for the post-rebase static verification run.'
     mutations:
       - { op: MSet, path: graduation.rebase_verification, from_arg: status }
-      - { op: MSet, path: graduation.rebase_static_evidence_id, from_arg: evidence_id }
-      - { op: MSet, path: graduation.rebase_static_verification_recorded, value: true }
+      - {
+          op: MSet,
+          path: graduation.rebase_static_evidence_id,
+          from_arg: evidence_id
+        }
+      - {
+          op: MSet,
+          path: graduation.rebase_static_verification_recorded,
+          value: true
+        }
     channel: widget_output
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
 
@@ -1277,46 +1664,156 @@ fallback:
 
 guidance:
   intake_intelligence:
-    - "Every round must emit exactly one native tool_call from the current mode vocabulary. Do NOT output free-form question text as assistant message content; the engine parses uncalled content as an invalid empty-name action."
-    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
-    - "After record_program_target, if program.design_path is not set, call choose_design_path with choice='design' when the user asked to design the program or choice='default' when the user asked for the default skeleton."
-    - "If program.design_path == 'default' and intake.program_intake_finalized is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Call ask_design_question with question_number (1..6) and question_text. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, call record_skill_catalog before record_program_intake_finalize if and only if the requested program needs opt-in skills or the user provided a skill catalog; otherwise immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
-    - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Call ask_design_question for the question round; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
-    - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
-    - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
-    - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']. If the user's answer contains rich stage objects with domain_spec, rules, invariants, or produces schemas, pass that exact rich object array as stages_json; do not simplify it to a string array."
-    - "Q4 Decision points — branches, loops, bail-outs; these become extra transitions, optionally with guards. Default if skipped: no extra transitions."
-    - "Q5 Delegation — does any stage delegate to a child session / another program, or need an explicit per-stage execution model? Default if skipped: 'none'. Use {\"stages\":{\"<slug>\":{\"kind\":\"llm-reasoning\"|\"pure-compute\"|\"external-adapter\",\"reasoning_per_turn\":true|false}}} only when the user gives explicit per-stage execution intent; otherwise keep the legacy no-delegation shapes like {}, {\"enabled\":false}, or none."
-    - "Optional Documents Descriptor — after Q5 and before Q6, call record_documents_descriptor only when the user explicitly needs uploaded document intake. Use a JSON-string object with stage, upload_types, extraction, result_path, and optional required/fidelity_floor; fidelity_floor may include min_chars and required_tokens for token coverage. For no uploaded documents, skip this action or record 'none'."
-    - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
-    - "Optional Skill Catalog — after Q6 and before record_program_intake_finalize, call record_skill_catalog only when the user explicitly needs opt-in skills, skill activation, a skill catalog, or a conversational hub that activates skill playbooks. Use a JSON-string array of {name, body} entries. For programs without skills, skip this action."
-    - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
-    - "For Q3-Q6, documents_json, and skills_json, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
-    - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design'); if intake.skills_json is present, list the skill catalog names so the user can confirm them. Instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
-    - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
+    - "Every round must emit exactly one native tool_call from the current mode
+      vocabulary. Do NOT output free-form question text as assistant message
+      content; the engine parses uncalled content as an invalid empty-name
+      action."
+    - "If program.target_dir_confirmed is not true: first capture program
+      identity. The CLI may have pre-filled program.slug, program.name, or
+      program.target_dir via initialDomain. If slug is provided but name is
+      missing, derive name as title-case of slug. If target_dir is blank,
+      default to './<slug>'. When slug/name/target_dir are known, call
+      record_program_target with slug, name, and target_dir."
+    - "After record_program_target, if program.design_path is not set, call
+      choose_design_path with choice='design' when the user asked to design the
+      program or choice='default' when the user asked for the default skeleton."
+    - "If program.design_path == 'default' and intake.program_intake_finalized
+      is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
+    - "Design interview enforcement (Q1-Q6): The engine enforces strict
+      left-to-right ordering via per-question preconditions. You CANNOT skip
+      ahead. For each question: 1. Call ask_design_question with question_number
+      (1..6) and question_text. The engine pauses. 2. The user's answer arrives
+      via user_text on the next round. 3. Fire the corresponding
+      record_qN_<topic> action with the user's answer parsed into that action's
+      named argument. 4. Move to the next question. After Q6 fires, call
+      record_skill_catalog before record_program_intake_finalize if and only if
+      the requested program needs opt-in skills or the user provided a skill
+      catalog; otherwise immediately fire record_program_intake_finalize. Do NOT
+      attempt to batch multiple answers into one action. Do NOT attempt to fire
+      record_program_intake_finalize before all six qN_recorded flags are true
+      -- the engine will reject it."
+    - "If program.design_path == 'design' and intake.program_intake_finalized is
+      not true: ask the 6 design questions IN ORDER, one question per round,
+      with brief context for each. Call ask_design_question for the question
+      round; wait for the user's answer in inputs.user_text before recording
+      exactly that answer via the next record_qN_<topic> action. Order matters."
+    - "Q1 Purpose — one sentence on what the program does. Default if skipped:
+      '<program-name>-driven workflow agent'."
+    - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled
+      tick, another program delegating). Default if skipped: 'user_text'."
+    - "Q3 Stages of work — distinct stages, named in order; these become the
+      mode names. Default if skipped: ['start', 'working', 'complete']. If the
+      user's answer contains rich stage objects with domain_spec, rules,
+      invariants, or produces schemas, pass that exact rich object array as
+      stages_json; do not simplify it to a string array."
+    - "Q4 Decision points — branches, loops, bail-outs; these become extra
+      transitions, optionally with guards. Default if skipped: no extra
+      transitions."
+    - "Q5 Delegation — does any stage delegate to a child session / another
+      program, or need an explicit per-stage execution model? Default if
+      skipped: 'none'. Use
+      {\"stages\":{\"<slug>\":{\"kind\":\"llm-reasoning\"|\"pure-compute\"|\"ex\
+      ternal-adapter\",\"reasoning_per_turn\":true|false}}} only when the user
+      gives explicit per-stage execution intent; otherwise keep the legacy
+      no-delegation shapes like {}, {\"enabled\":false}, or none."
+    - "Optional Documents Descriptor — after Q5 and before Q6, call
+      record_documents_descriptor only when the user explicitly needs uploaded
+      document intake. Use a JSON-string object with stage, upload_types,
+      extraction, result_path, and optional required/fidelity_floor;
+      fidelity_floor may include min_chars and required_tokens for token
+      coverage. For no uploaded documents, skip this action or record 'none'."
+    - "Q6 Completion criteria — how do you know the program is done? Default if
+      skipped: terminal mode = last stage, guard = 'work.example_ready'."
+    - "Optional Skill Catalog — after Q6 and before
+      record_program_intake_finalize, call record_skill_catalog only when the
+      user explicitly needs opt-in skills, skill activation, a skill catalog, or
+      a conversational hub that activates skill playbooks. Use a JSON-string
+      array of {name, body} entries. For programs without skills, skip this
+      action."
+    - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in
+      program.skip_dimensions and use the dimension's default in the JSON-string
+      scalar fields."
+    - "For Q3-Q6, documents_json, and skills_json, the *_json arguments must be
+      JSON-string scalar fields, not nested arrays or objects."
+    - "After intake is finalized via apply_default_skeleton OR
+      record_program_intake_finalize, echo back the proposed mode list +
+      transitions + target_dir as plain text (intent='confirm_design'); if
+      intake.skills_json is present, list the skill catalog names so the user
+      can confirm them. Instruct the user to type /approve or /reject. Wait for
+      the user_confirmation trigger."
+    - "When you need user approval (e.g., before confirm_design or
+      approve_artifact_plan), instruct the user to type /approve or /reject
+      (with optional follow-up instruction). The REPL routes these to the
+      user_confirmation channel with structured payload. Do NOT accept plain
+      text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
-    - "On user_confirmation with decision='reject' and instruction naming Q1, Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN action (for example reject_design_and_revise_q3 for Q3). Re-ask/record that Q and then re-emit the confirm_design echo-back; preserve later recorded answers unless the user explicitly asks to revise them."
-    - "Don't re-ask anything you already extracted from the user's free-text introduction."
+    - "On user_confirmation with decision='reject' and instruction naming Q1,
+      Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN
+      action (for example reject_design_and_revise_q3 for Q3). Re-ask/record
+      that Q and then re-emit the confirm_design echo-back; preserve later
+      recorded answers unless the user explicitly asks to revise them."
+    - "Don't re-ask anything you already extracted from the user's free-text
+      introduction."
   repo_targeting:
-    - "This mode is mandatory between confirm_design and architecture_design; do not skip it."
-    - "If program.target_dir is set and the target is standalone/no .pgas/wiring.yml is known, call authorize_standalone_target. That action sets repo.target_kind='standalone_repo' and repo.write_authorized=true."
-    - "If program.target_dir points to an existing repo with .pgas/wiring.yml, call load_wiring_manifest with repo_root=program.target_dir, then call authorize_existing_repo_target after the manifest status is valid."
-    - "A VALID .pgas/wiring.yml routes to authorize_existing_repo_target/proceed even when registration.strategy is curator_request. create_curator_request is only for missing/invalid wiring or an explicit repo blocker."
-    - "Only leave repo_targeting after repo.write_authorized is true; the transition to architecture_design is guarded on that field."
+    - "This mode is mandatory between confirm_design and architecture_design; do
+      not skip it."
+    - "If program.target_dir is set and the target is standalone/no
+      .pgas/wiring.yml is known, call authorize_standalone_target. That action
+      sets repo.target_kind='standalone_repo' and repo.write_authorized=true."
+    - "If program.target_dir points to an existing repo with .pgas/wiring.yml,
+      call load_wiring_manifest with repo_root=program.target_dir, then call
+      authorize_existing_repo_target after the manifest status is valid."
+    - "A VALID .pgas/wiring.yml routes to authorize_existing_repo_target/proceed
+      even when registration.strategy is curator_request. create_curator_request
+      is only for missing/invalid wiring or an explicit repo blocker."
+    - "Only leave repo_targeting after repo.write_authorized is true; the
+      transition to architecture_design is guarded on that field."
   scaffold_plan:
-    - "Only call plan_artifacts on system_mode_entry to produce the artifact plan from the synthesized spec in in-process transit after repo.write_authorized and program.synthesis_complete are true and artifact_plan.status is still unset. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
-    - "Once the plan is drafted, the engine parks automation for explicit user approval (plan_artifacts declares awaits_user_decision on user_confirmation), so a later system_mode_entry does NOT auto-continue. Do NOT re-call plan_artifacts (its precondition forbids re-firing once artifact_plan.status is set) and NEVER call approve_artifact_plan on system_mode_entry — approval only comes from user_confirmation."
-    - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
-    - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
-    - "On user_confirmation decision='approve' with artifact_plan.status='draft' and artifact_plan.approved false, call approve_artifact_plan. Do NOT call plan_artifacts on an approval trigger. Then the transition to domain_synthesis fires."
-    - "On user_confirmation decision=reject with artifact_plan.status='draft' and artifact_plan.approved false, call revise_artifact_plan. Do NOT call approve_artifact_plan on a rejection. The revised artifact plan must preserve explicit user-required paths from inputs.user_decision.instruction, notebook notes, and the intake dossier, then stay in scaffold_plan for a later /approve."
+    - "Only call plan_artifacts on system_mode_entry to produce the artifact
+      plan from the synthesized spec in in-process transit after
+      repo.write_authorized and program.synthesis_complete are true and
+      artifact_plan.status is still unset. If the handler reports the spec is
+      missing from transit, call synthesize_program_spec again; the synthesizer
+      is mechanical and idempotent."
+    - "Once the plan is drafted, the engine parks automation for explicit user
+      approval (plan_artifacts declares awaits_user_decision on
+      user_confirmation), so a later system_mode_entry does NOT auto-continue.
+      Do NOT re-call plan_artifacts (its precondition forbids re-firing once
+      artifact_plan.status is set) and NEVER call approve_artifact_plan on
+      system_mode_entry — approval only comes from user_confirmation."
+    - "Echo the artifact-plan list (paths + purposes) to the user as plain text
+      and instruct them to type /approve or /reject."
+    - "When you need user approval (e.g., before confirm_design or
+      approve_artifact_plan), instruct the user to type /approve or /reject
+      (with optional follow-up instruction). The REPL routes these to the
+      user_confirmation channel with structured payload. Do NOT accept plain
+      text replies as approvals."
+    - "On user_confirmation decision='approve' with artifact_plan.status='draft'
+      and artifact_plan.approved false, call approve_artifact_plan. Do NOT call
+      plan_artifacts on an approval trigger. Then the transition to
+      domain_synthesis fires."
+    - "On user_confirmation decision=reject with artifact_plan.status='draft'
+      and artifact_plan.approved false, call revise_artifact_plan. Do NOT call
+      approve_artifact_plan on a rejection. The revised artifact plan must
+      preserve explicit user-required paths from
+      inputs.user_decision.instruction, notebook notes, and the intake dossier,
+      then stay in scaffold_plan for a later /approve."
   domain_synthesis:
-    - "On system_mode_entry after artifact_plan.status='approved', call synthesize_domain_logic exactly once. This runs per-stage generate/verify/repair against the frozen contracts and hard-fails instead of producing stubs."
-    - "Do not call write_scaffold_artifacts from this mode. Wait for program.domain_synthesis_complete to transition to branch_write."
+    - "On system_mode_entry after artifact_plan.status='approved', call
+      synthesize_domain_logic exactly once. This runs per-stage
+      generate/verify/repair against the frozen contracts and hard-fails instead
+      of producing stubs."
+    - "Do not call write_scaffold_artifacts from this mode. Wait for
+      program.domain_synthesis_complete to transition to branch_write."
   architecture_design:
-    - "On entering architecture_design after confirm_design, call synthesize_program_spec. The handler performs mechanical synthesis with no LLM call, writes the YAML to in-process transit for this session, and flips program.synthesis_complete via the action-map mutation."
-    - "After synthesize_program_spec succeeds, transition to scaffold_plan. If the foundry server restarted and downstream planning reports missing transit state, re-run synthesize_program_spec; same intake produces the same YAML."
+    - "On entering architecture_design after confirm_design, call
+      synthesize_program_spec. The handler performs mechanical synthesis with no
+      LLM call, writes the YAML to in-process transit for this session, and
+      flips program.synthesis_complete via the action-map mutation."
+    - "After synthesize_program_spec succeeds, transition to scaffold_plan. If
+      the foundry server restarted and downstream planning reports missing
+      transit state, re-run synthesize_program_spec; same intake produces the
+      same YAML."
 
 control_plane:
   version: 1
@@ -1333,7 +1830,7 @@ control_plane:
   controls:
     ask:
       title: Ask
-      aliases: ["/ask"]
+      aliases: [ "/ask" ]
       args:
         query:
           type: string
@@ -1350,7 +1847,7 @@ control_plane:
           mode: async
     approve_artifact_plan:
       title: Approve current gate
-      aliases: ["/approve"]
+      aliases: [ "/approve" ]
       availability:
         when: "active_session"
       dispatch:
@@ -1364,7 +1861,7 @@ control_plane:
         priority: primary
     revise_artifact_plan:
       title: Reject and revise artifact plan
-      aliases: ["/revise-plan"]
+      aliases: [ "/revise-plan" ]
       args:
         instruction:
           type: string
@@ -1397,7 +1894,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q1:
       title: Reject and revise Q1
-      aliases: ["/reject-q1"]
+      aliases: [ "/reject-q1" ]
       args:
         instruction:
           type: string
@@ -1417,7 +1914,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q2:
       title: Reject and revise Q2
-      aliases: ["/reject-q2"]
+      aliases: [ "/reject-q2" ]
       args:
         instruction:
           type: string
@@ -1437,7 +1934,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q3:
       title: Reject and revise Q3
-      aliases: ["/reject-q3"]
+      aliases: [ "/reject-q3" ]
       args:
         instruction:
           type: string
@@ -1457,7 +1954,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q4:
       title: Reject and revise Q4
-      aliases: ["/reject-q4"]
+      aliases: [ "/reject-q4" ]
       args:
         instruction:
           type: string
@@ -1477,7 +1974,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q5:
       title: Reject and revise Q5
-      aliases: ["/reject-q5"]
+      aliases: [ "/reject-q5" ]
       args:
         instruction:
           type: string
@@ -1497,7 +1994,7 @@ control_plane:
         priority: contextual
     reject_design_and_revise_q6:
       title: Reject and revise Q6
-      aliases: ["/reject-q6"]
+      aliases: [ "/reject-q6" ]
       args:
         instruction:
           type: string
@@ -1517,7 +2014,7 @@ control_plane:
         priority: contextual
     abort:
       title: Abort run
-      aliases: ["/abort", "/stop"]
+      aliases: [ "/abort", "/stop" ]
       availability:
         when: "active_session.running"
       dispatch:
@@ -1528,7 +2025,7 @@ control_plane:
         confirm: true
     new:
       title: New session
-      aliases: ["/new", "/reset", "/restart"]
+      aliases: [ "/new", "/reset", "/restart" ]
       dispatch:
         - op: create_session
           as: session
@@ -1537,7 +2034,7 @@ control_plane:
         priority: secondary
     history:
       title: Recent sessions
-      aliases: ["/history", "/recent"]
+      aliases: [ "/history", "/recent" ]
       dispatch:
         - op: list_sessions
           as: sessions
@@ -1545,7 +2042,7 @@ control_plane:
         priority: secondary
     status:
       title: Status
-      aliases: ["/status"]
+      aliases: [ "/status" ]
       availability:
         when: "active_session"
       dispatch:
@@ -1556,7 +2053,7 @@ control_plane:
         priority: contextual
     resume:
       title: Resume
-      aliases: ["/resume"]
+      aliases: [ "/resume" ]
       availability:
         when: "active_session"
       dispatch:
@@ -1567,7 +2064,7 @@ control_plane:
         priority: contextual
     help:
       title: Help
-      aliases: ["/help"]
+      aliases: [ "/help" ]
       dispatch:
         - op: render_help
       presentation:

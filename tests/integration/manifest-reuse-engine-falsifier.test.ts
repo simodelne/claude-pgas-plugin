@@ -384,18 +384,18 @@ modes:
     channels: [user_text, child_output]
     transitions:
       - target: work
-        guard: { kind: FieldTruthy, path: child.received }
+        when: { kind: FieldTruthy, path: child.received }
   work:
     vocabulary: [finish_work]
     channels: [user_text, child_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: work.done }
+        when: { kind: FieldTruthy, path: work.done }
   complete:
     vocabulary: []
     channels: [child_output]
 
-proceed_to:
+proceeds_to:
   accept_request: work
   finish_work: complete
 

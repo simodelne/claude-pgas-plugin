@@ -356,7 +356,7 @@ describe('template renderer', () => {
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
       expect(existsSync(join(outDir, 'src/programs/pgas-new/registration.ts'))).toBe(false);
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^4.12.3"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^5.0.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(server).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(server).toContain('loadProgramByConvention');
@@ -539,7 +539,7 @@ describe('template renderer', () => {
           '    channels: [frontend_intake, widget_output]',
           '    transitions:',
           '      - target: complete',
-          '        guard: { kind: FieldTruthy, path: intake.started }',
+          '        when: { kind: FieldTruthy, path: intake.started }',
           '  complete:',
           '    vocabulary: []',
           '    channels: [widget_output]',
@@ -750,7 +750,7 @@ describe('template renderer', () => {
         arg_schema?: Record<string, { type?: string; required?: boolean }>;
         mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
       }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
       schema: Record<string, string>;
       policies: {
         queryPolicy: {
@@ -802,7 +802,7 @@ describe('template renderer', () => {
         'session_help',
       ]),
     );
-    expect(parsed.proceed_to).toEqual({
+    expect(parsed.proceeds_to).toEqual({
       begin_work: 'working',
       example_action: 'complete',
     });
@@ -885,8 +885,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       modes: Record<string, {
         vocabulary: string[];
         channels?: string[];
-        preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
-        transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
+        preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggers?: string[] }>>;
+        transitions?: Array<{ target: string; when?: { kind: string; path?: string; value?: unknown } }>;
       }>;
       projection: Record<string, { include: string[] }>;
       action_map: Record<string, {
@@ -896,7 +896,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         arg_descriptions?: Record<string, string>;
         mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
       }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
       schema: Record<string, string>;
       ingestion: Record<string, string[]>;
       guidance: Record<string, string[]>;
@@ -951,7 +951,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
     );
     expect(parsed.modes.architecture_design.transitions).toEqual([
-      { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
+      { target: 'scaffold_plan', when: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
     ]);
     expect(parsed.modes.scaffold_plan.vocabulary).toEqual(
       expect.arrayContaining(['approve_artifact_plan', 'revise_artifact_plan', 'plan_artifacts']),
@@ -959,7 +959,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
     expect(parsed.modes.intake_intelligence.transitions).toEqual(
       expect.arrayContaining([
-        { target: 'repo_targeting', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
+        { target: 'repo_targeting', when: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
       ]),
     );
     expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
@@ -1032,14 +1032,14 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
         { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
         { kind: 'FieldFalsy', path: 'program.design_confirmed' },
-        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'TriggerType', triggers: ['user_confirmation'] },
         { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
       ]),
     );
     expect(parsed.modes.intake_intelligence.preconditions?.reject_design_and_revise_q3).toEqual(
       expect.arrayContaining([
         { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
-        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'TriggerType', triggers: ['user_confirmation'] },
         { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
       ]),
     );
@@ -1162,7 +1162,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
         { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
         { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
-        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'TriggerType', triggers: ['user_confirmation'] },
         { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
       ]),
     );
@@ -1171,7 +1171,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'FieldTruthy', path: 'repo.write_authorized' },
         { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
         { kind: 'FieldFalsy', path: 'artifact_plan.status' },
-        { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
+        { kind: 'TriggerType', triggers: ['system_mode_entry'] },
       ]),
     );
     expect(parsed.modes.scaffold_plan.preconditions?.revise_artifact_plan).toEqual(
@@ -1179,7 +1179,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'FieldTruthy', path: 'repo.write_authorized' },
         { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
         { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
-        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'TriggerType', triggers: ['user_confirmation'] },
         { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
       ]),
     );
@@ -1551,8 +1551,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     const spec = readFileSync('src/foundry-program/specs.yml', 'utf8');
     const parsed = load(spec) as {
       modes: Record<string, {
-        preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
-        transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
+        preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggers?: string[] }>>;
+        transitions?: Array<{ target: string; when?: { kind: string; path: string; value?: unknown } }>;
       }>;
       action_map: Record<string, {
         arg_descriptions?: Record<string, string>;
@@ -1560,7 +1560,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         result_path?: string;
         channel?: string;
       }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
       schema: Record<string, string>;
       control_plane: { controls: Record<string, unknown> };
     };
@@ -1583,15 +1583,15 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     // with synthesize_domain_logic's result_path: the audit is durable in the
     // synthesizer transit store and surfaced in the widget payload instead.
     expect(parsed.schema['domain_synthesis.audit']).toBeUndefined();
-    expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
-    expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
-    expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
-    expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
-    expect(parsed.proceed_to.run_static_verification).toBe('smoke_verify');
-    expect(parsed.proceed_to.approve_artifact_plan).toBe('domain_synthesis');
-    expect(parsed.proceed_to.synthesize_domain_logic).toBe('branch_write');
-    expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
-    expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
+    expect(parsed.proceeds_to.load_wiring_manifest).toBeUndefined();
+    expect(parsed.proceeds_to.confirm_design).toBe('repo_targeting');
+    expect(parsed.proceeds_to.authorize_standalone_target).toBe('architecture_design');
+    expect(parsed.proceeds_to.authorize_existing_repo_target).toBe('architecture_design');
+    expect(parsed.proceeds_to.run_static_verification).toBe('smoke_verify');
+    expect(parsed.proceeds_to.approve_artifact_plan).toBe('domain_synthesis');
+    expect(parsed.proceeds_to.synthesize_domain_logic).toBe('branch_write');
+    expect(parsed.proceeds_to.confirm_live_provider_intent).toBe('live_verify');
+    expect(parsed.proceeds_to.run_rebase_static_verification).toBe('pr_graduation');
     expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
       expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
     );
@@ -1622,19 +1622,19 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     );
     expect(parsed.modes.scaffold_plan.transitions).toEqual(
       expect.arrayContaining([
-        { target: 'domain_synthesis', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
+        { target: 'domain_synthesis', when: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
       ]),
     );
     expect(parsed.modes.domain_synthesis.transitions).toEqual(
       expect.arrayContaining([
-        { target: 'branch_write', guard: { kind: 'FieldTruthy', path: 'program.domain_synthesis_complete' } },
+        { target: 'branch_write', when: { kind: 'FieldTruthy', path: 'program.domain_synthesis_complete' } },
       ]),
     );
     expect(parsed.modes.static_verify.transitions).toEqual(
       expect.arrayContaining([
         {
           target: 'smoke_verify',
-          guard: { kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' },
+          when: { kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' },
         },
       ]),
     );
@@ -1642,7 +1642,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([
         {
           target: 'live_verify',
-          guard: { kind: 'FieldTruthy', path: 'graduation.ready_for_live' },
+          when: { kind: 'FieldTruthy', path: 'graduation.ready_for_live' },
         },
       ]),
     );

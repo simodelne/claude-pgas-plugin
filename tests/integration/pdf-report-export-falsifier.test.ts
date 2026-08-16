@@ -358,18 +358,18 @@ modes:
     channels: [user_text, widget_output]
     transitions:
       - target: render_report
-        guard: { kind: FieldTruthy, path: config.title }
+        when: { kind: FieldTruthy, path: config.title }
   render_report:
     vocabulary: [render_report]
     channels: [user_text, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: ${OUTPUT_PATH}.status }
+        when: { kind: FieldTruthy, path: ${OUTPUT_PATH}.status }
   complete:
     vocabulary: []
     channels: [widget_output]
 
-proceed_to:
+proceeds_to:
   seed_config: render_report
   render_report: complete
 

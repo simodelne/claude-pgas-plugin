@@ -46,7 +46,7 @@ interface ParsedSpec {
   modes: Record<string, {
     vocabulary: string[];
     channels: string[];
-    transitions?: Array<{ target: string; guard: { kind: string; path: string } }>;
+    transitions?: Array<{ target: string; when: { kind: string; path: string } }>;
   }>;
   schema: Record<string, string>;
   ingestion: Record<string, string[]>;
@@ -148,10 +148,10 @@ describe('SimoneOS governed attach profile', () => {
       expect(parsed.terminal).toEqual(['complete']);
       expect(Object.keys(parsed.modes)).toEqual(['intake', 'draft_memo', 'complete']);
       expect(parsed.modes.intake.transitions).toEqual([
-        { target: 'draft_memo', guard: { kind: 'FieldTruthy', path: 'work.intake_recorded' } },
+        { target: 'draft_memo', when: { kind: 'FieldTruthy', path: 'work.intake_recorded' } },
       ]);
       expect(parsed.modes.draft_memo.transitions).toEqual([
-        { target: 'complete', guard: { kind: 'FieldTruthy', path: 'work.memo_artifact.status' } },
+        { target: 'complete', when: { kind: 'FieldTruthy', path: 'work.memo_artifact.status' } },
       ]);
 
       expect(Object.keys(parsed.channels).sort()).toEqual([

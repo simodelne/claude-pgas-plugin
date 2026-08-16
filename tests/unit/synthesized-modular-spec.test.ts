@@ -81,9 +81,9 @@ describe('synthesized modular spec emission', () => {
       terminal: ['complete'],
       termination: 'BoundedSession',
       topology: 'CyclicTopology',
-      proceed_to: expect.any(Object),
+      proceeds_to: expect.any(Object),
     });
-    expect(load(files.get('actions.yml') ?? '')).not.toHaveProperty('proceed_to');
+    expect(load(files.get('actions.yml') ?? '')).not.toHaveProperty('proceeds_to');
   });
 
   it('renders modular spec files and preserves the compiled Specification exactly', () => {

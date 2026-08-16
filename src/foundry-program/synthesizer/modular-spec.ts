@@ -54,7 +54,7 @@ const BLOCK_KEY_ORDER: Record<BlueprintSpecBlock, readonly string[]> = {
     'topology',
     'termination',
     'status_on_terminal',
-    'proceed_to',
+    'proceeds_to',
     'notice_terminal_exemptions',
   ],
   channels: [

@@ -354,18 +354,18 @@ modes:
     channels: [user_text, widget_output]
     transitions:
       - target: render_export
-        guard: { kind: FieldTruthy, path: ${CLAUSE_PATH} }
+        when: { kind: FieldTruthy, path: ${CLAUSE_PATH} }
   render_export:
     vocabulary: [export_document]
     channels: [user_text, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: ${OUTPUT_PATH}.status }
+        when: { kind: FieldTruthy, path: ${OUTPUT_PATH}.status }
   complete:
     vocabulary: []
     channels: [widget_output]
 
-proceed_to:
+proceeds_to:
   seed_clause: render_export
   export_document: complete
 

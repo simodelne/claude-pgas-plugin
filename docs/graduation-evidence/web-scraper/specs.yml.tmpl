@@ -44,7 +44,7 @@ modes:
     channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: intelligence
-        guard: { kind: FieldTruthy, path: intake.complete }
+        when: { kind: FieldTruthy, path: intake.complete }
   intelligence:
     vocabulary: [web_search_sources, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -53,7 +53,7 @@ modes:
         - { kind: FieldTruthy, path: intake.complete }
     transitions:
       - target: egress_verification
-        guard: { kind: FieldTruthy, path: intelligence.complete }
+        when: { kind: FieldTruthy, path: intelligence.complete }
   egress_verification:
     vocabulary: [confirm_egress_ip, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -62,9 +62,9 @@ modes:
         - { kind: FieldTruthy, path: intelligence.complete }
     transitions:
       - target: web_analysis
-        guard: { kind: FieldTruthy, path: egress.confirmed }
+        when: { kind: FieldTruthy, path: egress.confirmed }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   web_analysis:
     vocabulary: [check_robots_and_terms, analyze_html_sample, playwright_snapshot, vision_analyze_snapshot, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
@@ -79,9 +79,9 @@ modes:
         - { kind: FieldTruthy, path: egress.confirmed }
     transitions:
       - target: strategy_review
-        guard: { kind: FieldTruthy, path: analysis.complete }
+        when: { kind: FieldTruthy, path: analysis.complete }
       - target: blocked
-        guard: { kind: FieldTruthy, path: analysis.halt_reason }
+        when: { kind: FieldTruthy, path: analysis.halt_reason }
   strategy_review:
     vocabulary: [propose_scraping_strategy, approve_scraping_strategy, request_user_action, record_user_note]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
@@ -89,14 +89,14 @@ modes:
       propose_scraping_strategy:
         - { kind: FieldTruthy, path: analysis.complete }
       approve_scraping_strategy:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
         - { kind: FieldTruthy, path: strategy.proposal_json }
     transitions:
       - target: scraping
-        guard: { kind: FieldTruthy, path: strategy.user_approved }
+        when: { kind: FieldTruthy, path: strategy.user_approved }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   scraping:
     vocabulary: [fetch_one_asset, skip_duplicate, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -109,7 +109,7 @@ modes:
         - { kind: FieldTruthy, path: strategy.user_approved }
     transitions:
       - target: asset_verification
-        guard: { kind: FieldTruthy, path: scraping.last_asset_id }
+        when: { kind: FieldTruthy, path: scraping.last_asset_id }
   asset_verification:
     vocabulary: [verify_asset, append_scrape_ledger, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -120,11 +120,11 @@ modes:
         - { kind: FieldEquals, path: verification.last_status, value: pass }
     transitions:
       - target: scraping
-        guard: { kind: FieldEquals, path: scraping.last_asset_verified, value: true }
+        when: { kind: FieldEquals, path: scraping.last_asset_verified, value: true }
       - target: complete
-        guard: { kind: FieldTruthy, path: scraping.budget_exhausted }
+        when: { kind: FieldTruthy, path: scraping.budget_exhausted }
       - target: blocked
-        guard: { kind: FieldTruthy, path: verification.requires_user_decision }
+        when: { kind: FieldTruthy, path: verification.requires_user_decision }
   complete:
     vocabulary: [complete_run, request_user_action]
     channels: [system_mode_entry, widget_output]
@@ -132,7 +132,7 @@ modes:
     vocabulary: [request_user_action, record_user_note]
     channels: [system_mode_entry, widget_output]
 
-proceed_to:
+proceeds_to:
   record_intake: intelligence
   web_search_sources: egress_verification
   confirm_egress_ip: web_analysis

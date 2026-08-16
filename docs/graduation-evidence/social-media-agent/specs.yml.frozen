@@ -32,7 +32,7 @@ preamble: |
   at ledger.path. Do not rely on chat history as state.
 
 initial: intake
-terminal: [complete, blocked]
+terminal: [ complete, blocked ]
 
 features:
   - base
@@ -46,8 +46,8 @@ channels:
 
 modes:
   intake:
-    vocabulary: [record_intake, request_user_action, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ record_intake, request_user_action, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     preconditions:
       # H1 (issue #30): the spec, not the LLM's self-asserted arg, decides whether
       # the safety acknowledgement is real. record_intake requires that the user
@@ -58,12 +58,12 @@ modes:
         - { kind: FieldEquals, path: inputs.no_real_credentials, value: true }
     transitions:
       - target: mock_adapter_check
-        guard: { kind: FieldTruthy, path: intake.complete }
+        when: { kind: FieldTruthy, path: intake.complete }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   mock_adapter_check:
-    vocabulary: [confirm_mock_adapter, request_user_action, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ confirm_mock_adapter, request_user_action, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     preconditions:
       confirm_mock_adapter:
         - { kind: FieldTruthy, path: intake.complete }
@@ -74,36 +74,36 @@ modes:
         - { kind: FieldEquals, path: inputs.adapter_kind, value: mock }
     transitions:
       - target: session_bootstrap
-        guard: { kind: FieldTruthy, path: browser.mock_confirmed }
+        when: { kind: FieldTruthy, path: browser.mock_confirmed }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   session_bootstrap:
-    vocabulary: [bootstrap_mock_session, request_user_action, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ bootstrap_mock_session, request_user_action, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     preconditions:
       bootstrap_mock_session:
         - { kind: FieldTruthy, path: browser.mock_confirmed }
         - { kind: FieldEquals, path: browser.adapter_kind, value: mock }
     transitions:
       - target: monitor_feed
-        guard: { kind: FieldTruthy, path: session.mock_authenticated }
+        when: { kind: FieldTruthy, path: session.mock_authenticated }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   monitor_feed:
-    vocabulary: [capture_feed_snapshot, request_user_action, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ capture_feed_snapshot, request_user_action, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     preconditions:
       capture_feed_snapshot:
         - { kind: FieldTruthy, path: session.mock_authenticated }
         - { kind: FieldEquals, path: browser.adapter_kind, value: mock }
     transitions:
       - target: draft_review
-        guard: { kind: FieldTruthy, path: feed.snapshot_captured }
+        when: { kind: FieldTruthy, path: feed.snapshot_captured }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   draft_review:
-    vocabulary: [draft_post, propose_publish, request_user_action, record_user_note]
-    channels: [user_text, system_mode_entry, widget_output]
+    vocabulary: [ draft_post, propose_publish, request_user_action, record_user_note ]
+    channels: [ user_text, system_mode_entry, widget_output ]
     preconditions:
       draft_post:
         - { kind: FieldTruthy, path: feed.snapshot_captured }
@@ -111,33 +111,40 @@ modes:
         - { kind: FieldTruthy, path: draft.proposal_id }
     transitions:
       - target: human_approval
-        guard: { kind: FieldTruthy, path: draft.awaiting_approval }
+        when: { kind: FieldTruthy, path: draft.awaiting_approval }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   human_approval:
-    vocabulary: [approve_draft, reject_draft, revise_draft, request_user_action, record_user_note]
-    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    vocabulary:
+      [
+        approve_draft,
+        reject_draft,
+        revise_draft,
+        request_user_action,
+        record_user_note
+      ]
+    channels: [ user_text, user_confirmation, system_mode_entry, widget_output ]
     preconditions:
       approve_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
         - { kind: FieldTruthy, path: draft.proposal_id }
       reject_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       revise_draft:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [ user_confirmation ] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: revise }
     transitions:
       - target: post_publish
-        guard: { kind: FieldTruthy, path: approval.user_approved }
+        when: { kind: FieldTruthy, path: approval.user_approved }
       - target: draft_review
-        guard: { kind: FieldTruthy, path: draft.revision_requested }
+        when: { kind: FieldTruthy, path: draft.revision_requested }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   post_publish:
-    vocabulary: [publish_one_draft, request_user_action]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [ publish_one_draft, request_user_action ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       publish_one_draft:
         - { kind: FieldTruthy, path: approval.user_approved }
@@ -145,12 +152,12 @@ modes:
         - { kind: FieldEquals, path: post.last_post_verified, value: true }
     transitions:
       - target: post_verification
-        guard: { kind: FieldTruthy, path: post.last_post_id }
+        when: { kind: FieldTruthy, path: post.last_post_id }
       - target: blocked
-        guard: { kind: FieldTruthy, path: run.block_reason }
+        when: { kind: FieldTruthy, path: run.block_reason }
   post_verification:
-    vocabulary: [verify_post, append_post_ledger, request_user_action]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [ verify_post, append_post_ledger, request_user_action ]
+    channels: [ system_mode_entry, widget_output ]
     preconditions:
       verify_post:
         - { kind: FieldTruthy, path: post.last_post_id }
@@ -158,19 +165,19 @@ modes:
         - { kind: FieldEquals, path: verification.last_status, value: pass }
     transitions:
       - target: draft_review
-        guard: { kind: FieldEquals, path: post.last_post_verified, value: true }
+        when: { kind: FieldEquals, path: post.last_post_verified, value: true }
       - target: complete
-        guard: { kind: FieldTruthy, path: post.budget_exhausted }
+        when: { kind: FieldTruthy, path: post.budget_exhausted }
       - target: blocked
-        guard: { kind: FieldTruthy, path: verification.requires_user_decision }
+        when: { kind: FieldTruthy, path: verification.requires_user_decision }
   complete:
-    vocabulary: [complete_run, request_user_action]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [ complete_run, request_user_action ]
+    channels: [ system_mode_entry, widget_output ]
   blocked:
-    vocabulary: [request_user_action, record_user_note]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [ request_user_action, record_user_note ]
+    channels: [ system_mode_entry, widget_output ]
 
-proceed_to:
+proceeds_to:
   record_intake: mock_adapter_check
   confirm_mock_adapter: session_bootstrap
   bootstrap_mock_session: monitor_feed
@@ -186,47 +193,154 @@ proceed_to:
 
 projection:
   intake:
-    include: [inputs.user_text, inputs.no_real_credentials, inputs.adapter_kind, intake.account_handle, intake.platform_class, intake.persona, intake.topic_scope, intake.posting_cadence_per_day, intake.complete, safety.no_real_credentials, safety.demo_page_url, notebook.entries, notebook.pins]
+    include:
+      [
+        inputs.user_text,
+        inputs.no_real_credentials,
+        inputs.adapter_kind,
+        intake.account_handle,
+        intake.platform_class,
+        intake.persona,
+        intake.topic_scope,
+        intake.posting_cadence_per_day,
+        intake.complete,
+        safety.no_real_credentials,
+        safety.demo_page_url,
+        notebook.entries,
+        notebook.pins
+      ]
     exclude: []
   mock_adapter_check:
-    include: [inputs.user_text, inputs.adapter_kind, browser.adapter_kind, browser.capabilities_json, browser.mock_confirmed, safety.demo_page_url, notebook.entries]
+    include:
+      [
+        inputs.user_text,
+        inputs.adapter_kind,
+        browser.adapter_kind,
+        browser.capabilities_json,
+        browser.mock_confirmed,
+        safety.demo_page_url,
+        notebook.entries
+      ]
     exclude: []
   session_bootstrap:
-    include: [browser.adapter_kind, browser.mock_confirmed, session.mock_authenticated, session.mock_session_id, safety.demo_page_url, notebook.entries]
+    include:
+      [
+        browser.adapter_kind,
+        browser.mock_confirmed,
+        session.mock_authenticated,
+        session.mock_session_id,
+        safety.demo_page_url,
+        notebook.entries
+      ]
     exclude: []
   monitor_feed:
-    include: [session.mock_authenticated, feed.last_snapshot_at, feed.snapshot_captured, feed.notifications_count, feed.mentions_count, notebook.entries]
+    include:
+      [
+        session.mock_authenticated,
+        feed.last_snapshot_at,
+        feed.snapshot_captured,
+        feed.notifications_count,
+        feed.mentions_count,
+        notebook.entries
+      ]
     exclude: []
   draft_review:
-    include: [feed.snapshot_captured, feed.notifications_count, feed.mentions_count, draft.proposal_id, draft.intent, draft.body, draft.target_mock_url, draft.awaiting_approval, draft.revision_requested, notebook.entries]
+    include:
+      [
+        feed.snapshot_captured,
+        feed.notifications_count,
+        feed.mentions_count,
+        draft.proposal_id,
+        draft.intent,
+        draft.body,
+        draft.target_mock_url,
+        draft.awaiting_approval,
+        draft.revision_requested,
+        notebook.entries
+      ]
     exclude: []
   human_approval:
-    include: [inputs.user_text, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, draft.proposal_id, draft.intent, draft.body, approval.user_approved, approval.target_draft_id, draft.revision_requested, notebook.entries]
+    include:
+      [
+        inputs.user_text,
+        inputs.user_decision,
+        inputs.user_decision.decision,
+        inputs.user_decision.instruction,
+        inputs.user_decision.note_mode,
+        inputs.user_decision.timestamp,
+        draft.proposal_id,
+        draft.intent,
+        draft.body,
+        approval.user_approved,
+        approval.target_draft_id,
+        draft.revision_requested,
+        notebook.entries
+      ]
     exclude: []
   post_publish:
-    include: [approval.user_approved, approval.target_draft_id, browser.adapter_kind, post.last_post_id, post.last_published_at, post.last_post_verified, post.posts_published_count, post.budget_exhausted, ledger.entries_count]
+    include:
+      [
+        approval.user_approved,
+        approval.target_draft_id,
+        browser.adapter_kind,
+        post.last_post_id,
+        post.last_published_at,
+        post.last_post_verified,
+        post.posts_published_count,
+        post.budget_exhausted,
+        ledger.entries_count
+      ]
     exclude: []
   post_verification:
-    include: [post.last_post_id, post.last_published_at, post.last_post_verified, verification.last_status, verification.failure_reason, verification.requires_user_decision, ledger.path, ledger.entries_count, ledger.last_appended_at, post.budget_exhausted]
+    include:
+      [
+        post.last_post_id,
+        post.last_published_at,
+        post.last_post_verified,
+        verification.last_status,
+        verification.failure_reason,
+        verification.requires_user_decision,
+        ledger.path,
+        ledger.entries_count,
+        ledger.last_appended_at,
+        post.budget_exhausted
+      ]
     exclude: []
   complete:
-    include: [post.posts_published_count, ledger.path, ledger.entries_count, run.complete]
+    include:
+      [
+        post.posts_published_count,
+        ledger.path,
+        ledger.entries_count,
+        run.complete
+      ]
     exclude: []
   blocked:
-    include: [run.block_reason, verification.failure_reason, notebook.entries]
+    include: [ run.block_reason, verification.failure_reason, notebook.entries ]
     exclude: []
 
 prompts:
-  intake: "Collect account handle (demo only), platform class, persona/voice rules, topic scope, posting cadence per day, and the safety acknowledgement that NO real credentials will be used."
-  mock_adapter_check: "Confirm browser.adapter_kind=mock and read declared mock capabilities. Halt if any real-adapter signal appears."
-  session_bootstrap: "Drive the mock browser through the demo login page only. Never accept or store real credentials."
-  monitor_feed: "Observe the mock feed and notifications. Record snapshot counts. Do not interact with real users."
-  draft_review: "Draft replies and posts for the captured feed snapshot. Each draft must have an explicit intent and a mock target URL."
-  human_approval: "Present every draft to the user via user_confirmation. Only an explicit approve decision unlocks publish. Reject or revise loops back to drafting."
-  post_publish: "Publish exactly one approved draft per call via the mock browser. Never publish without approval. Never publish twice for the same draft id."
-  post_verification: "Verify the mock post landed and append to the durable post ledger. Halt on verification failure pending user decision."
+  intake: "Collect account handle (demo only), platform class, persona/voice
+    rules, topic scope, posting cadence per day, and the safety acknowledgement
+    that NO real credentials will be used."
+  mock_adapter_check: "Confirm browser.adapter_kind=mock and read declared mock
+    capabilities. Halt if any real-adapter signal appears."
+  session_bootstrap: "Drive the mock browser through the demo login page only.
+    Never accept or store real credentials."
+  monitor_feed: "Observe the mock feed and notifications. Record snapshot counts.
+    Do not interact with real users."
+  draft_review: "Draft replies and posts for the captured feed snapshot. Each
+    draft must have an explicit intent and a mock target URL."
+  human_approval: "Present every draft to the user via user_confirmation. Only an
+    explicit approve decision unlocks publish. Reject or revise loops back to
+    drafting."
+  post_publish: "Publish exactly one approved draft per call via the mock browser.
+    Never publish without approval. Never publish twice for the same draft id."
+  post_verification: "Verify the mock post landed and append to the durable post
+    ledger. Halt on verification failure pending user decision."
   complete: "Report completion and the ledger location."
-  blocked: "Report the precise block reason and the next user action required. Do not attempt to bypass."
+  blocked: "Report the precise block reason and the next user action required. Do
+    not attempt to bypass."
 
 ingestion:
   # H1/H2 (issue #30): user_text carries two structured safety-acknowledgement
@@ -236,7 +350,7 @@ ingestion:
     - inputs.user_text
     - inputs.no_real_credentials
     - inputs.adapter_kind
-  system_mode_entry: [inputs.mode_entry]
+  system_mode_entry: [ inputs.mode_entry ]
   user_confirmation:
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
@@ -246,26 +360,32 @@ ingestion:
 action_map:
   record_user_note:
     description: "Record a durable social-media-agent note."
-    mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }]
+    mutations: [ { op: MAppend, path: notebook.entries, from_arg: note } ]
     channel: widget_output
   request_user_action:
     description: "Ask the user for a decision or input the program cannot resolve."
     mutations: []
     channel: widget_output
   record_intake:
-    description: "Record complete social media account intake including persona, cadence, and the safety acknowledgement."
+    description: "Record complete social media account intake including persona,
+      cadence, and the safety acknowledgement."
     mutations:
       - { op: MSet, path: intake.account_handle, from_arg: account_handle }
       - { op: MSet, path: intake.platform_class, from_arg: platform_class }
       - { op: MSet, path: intake.persona, from_arg: persona }
       - { op: MSet, path: intake.topic_scope, from_arg: topic_scope }
-      - { op: MSet, path: intake.posting_cadence_per_day, from_arg: posting_cadence_per_day }
+      - {
+          op: MSet,
+          path: intake.posting_cadence_per_day,
+          from_arg: posting_cadence_per_day
+        }
       - { op: MSet, path: safety.no_real_credentials, from_arg: no_real_credentials }
       - { op: MSet, path: safety.demo_page_url, from_arg: demo_page_url }
       - { op: MSet, path: intake.complete, value: true }
     channel: widget_output
   confirm_mock_adapter:
-    description: "Confirm the browser adapter is in mock mode and read declared capabilities."
+    description: "Confirm the browser adapter is in mock mode and read declared
+      capabilities."
     # H2 (issue #30): mock_confirmed is now gated on the adapter_kind precondition.
     # The unconditional value: true was bypassable; the precondition above enforces
     # inputs.adapter_kind == 'mock' before the action is even legal.
@@ -275,7 +395,8 @@ action_map:
       - { op: MSet, path: browser.mock_confirmed, value: true }
     channel: widget_output
   bootstrap_mock_session:
-    description: "Drive the mock browser through the demo login page and record the mock session id. Never accepts real credentials."
+    description: "Drive the mock browser through the demo login page and record the
+      mock session id. Never accepts real credentials."
     mutations:
       - { op: MSet, path: session.mock_session_id, from_arg: mock_session_id }
       - { op: MSet, path: session.mock_authenticated, value: true }
@@ -283,7 +404,8 @@ action_map:
       - { op: MSet, path: ledger.path, from_arg: ledger_path }
     channel: widget_output
   capture_feed_snapshot:
-    description: "Capture a single feed snapshot from the mock browser. Records notification and mention counts."
+    description: "Capture a single feed snapshot from the mock browser. Records
+      notification and mention counts."
     mutations:
       - { op: MSet, path: feed.last_snapshot_at, from_arg: snapshot_at }
       - { op: MSet, path: feed.notifications_count, from_arg: notifications_count }
@@ -291,7 +413,8 @@ action_map:
       - { op: MSet, path: feed.snapshot_captured, value: true }
     channel: widget_output
   draft_post:
-    description: "Draft a single post or reply. Records intent, body, mock target URL, and the proposal id."
+    description: "Draft a single post or reply. Records intent, body, mock target
+      URL, and the proposal id."
     mutations:
       - { op: MSet, path: draft.proposal_id, from_arg: proposal_id }
       - { op: MSet, path: draft.intent, from_arg: intent }
@@ -301,13 +424,15 @@ action_map:
       - { op: MSet, path: draft.revision_requested, value: false }
     channel: widget_output
   propose_publish:
-    description: "Send the drafted post to the user via user_confirmation for explicit approval."
+    description: "Send the drafted post to the user via user_confirmation for
+      explicit approval."
     mutations:
       - { op: MSet, path: draft.awaiting_approval, value: true }
       - { op: MSet, path: approval.user_approved, value: false }
     channel: widget_output
   approve_draft:
-    description: "User-approve a specific draft id. Required before any publish_one_draft call."
+    description: "User-approve a specific draft id. Required before any
+      publish_one_draft call."
     # H4 (issue #30): the unconditional post.last_post_verified=true mutation
     # was bypassable — approving a second draft re-flipped the verification gate
     # to true even when the previous post was never verified. The verification
@@ -326,27 +451,38 @@ action_map:
       - { op: MSet, path: draft.proposal_id, value: "" }
     channel: widget_output
   revise_draft:
-    description: "User asks for a revised draft. Loops back to draft_review with the revision instruction."
+    description: "User asks for a revised draft. Loops back to draft_review with the
+      revision instruction."
     mutations:
       - { op: MSet, path: draft.revision_requested, value: true }
       - { op: MSet, path: draft.awaiting_approval, value: false }
       - { op: MSet, path: approval.user_approved, value: false }
     channel: widget_output
   publish_one_draft:
-    description: "Publish exactly one approved draft by id through the mock browser. Marks post.last_post_verified=false to force the verification step."
+    description: "Publish exactly one approved draft by id through the mock browser.
+      Marks post.last_post_verified=false to force the verification step."
     mutations:
       - { op: MSet, path: post.last_post_id, from_arg: post_id }
       - { op: MSet, path: post.last_published_at, from_arg: published_at }
       - { op: MSet, path: post.last_post_verified, value: false }
-      - { op: MSet, path: post.posts_published_count, from_arg: posts_published_count }
+      - {
+          op: MSet,
+          path: post.posts_published_count,
+          from_arg: posts_published_count
+        }
       - { op: MSet, path: post.budget_exhausted, from_arg: budget_exhausted }
     channel: widget_output
   verify_post:
-    description: "Verify the mock post landed (mock HTTP status, mock DOM presence, mock post id match)."
+    description: "Verify the mock post landed (mock HTTP status, mock DOM presence,
+      mock post id match)."
     mutations:
       - { op: MSet, path: verification.last_status, from_arg: status }
       - { op: MSet, path: verification.failure_reason, from_arg: failure_reason }
-      - { op: MSet, path: verification.requires_user_decision, from_arg: requires_user_decision }
+      - {
+          op: MSet,
+          path: verification.requires_user_decision,
+          from_arg: requires_user_decision
+        }
     channel: widget_output
   append_post_ledger:
     description: "Append a verified post to the durable post ledger at ledger.path."
@@ -424,34 +560,49 @@ fallback:
 
 guidance:
   intake:
-    - "First read inputs.user_text. Extract every intake field present and call record_intake with the extracted values. Use request_user_action ONLY for missing fields."
-    - "safety.no_real_credentials must be explicitly true. If the user has not acknowledged this, request_user_action and do NOT advance."
-    - "Never accept a real account handle. Demo or stub handles only (e.g., 'demo-account-1')."
+    - "First read inputs.user_text. Extract every intake field present and call
+      record_intake with the extracted values. Use request_user_action ONLY for
+      missing fields."
+    - "safety.no_real_credentials must be explicitly true. If the user has not
+      acknowledged this, request_user_action and do NOT advance."
+    - "Never accept a real account handle. Demo or stub handles only (e.g.,
+      'demo-account-1')."
   mock_adapter_check:
-    - "Call confirm_mock_adapter exactly once. The adapter_kind argument must be 'mock'."
+    - "Call confirm_mock_adapter exactly once. The adapter_kind argument must be
+      'mock'."
     - "If anything suggests a real adapter, set run.block_reason and halt."
   session_bootstrap:
-    - "Drive the mock browser to safety.demo_page_url only. Never to a real platform URL."
-    - "If the mock login fails, request_user_action — do not retry against any real endpoint."
+    - "Drive the mock browser to safety.demo_page_url only. Never to a real
+      platform URL."
+    - "If the mock login fails, request_user_action — do not retry against any
+      real endpoint."
   monitor_feed:
     - "Capture exactly one feed snapshot per action call. No background polling."
   draft_review:
-    - "Generate ONE draft at a time. Set draft.proposal_id, draft.intent, and draft.target_mock_url before calling propose_publish."
+    - "Generate ONE draft at a time. Set draft.proposal_id, draft.intent, and
+      draft.target_mock_url before calling propose_publish."
     - "Never call publish_one_draft from this mode."
   human_approval:
-    - "Only advance to post_publish on a user_confirmation with inputs.user_decision.decision='approve'."
+    - "Only advance to post_publish on a user_confirmation with
+      inputs.user_decision.decision='approve'."
     - "On reject, clear the proposal and return to draft_review."
-    - "On revise, return to draft_review with the revision instruction stored in inputs.user_decision.instruction."
+    - "On revise, return to draft_review with the revision instruction stored in
+      inputs.user_decision.instruction."
   post_publish:
-    - "Call publish_one_draft with the SAME draft id stored in approval.target_draft_id. Exactly one draft per call."
-    - "Wait for post.last_post_verified=true before the next publish — the gate enforces this."
+    - "Call publish_one_draft with the SAME draft id stored in
+      approval.target_draft_id. Exactly one draft per call."
+    - "Wait for post.last_post_verified=true before the next publish — the gate
+      enforces this."
   post_verification:
-    - "Verify the mock post landed (status / DOM presence / id match) and append to the durable ledger before the next draft."
-    - "If verification fails, set verification.requires_user_decision=true and use request_user_action."
+    - "Verify the mock post landed (status / DOM presence / id match) and append
+      to the durable ledger before the next draft."
+    - "If verification fails, set verification.requires_user_decision=true and
+      use request_user_action."
   complete:
     - "Report completion and the ledger location."
   blocked:
-    - "Report the precise block reason and the next user action required. Do not attempt to bypass."
+    - "Report the precise block reason and the next user action required. Do not
+      attempt to bypass."
 
 control_plane:
   version: 1
@@ -468,7 +619,7 @@ control_plane:
   controls:
     ask:
       title: Ask
-      aliases: ["/ask"]
+      aliases: [ "/ask" ]
       args:
         query:
           type: string
@@ -487,7 +638,7 @@ control_plane:
           mode: async
     abort:
       title: Abort run
-      aliases: ["/abort", "/stop"]
+      aliases: [ "/abort", "/stop" ]
       availability:
         when: "active_session.running"
       dispatch:
@@ -498,7 +649,7 @@ control_plane:
         confirm: true
     new:
       title: New session
-      aliases: ["/new", "/reset", "/restart"]
+      aliases: [ "/new", "/reset", "/restart" ]
       dispatch:
         - op: create_session
           as: session
@@ -507,7 +658,7 @@ control_plane:
         priority: secondary
     history:
       title: Recent sessions
-      aliases: ["/history", "/recent"]
+      aliases: [ "/history", "/recent" ]
       dispatch:
         - op: list_sessions
           as: sessions
@@ -515,7 +666,7 @@ control_plane:
         priority: secondary
     status:
       title: Status
-      aliases: ["/status"]
+      aliases: [ "/status" ]
       availability:
         when: "active_session"
       dispatch:
@@ -526,7 +677,7 @@ control_plane:
         priority: contextual
     resume:
       title: Resume
-      aliases: ["/resume"]
+      aliases: [ "/resume" ]
       availability:
         when: "active_session"
       dispatch:
@@ -537,7 +688,7 @@ control_plane:
         priority: contextual
     help:
       title: Help
-      aliases: ["/help"]
+      aliases: [ "/help" ]
       dispatch:
         - op: render_help
       presentation:

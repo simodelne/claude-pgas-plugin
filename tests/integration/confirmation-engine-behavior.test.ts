@@ -193,7 +193,7 @@ function createConfirmationEngineFalsifierSpec(): Specification {
         vocabulary: ['propose_item', 'noop'],
         channels: ['user_text', 'user_confirmation', 'widget_output'],
         transitions: [
-          { target: 'complete', guard: { kind: 'FieldTruthy', path: 'items.all_terminal' } },
+          { target: 'complete', when: { kind: 'FieldTruthy', path: 'items.all_terminal' } },
         ],
         preconditions: {},
       }],

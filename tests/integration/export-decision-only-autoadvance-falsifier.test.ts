@@ -91,7 +91,7 @@ describe('export decision-only auto-advance falsifier', () => {
         decision_only?: boolean;
         vocabulary?: string[];
         channels?: string[];
-        transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+        transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
       }>;
       prompts?: Record<string, string>;
       projection?: Record<string, unknown>;
@@ -112,7 +112,7 @@ describe('export decision-only auto-advance falsifier', () => {
       transitions: [
         {
           target: 'complete',
-          guard: { kind: 'FieldTruthy', path: ALL_TERMINAL },
+          when: { kind: 'FieldTruthy', path: ALL_TERMINAL },
         },
       ],
     });

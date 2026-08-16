@@ -539,12 +539,12 @@ modes:
     channels: [document_upload, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: ${SOURCE_PATH} }
+        when: { kind: FieldTruthy, path: ${SOURCE_PATH} }
   complete:
     vocabulary: []
     channels: [widget_output]
 
-proceed_to:
+proceeds_to:
   ingest_documents: complete
 
 projection:

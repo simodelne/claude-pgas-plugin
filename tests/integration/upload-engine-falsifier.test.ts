@@ -652,18 +652,18 @@ modes:
     channels: [user_text, widget_output]
     transitions:
       - target: await_upload
-        guard: { kind: FieldTruthy, path: upload.ready }
+        when: { kind: FieldTruthy, path: upload.ready }
   await_upload:
     vocabulary: [ingest_documents]
     channels: [document_upload, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: ${SOURCE_PATH} }
+        when: { kind: FieldTruthy, path: ${SOURCE_PATH} }
   complete:
     vocabulary: []
     channels: [widget_output]
 
-proceed_to:
+proceeds_to:
   enter_upload: await_upload
   ingest_documents: complete
 
@@ -778,7 +778,7 @@ modes:
     channels: [user_text, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: noop.done }
+        when: { kind: FieldTruthy, path: noop.done }
   complete:
     vocabulary: []
     channels: [widget_output]
@@ -892,7 +892,7 @@ action_map:
     mutations: []
     channel: widget_output
 
-proceed_to:
+proceeds_to:
   complete_skip: complete
 
 schema:
@@ -947,7 +947,7 @@ modes:
     channels: [user_text, document_upload, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: ${SOURCE_PATH} }
+        when: { kind: FieldTruthy, path: ${SOURCE_PATH} }
   complete:
     vocabulary: []
     channels: [widget_output]
@@ -999,7 +999,7 @@ action_map:
     channel: widget_output
     result_path: ${SOURCE_PATH}
 
-proceed_to:
+proceeds_to:
   ingest_documents: complete
 
 schema:
@@ -1058,7 +1058,7 @@ modes:
     channels: [document_upload, widget_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: reupload.done }
+        when: { kind: FieldTruthy, path: reupload.done }
   complete:
     vocabulary: []
     channels: [widget_output]

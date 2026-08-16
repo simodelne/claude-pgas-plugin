@@ -33,7 +33,7 @@ describe('hub mode autoadvance falsifier', () => {
     const artifact = await artifactFromDomain();
     const spec = load(artifact.spec_yaml) as {
       modes: Record<string, {
-        transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+        transitions?: Array<{ target: string; when?: { kind: string; path: string } }>;
         vocabulary?: string[];
       }>;
       action_map: Record<string, {
@@ -41,7 +41,7 @@ describe('hub mode autoadvance falsifier', () => {
         result_path?: string;
         mutations?: Array<{ path: string }>;
       }>;
-      proceed_to: Record<string, string>;
+      proceeds_to: Record<string, string>;
     };
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-hub-autoadvance-'));
     const author = scriptedAuthor([
@@ -136,12 +136,12 @@ describe('hub mode autoadvance falsifier', () => {
       'session_status',
     ]));
     expect(spec.modes[HUB_STAGE]?.transitions).toEqual(expect.arrayContaining([
-      { target: HUB_STAGE, guard: { kind: 'FieldTruthy', path: 'hub.hub_selected' } },
-      { target: AMEND_STAGE, guard: { kind: 'FieldTruthy', path: AMEND_BRANCH_GUARD } },
-      { target: EXPORT_STAGE, guard: { kind: 'FieldTruthy', path: FINALIZE_BRANCH_GUARD } },
+      { target: HUB_STAGE, when: { kind: 'FieldTruthy', path: 'hub.hub_selected' } },
+      { target: AMEND_STAGE, when: { kind: 'FieldTruthy', path: AMEND_BRANCH_GUARD } },
+      { target: EXPORT_STAGE, when: { kind: 'FieldTruthy', path: FINALIZE_BRANCH_GUARD } },
     ]));
-    expect(spec.proceed_to[AMEND_ACTION]).toBe(AMEND_STAGE);
-    expect(spec.proceed_to[FINALIZE_ACTION]).toBe(EXPORT_STAGE);
+    expect(spec.proceeds_to[AMEND_ACTION]).toBe(AMEND_STAGE);
+    expect(spec.proceeds_to[FINALIZE_ACTION]).toBe(EXPORT_STAGE);
     expect(spec.action_map[AMEND_ACTION]).toMatchObject({
       channel: 'widget_output',
       mutations: [{ path: AMEND_BRANCH_GUARD }],

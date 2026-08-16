@@ -27,7 +27,7 @@ interface Precondition {
   kind: string;
   path?: string;
   value?: unknown;
-  triggerSet?: string[];
+  triggers?: string[];
 }
 
 interface ActionEntry {
@@ -41,7 +41,7 @@ interface FoundrySpec {
     vocabulary?: string[];
     preconditions?: Record<string, Precondition[]>;
   }>;
-  proceed_to?: Record<string, string>;
+  proceeds_to?: Record<string, string>;
   action_map?: Record<string, ActionEntry>;
   schema?: Record<string, string>;
 }
@@ -87,18 +87,18 @@ describe('#81 scaffold_plan approval gating (awaits_user_decision regression loc
     const triggerGates = (preconditions ?? []).filter((p) => p.kind === 'TriggerType');
     expect(triggerGates.length, 'approve_artifact_plan must have exactly one TriggerType gate.').toBe(1);
     expect(
-      triggerGates[0]?.triggerSet,
+      triggerGates[0]?.triggers,
       'If this fails: approve_artifact_plan must be gated to user_confirmation ONLY; allowing system_mode_entry reopens #81.',
     ).toEqual(['user_confirmation']);
   });
 
   it('approve_artifact_plan transitions to domain_synthesis; plan_artifacts stays in scaffold_plan', () => {
     expect(
-      spec.proceed_to?.approve_artifact_plan,
+      spec.proceeds_to?.approve_artifact_plan,
       'If this fails: approve_artifact_plan no longer transitions to domain_synthesis.',
     ).toBe('domain_synthesis');
     expect(
-      spec.proceed_to?.plan_artifacts,
+      spec.proceeds_to?.plan_artifacts,
       'plan_artifacts must NOT be a transition trigger — it drafts and parks for approval.',
     ).toBeUndefined();
   });

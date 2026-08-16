@@ -564,14 +564,14 @@ export function synthesizeProgramSpecFromDomain(
   applyNoActionEscapeModeWiring(synthesizedModes, noActionEscapePlans);
   spec.modes = synthesizedModes;
 
-  spec.proceed_to = Object.fromEntries(
+  spec.proceeds_to = Object.fromEntries(
     transitionActions
       .filter((action) => !suppressedTransitionActionNames.has(action.name))
       .map((action) => [action.name, action.target]),
   );
-  applyDocumentsProceedTo(recordField(spec, 'proceed_to'), documents, transitionActionsBySource);
-  applyConfirmationLoopCompletionProceedTo(recordField(spec, 'proceed_to'), confirmationLoops, transitionActions);
-  applyNoActionEscapeProceedTo(recordField(spec, 'proceed_to'), noActionEscapePlans);
+  applyDocumentsProceedTo(recordField(spec, 'proceeds_to'), documents, transitionActionsBySource);
+  applyConfirmationLoopCompletionProceedTo(recordField(spec, 'proceeds_to'), confirmationLoops, transitionActions);
+  applyNoActionEscapeProceedTo(recordField(spec, 'proceeds_to'), noActionEscapePlans);
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
@@ -1087,7 +1087,7 @@ export function refreshStaleTransitionsForStages(
 
 function transformMode(mode: MutableRecord, options: {
   channels: string[];
-  transitions: Array<{ target: string; guard?: Record<string, unknown> }>;
+  transitions: Array<{ target: string; when?: Record<string, unknown> }>;
 }): MutableRecord {
   return {
     ...mode,
@@ -1109,9 +1109,9 @@ function applyTransitions(
     const fromMode = recordField(modes, action.source);
     const modeTransitions = Array.isArray(fromMode.transitions) ? fromMode.transitions : [];
     const guard = guardFromField(action.guardField);
-    const emittedTransition: { target: string; guard?: Record<string, unknown> } = { target: action.target };
+    const emittedTransition: { target: string; when?: Record<string, unknown> } = { target: action.target };
     if (guard) {
-      emittedTransition.guard = guard;
+      emittedTransition.when = guard;
     }
     modeTransitions.push(emittedTransition);
     fromMode.transitions = modeTransitions;
@@ -1132,9 +1132,9 @@ function applyDocumentFidelityTransitionGuards(
   const mode = recordField(modes, documents.stage);
   const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
   for (const transition of transitions) {
-    const existing = isRecord(transition.guard) ? transition.guard : undefined;
+    const existing = isRecord(transition.when) ? transition.when : undefined;
     const uploadGuard = existing ? allPredicates([existing, fidelity]) : fidelity;
-    transition.guard = documents.required
+    transition.when = documents.required
       ? uploadGuard
       : { kind: 'Any', subs: [documentSkipRequestedPredicate(), uploadGuard] };
   }
@@ -1198,6 +1198,10 @@ function documentSkipRequestedPredicate(): MutableRecord {
   return { kind: 'FieldEquals', path: `${DOCUMENT_INTAKE_ROOT}.status`, value: DOCUMENT_SKIP_STATUS };
 }
 
+function alwaysPredicate(): MutableRecord {
+  return { kind: 'Always' };
+}
+
 function allPredicates(predicates: MutableRecord[]): MutableRecord {
   const flattened = predicates.flatMap((predicate) =>
     predicate.kind === 'All' && Array.isArray(predicate.subs)
@@ -1225,7 +1229,7 @@ function applyConfirmationLoopTransitionGuards(
     const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
     for (const transition of transitions) {
       if (typeof transition.target === 'string' && completionTargets.includes(transition.target)) {
-        transition.guard = collectionLifecycleTerminalStatusPredicate(loop.collection);
+        transition.when = collectionLifecycleTerminalStatusPredicate(loop.collection);
       }
     }
   }
@@ -1276,7 +1280,7 @@ function applyNoActionEscapeModeWiring(
     const transitions = Array.isArray(mode.transitions) ? mode.transitions as MutableRecord[] : [];
     mode.transitions = [
       ...transitions,
-      { target: plan.blockedMode, guard: noActionEscapeBlockedPredicate(plan) },
+      { target: plan.blockedMode, when: noActionEscapeBlockedPredicate(plan) },
     ];
     const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
     mode.vocabulary = unique([...vocabulary, plan.blockedAction]);
@@ -1295,7 +1299,7 @@ function applyNoActionEscapeProceedTo(
   for (const plan of plans) {
     const existing = proceedTo[plan.blockedAction];
     if (existing !== undefined && existing !== plan.blockedMode) {
-      throw new Error(`no_action_escape blocked action ${plan.blockedAction} has conflicting proceed_to target`);
+      throw new Error(`no_action_escape blocked action ${plan.blockedAction} has conflicting proceeds_to target`);
     }
     proceedTo[plan.blockedAction] = plan.blockedMode;
   }
@@ -1399,13 +1403,13 @@ function applyCollectionNumericAggregateTransitionGuards(
       continue;
     }
     for (const transition of rawMode.transitions) {
-      if (!isRecord(transition) || !isRecord(transition.guard)) {
+      if (!isRecord(transition) || !isRecord(transition.when)) {
         continue;
       }
-      if (!isCollectionLifecycleCompletionGuard(transition.guard, descriptor)) {
+      if (!isCollectionLifecycleCompletionGuard(transition.when, descriptor)) {
         continue;
       }
-      transition.guard = allPredicates([transition.guard, ...predicates]);
+      transition.when = allPredicates([transition.when, ...predicates]);
     }
   }
 }
@@ -1424,16 +1428,16 @@ function collectionLifecycleNumericAggregatePredicates(
 }
 
 function isCollectionLifecycleCompletionGuard(
-  guard: MutableRecord,
+  predicate: MutableRecord,
   descriptor: CollectionLifecycleDescriptor,
 ): boolean {
   return (
-    guard.kind === 'FieldTruthy' &&
-    guard.path === descriptor.aggregate.guard_field
+    predicate.kind === 'FieldTruthy' &&
+    predicate.path === descriptor.aggregate.guard_field
   ) || (
-    guard.kind === 'AllItemsStatus' &&
-    guard.path === collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path) &&
-    guard.value === true
+    predicate.kind === 'AllItemsStatus' &&
+    predicate.path === collectionLifecycleTerminalStatusItemsPath(descriptor.storage.items_path) &&
+    predicate.value === true
   );
 }
 
@@ -1501,10 +1505,10 @@ function applyExportDecisionOnlyModeWiring(
   }
 }
 
-function exportDecisionOnlyTransition(action: TransitionAction): { target: string; guard?: Record<string, unknown> } {
-  const transition: { target: string; guard?: Record<string, unknown> } = { target: action.target };
+function exportDecisionOnlyTransition(action: TransitionAction): { target: string; when?: Record<string, unknown> } {
+  const transition: { target: string; when?: Record<string, unknown> } = { target: action.target };
   if (action.guardField && !action.guardField.startsWith(`${action.source}.`)) {
-    transition.guard = guardFromField(action.guardField);
+    transition.when = guardFromField(action.guardField);
   }
   return transition;
 }
@@ -1915,7 +1919,7 @@ function pdfReportRenderDerivedPathRules(): MutableRecord[] {
     countOfDerivedPathRule('report.sources_reviewed', 'aggregate.result.per_source'),
     {
       target: 'report.total_found',
-      when: { always: true },
+      when: alwaysPredicate(),
       set: {
         kind: 'sum_of',
         params: {
@@ -1928,7 +1932,7 @@ function pdfReportRenderDerivedPathRules(): MutableRecord[] {
     countOfDerivedPathRule('report.guard_audit_entries', 'aggregate.result.audit'),
     {
       target: 'report.refused_or_skipped_audit',
-      when: { always: true },
+      when: alwaysPredicate(),
       set: {
         kind: 'items_where_field_in_collection',
         params: {
@@ -1945,7 +1949,7 @@ function pdfReportRenderDerivedPathRules(): MutableRecord[] {
 function countOfDerivedPathRule(target: string, collectionPath: string): MutableRecord {
   return {
     target,
-    when: { always: true },
+    when: alwaysPredicate(),
     set: {
       kind: 'count_of',
       params: {
@@ -2197,7 +2201,7 @@ function applyCollectionCompletionDerivedPaths(
     for (const numericSum of descriptor.aggregate.numeric_sums ?? []) {
       appendDerivedPathRule(derivedPaths, {
         target: numericSum.target,
-        when: { always: true },
+        when: alwaysPredicate(),
         set: {
           kind: 'sum_of',
           params: {
@@ -2233,7 +2237,7 @@ function applyCollectionCompletionDerivedPaths(
       }
       appendDerivedPathRule(derivedPaths, {
         target: confirmationLoopActiveItemIdPath(loop),
-        when: { always: true },
+        when: alwaysPredicate(),
         set: {
           kind: 'first_item_where_field_ne',
           params: {
@@ -2263,7 +2267,7 @@ function appendFieldEqualityDerivedPathRule(
 ): void {
   appendDerivedPathRule(derivedPaths, {
     target,
-    when: { always: true },
+    when: alwaysPredicate(),
     set: {
       kind,
       params: {
@@ -4498,7 +4502,7 @@ function applyConfirmationLoopCompletionProceedTo(
   for (const action of confirmationLoopCompletionTransitionActions(loops, transitionActions)) {
     const existing = proceedTo[action.name];
     if (existing !== undefined && existing !== action.target) {
-      throw new Error(`confirmation_loop completion action ${action.name} has conflicting proceed_to target`);
+      throw new Error(`confirmation_loop completion action ${action.name} has conflicting proceeds_to target`);
     }
     proceedTo[action.name] = action.target;
   }
@@ -5468,8 +5472,8 @@ function collectSpecActionToolVocabularyNames(spec: MutableRecord): string[] {
   if (isRecord(spec.tools)) {
     names.push(...Object.keys(spec.tools));
   }
-  if (isRecord(spec.proceed_to)) {
-    names.push(...Object.keys(spec.proceed_to));
+  if (isRecord(spec.proceeds_to)) {
+    names.push(...Object.keys(spec.proceeds_to));
   }
   if (isRecord(spec.modes)) {
     for (const mode of Object.values(spec.modes)) {
@@ -5609,7 +5613,7 @@ function matchIntegration(stage: ClassifiedStage, integrations: WiringIntegratio
 }
 
 // Confirmation-loop completion actions are declarative topology actions: the spec
-// advertises them at all_terminal and maps them through proceed_to, but generated
+// advertises them at all_terminal and maps them through proceeds_to, but generated
 // handler/tool code must keep suppressing loop-source transition actions. Otherwise
 // the generated program emits an orphaned complete_<stage> handler/tool and the
 // engine's validateSpecWiring rejects it at boot (HANDLER_NO_ACTION).
@@ -9306,18 +9310,18 @@ modes:
     channels: [user_text, child_output]
     transitions:
       - target: work
-        guard: { kind: FieldTruthy, path: child.received }
+        when: { kind: FieldTruthy, path: child.received }
   work:
     vocabulary: [finish_work]
     channels: [user_text, child_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: work.done }
+        when: { kind: FieldTruthy, path: work.done }
   complete:
     vocabulary: []
     channels: [child_output]
 
-proceed_to:
+proceeds_to:
   accept_request: work
   finish_work: complete
 
@@ -11213,18 +11217,18 @@ modes:
     channels: [user_text, child_output]
     transitions:
       - target: work
-        guard: { kind: FieldTruthy, path: child.received }
+        when: { kind: FieldTruthy, path: child.received }
   work:
     vocabulary: [finish_work]
     channels: [user_text, child_output]
     transitions:
       - target: complete
-        guard: { kind: FieldTruthy, path: work.done }
+        when: { kind: FieldTruthy, path: work.done }
   complete:
     vocabulary: []
     channels: [child_output]
 
-proceed_to:
+proceeds_to:
   accept_request: work
   finish_work: complete
 
@@ -11806,18 +11810,18 @@ function multiChildStubSpecYaml(specName: string, parentName: string): string {
     '    channels: [user_text, child_output]',
     '    transitions:',
     '      - target: work',
-    '        guard: { kind: FieldTruthy, path: child.received }',
+    '        when: { kind: FieldTruthy, path: child.received }',
     '  work:',
     '    vocabulary: [finish_work]',
     '    channels: [user_text, child_output]',
     '    transitions:',
     '      - target: complete',
-    '        guard: { kind: FieldTruthy, path: work.done }',
+    '        when: { kind: FieldTruthy, path: work.done }',
     '  complete:',
     '    vocabulary: []',
     '    channels: [child_output]',
     '',
-    'proceed_to:',
+    'proceeds_to:',
     '  accept_request: work',
     '  finish_work: complete',
     '',

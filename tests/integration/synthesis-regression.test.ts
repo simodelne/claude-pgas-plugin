@@ -86,12 +86,12 @@ interface SynthesizedSpec {
   channels?: Record<string, unknown>;
   modes: Record<string, {
     channels?: string[];
-    transitions?: Array<{ target: string; guard?: { path?: string } }>;
+    transitions?: Array<{ target: string; when?: { path?: string } }>;
     vocabulary?: string[];
   }>;
   schema: Record<string, string>;
   action_map: Record<string, { channel?: string; result_path?: string; mutations?: Array<{ path?: string }> }>;
-  proceed_to: Record<string, string>;
+  proceeds_to: Record<string, string>;
   features?: string[];
   control_plane?: unknown;
 }
@@ -281,7 +281,7 @@ function extractTransitions(spec: SynthesizedSpec): Array<{ from: string; to: st
   return Object.entries(spec.modes).flatMap(([from, mode]) => (mode.transitions ?? []).map((transition) => ({
     from,
     to: transition.target,
-    guard_path: transition.guard?.path,
+    guard_path: transition.when?.path,
   })));
 }
 
@@ -341,16 +341,16 @@ function assertPerStageActionTopology(spec: SynthesizedSpec): void {
     expect(mode.vocabulary ?? [], `${modeName} vocabulary should not expose example_action`).not.toContain('example_action');
 
     const outgoingTargets = new Set(transitions.map((transition) => transition.target));
-    const guardPaths = new Set(transitions.map((transition) => transition.guard?.path).filter((path): path is string => Boolean(path)));
+    const guardPaths = new Set(transitions.map((transition) => transition.when?.path).filter((path): path is string => Boolean(path)));
     const stageActions = (mode.vocabulary ?? []).filter((action) => {
-      const target = spec.proceed_to[action];
+      const target = spec.proceeds_to[action];
       return target !== undefined && outgoingTargets.has(target);
     });
 
     expect(stageActions.length, `${modeName} should expose one action per outgoing transition`).toBe(transitions.length);
 
     for (const action of stageActions) {
-      const target = spec.proceed_to[action];
+      const target = spec.proceeds_to[action];
       const transition = transitions.find((candidate) => candidate.target === target);
       const mapping = spec.action_map[action];
       const mutationPaths = (mapping?.mutations ?? [])
@@ -361,7 +361,7 @@ function assertPerStageActionTopology(spec: SynthesizedSpec): void {
         ? [mapping.result_path as string]
         : [`${modeName}.result_json`, `${modeName}.items_json`];
       const declaredWritePaths = isResultPathAction ? [...mutationPaths, ...stageOutputPaths] : mutationPaths;
-      const allowedPaths = new Set([...stageOutputPaths, ...(transition?.guard?.path ? [transition.guard.path] : [])]);
+      const allowedPaths = new Set([...stageOutputPaths, ...(transition?.when?.path ? [transition.when.path] : [])]);
 
       expect(new Set(declaredWritePaths), `${action} should write only ${modeName}'s own paths`).toEqual(allowedPaths);
       expect(declaredWritePaths, `${action} should not write duplicate paths`).toHaveLength(allowedPaths.size);
@@ -375,7 +375,7 @@ function assertPerStageActionTopology(spec: SynthesizedSpec): void {
       }
 
       for (const guardPath of guardPaths) {
-        if (guardPath === transition?.guard?.path) continue;
+        if (guardPath === transition?.when?.path) continue;
         expect(declaredWritePaths, `${action} must not satisfy sibling branch guard ${guardPath}`).not.toContain(guardPath);
       }
     }

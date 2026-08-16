@@ -75,14 +75,14 @@ interface ParsedSpec {
   channels: Record<string, { direction: string; sync: string }>;
   modes: Record<string, {
     channels?: string[];
-    transitions?: Array<{ target: string; guard?: Record<string, unknown> }>;
+    transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
     vocabulary?: string[];
   }>;
   projection: Record<string, { include: string[]; exclude: string[] }>;
   schema: Record<string, string>;
   derived_paths?: Array<{
     target: string;
-    when: { always: true } | { path_truthy: { path: string } } | { path_equals: { path: string; value: unknown } };
+    when: { kind: 'Always' } | { kind: 'FieldTruthy'; path: string } | { kind: 'FieldEquals'; path: string; value: unknown };
     set: {
       kind: string;
       params?: {
@@ -148,7 +148,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
       ],
     });
     expect(parsed.modes.review_work.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'work_units.all_terminal' } },
+      { target: 'complete', when: { kind: 'FieldTruthy', path: 'work_units.all_terminal' } },
     ]);
     expect(parsed.channels.lifecycle_event).toEqual({ direction: 'Out', sync: 'Sync' });
     expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining(['start_review', 'reopen_work_unit']));
@@ -221,7 +221,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(parsed.derived_paths).toEqual(expect.arrayContaining([
       {
         target: 'work_units.all_terminal',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'all_items_field_eq',
           params: {
@@ -260,7 +260,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(parsed.derived_paths).toEqual(expect.arrayContaining([
       {
         target: 'work_units.total_hours',
-        when: { always: true },
+        when: { kind: 'Always' },
         set: {
           kind: 'sum_of',
           params: {
@@ -273,7 +273,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(parsed.modes.review_work.transitions).toEqual([
       {
         target: 'complete',
-        guard: {
+        when: {
           kind: 'All',
           subs: [
             { kind: 'FieldTruthy', path: 'work_units.all_terminal' },
@@ -446,7 +446,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
 
   it('keeps no-descriptor generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '522499d2381a34e83e005a3970226ae63dddedea8b0dca41b395ea9ff6d374d7',
+      spec_yaml: 'a6ea93ec92f2824a010584929e9efeca32509d6d8e520ca4fe1360daa0e799f6',
       contracts_ts: '9cf1c34fb09d664aef1bbb2b9cf31cb54a6e2943c81007cd561d0975dd2d43af',
       handlers_ts: '14c54893ab1536af91ff364a5d1c74b58980b75e0a4377a2df8a714972f4b176',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
@@ -471,7 +471,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     };
 
     expect(hashArtifact(synthesizeProgramSpecFromDomain(domainWithLifecycle(noLlmLifecycle)))).toEqual({
-      spec_yaml: '34639f7b2913cffdae1f3dd319d0c80b31075a1ed97633a544e82a9ab3261265',
+      spec_yaml: 'afd42f3b366d6edaf001044329cf5af27afd8427b1565960bca0934af033445b',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '9ba01879db03cd3706df3c1c5d053448f6ec54ed2ff305f894ef8d13d96b2433',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',

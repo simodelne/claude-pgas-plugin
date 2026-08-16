@@ -38,18 +38,18 @@ modes:
     channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: outline
-        guard: { kind: FieldTruthy, path: intake.complete }
+        when: { kind: FieldTruthy, path: intake.complete }
   outline:
     vocabulary: [propose_outline, approve_outline, request_user_input, record_user_note]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       approve_outline:
-        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: TriggerType, triggers: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
         - { kind: FieldTruthy, path: outline.sections }
     transitions:
       - target: drafting
-        guard: { kind: FieldTruthy, path: outline.approved }
+        when: { kind: FieldTruthy, path: outline.approved }
   drafting:
     vocabulary: [draft_section, request_revision, render_policy_outputs, request_user_input, record_user_note]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
@@ -60,9 +60,9 @@ modes:
         - { kind: FieldTruthy, path: draft.sections }
     transitions:
       - target: revision
-        guard: { kind: FieldTruthy, path: revision.requested }
+        when: { kind: FieldTruthy, path: revision.requested }
       - target: complete
-        guard: { kind: FieldTruthy, path: outputs.ready }
+        when: { kind: FieldTruthy, path: outputs.ready }
   revision:
     vocabulary: [revise_section, render_policy_outputs, request_user_input, record_user_note]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
@@ -71,14 +71,14 @@ modes:
         - { kind: FieldTruthy, path: draft.sections }
     transitions:
       - target: drafting
-        guard: { kind: FieldTruthy, path: revision.applied }
+        when: { kind: FieldTruthy, path: revision.applied }
       - target: complete
-        guard: { kind: FieldTruthy, path: outputs.ready }
+        when: { kind: FieldTruthy, path: outputs.ready }
   complete:
     vocabulary: [request_user_input]
     channels: [system_mode_entry, widget_output]
 
-proceed_to:
+proceeds_to:
   record_intake: outline
   approve_outline: drafting
   request_revision: revision
