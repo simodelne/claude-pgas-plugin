@@ -198,6 +198,7 @@ export interface SynthesisContext {
 
 export interface SynthesizedArtifact {
   spec_yaml: string;
+  spec_files?: Array<{ path: string; content: string }>;
   mode_names: string[];
   sha256: string;
   registration_ts?: string;

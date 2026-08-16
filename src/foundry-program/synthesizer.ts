@@ -17,6 +17,7 @@ import {
 } from './governance-gate.js';
 import { enforcedConstructsForArtifact } from './program-purity.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
+import { modularSpecFilesFor, modularSpecFilesForYamlIfComplete } from './synthesizer/modular-spec.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
@@ -861,7 +862,8 @@ export function synthesizeProgramSpecFromDomain(
   assertNoForbiddenLeadResearchWebVocabulary(spec, slug, stageClassification, domain);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
-  validateSynthesizedSpec(specYaml);
+  const specFiles = modularSpecFilesFor(spec);
+  validateSynthesizedSpec(specYaml, specFiles);
   const bodyStageSlugs = bodyStageSlugsFor(stages, completion, stageClassificationBySlug);
 
   const contractsTs = appendDocumentExtractionHostConnectorContracts(
@@ -890,6 +892,7 @@ export function synthesizeProgramSpecFromDomain(
 
   return {
     spec_yaml: specYaml,
+    spec_files: specFiles,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     contracts_ts: contractsTs,
@@ -10254,6 +10257,7 @@ function synthesizeWorkerChildArtifact(
     name: childName,
     delegation_result_policy: delegationResultPolicyForChild(child),
     spec_yaml: specYaml,
+    spec_files: modularSpecFilesForYamlIfComplete(specYaml) ?? artifact.spec_files,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     registration_ts: renderRegistrationSource(toPascalCase(childSlug), {
       delegationResultPolicy: delegationResultPolicyForChild(child),
@@ -10291,6 +10295,7 @@ function synthesizeResearchAgentChildArtifact(
     name: childName,
     delegation_result_policy: delegationResultPolicyForChild(child),
     spec_yaml: specYaml,
+    spec_files: modularSpecFilesForYamlIfComplete(specYaml) ?? artifact.spec_files,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
     contracts_ts: contractsTs,
     ...(backend === 'host_connector'
@@ -11276,7 +11281,7 @@ fallback:
   channel: child_output
   payload: { ok: false }
 `;
-  return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+  return `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11286,6 +11291,7 @@ import {
   createProgramAdapters,
   createToolRegistry,
   loadSpecWithPatterns,
+  resolveSpecFile,
   type ProgramEntry,
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
@@ -11406,10 +11412,9 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
 
 function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): ProgramEntry {
   const sourcePath = decodeURIComponent(new URL('../src/programs/${slug}/specs.yml', import.meta.url).pathname);
-  const source = readFileSync(sourcePath, 'utf8');
-  const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
+  const patched = patchMaxDelegatedRounds(stripConventionSidecarsForRawLoader(resolveSpecFile(sourcePath)), maxDelegatedRounds);
   const specPath = join(tempDir, 'parent-patched-specs.yml');
-  writeFileSync(specPath, stripConventionSidecarsForRawLoader(patched), 'utf8');
+  writeFileSync(specPath, JSON.stringify(patched, null, 2), 'utf8');
   const { spec } = loadSpecWithPatterns(specPath);
   const toolRegistry = createToolRegistry();
   register${parentPascal}Tools(toolRegistry);
@@ -11434,20 +11439,22 @@ function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): 
   };
 }
 
-function stripConventionSidecarsForRawLoader(source: string): string {
+function stripConventionSidecarsForRawLoader(spec: Record<string, unknown>): Record<string, unknown> {
   const sidecars = new Set(['view', 'render', 'policies', 'capabilities', 'composite', 'notebook']);
-  const lines: string[] = [];
-  let skipping = false;
-  for (const line of source.split(/\\r?\\n/u)) {
-    const topLevel = /^(\\S[^:]*):/u.exec(line);
-    if (topLevel) {
-      skipping = sidecars.has(topLevel[1]);
-      if (skipping) continue;
-    }
-    if (skipping) continue;
-    lines.push(line);
+  return Object.fromEntries(Object.entries(spec).filter(([key]) => !sidecars.has(key)));
+}
+
+function patchMaxDelegatedRounds(value: unknown, maxDelegatedRounds: number): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => patchMaxDelegatedRounds(entry, maxDelegatedRounds));
   }
-  return lines.join('\\n');
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+    key,
+    key === 'max_delegated_rounds' ? maxDelegatedRounds : patchMaxDelegatedRounds(entry, maxDelegatedRounds),
+  ]));
 }
 
 function createManifestReuseStubChildEntry(tempDir: string): ProgramEntry {
@@ -11942,7 +11949,7 @@ function renderDelegationSmokeTestSource(
         }, ${tsString(transitionChannel)})),
       ],
     });`;
-  return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+  return `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11952,6 +11959,7 @@ import {
   createProgramAdapters,
   createToolRegistry,
   loadSpecWithPatterns,
+  resolveSpecFile,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
 ${renderSmokeProgramEntryPrelude([
@@ -12060,28 +12068,29 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
   }
 }
 
-function stripConventionSidecarsForRawLoader(source: string): string {
+function stripConventionSidecarsForRawLoader(spec: Record<string, unknown>): Record<string, unknown> {
   const sidecars = new Set(['view', 'render', 'policies', 'capabilities', 'composite', 'notebook']);
-  const lines: string[] = [];
-  let skipping = false;
-  for (const line of source.split(/\\r?\\n/u)) {
-    const topLevel = /^(\\S[^:]*):/u.exec(line);
-    if (topLevel) {
-      skipping = sidecars.has(topLevel[1]);
-      if (skipping) continue;
-    }
-    if (skipping) continue;
-    lines.push(line);
+  return Object.fromEntries(Object.entries(spec).filter(([key]) => !sidecars.has(key)));
+}
+
+function patchMaxDelegatedRounds(value: unknown, maxDelegatedRounds: number): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => patchMaxDelegatedRounds(entry, maxDelegatedRounds));
   }
-  return lines.join('\\n');
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+    key,
+    key === 'max_delegated_rounds' ? maxDelegatedRounds : patchMaxDelegatedRounds(entry, maxDelegatedRounds),
+  ]));
 }
 
 function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): ProgramEntry {
   const sourcePath = decodeURIComponent(new URL('../src/programs/${slug}/specs.yml', import.meta.url).pathname);
-  const source = readFileSync(sourcePath, 'utf8');
-  const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
+  const patched = patchMaxDelegatedRounds(stripConventionSidecarsForRawLoader(resolveSpecFile(sourcePath)), maxDelegatedRounds);
   const specPath = join(tempDir, 'parent-patched-specs.yml');
-  writeFileSync(specPath, stripConventionSidecarsForRawLoader(patched), 'utf8');
+  writeFileSync(specPath, JSON.stringify(patched, null, 2), 'utf8');
   const { spec } = loadSpecWithPatterns(specPath);
   const toolRegistry = createToolRegistry();
   register${parentPascal}Tools(toolRegistry);

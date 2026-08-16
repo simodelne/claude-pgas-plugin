@@ -773,6 +773,7 @@ export const handlers: Record<string, ToolHandler> = {
     const synthesized = synthesizeProgramSpecFromDomain(domain, synthesisOptionsFromDomain(domain));
     putSynthesizedArtifact(sessionId, {
       spec_yaml: synthesized.spec_yaml,
+      spec_files: synthesized.spec_files,
       mode_names: synthesized.mode_names,
       sha256: synthesized.sha256,
       contracts_ts: synthesized.contracts_ts,
@@ -1087,6 +1088,7 @@ export const handlers: Record<string, ToolHandler> = {
           manifest: parseWiringManifestDomainField(domain),
           stageSlugs: existingRepoStageSlugs(synthesized),
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedSpecFiles: synthesized.spec_files,
           synthesizedRegistrationTs: synthesized.registration_ts,
           synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
@@ -1100,6 +1102,7 @@ export const handlers: Record<string, ToolHandler> = {
           ...program,
           outDir: targetDir,
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedSpecFiles: synthesized.spec_files,
           synthesizedRegistrationTs: synthesized.registration_ts,
           synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
@@ -1752,11 +1755,13 @@ function planArtifactsFromPayload(payload: Record<string, unknown>) {
   const plan = targetKind === 'existing_repo'
     ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain), {
         stageSlugs: existingRepoStageSlugs(synthesized),
+        specBlockFiles: synthesized.spec_files?.filter((file) => file.path !== 'specs.yml').map((file) => file.path),
         requestedArtifactPaths: requestedArtifactPathsFromDomain(domain),
         documentExtractionSurfaces: synthesized.document_extraction_surfaces,
       })
     : createStandaloneArtifactPlan(program, {
         stageSlugs: synthesized.body_stage_slugs,
+        specBlockFiles: synthesized.spec_files?.filter((file) => file.path !== 'specs.yml').map((file) => file.path),
         exportSurfaces: synthesized.export_surfaces,
         documentExtractionSurfaces: synthesized.document_extraction_surfaces,
       });

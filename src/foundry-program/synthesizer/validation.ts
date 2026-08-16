@@ -5,8 +5,12 @@ import { load } from 'js-yaml';
 import { loadProgramByConvention } from '@simodelne/pgas-server/plugin.js';
 import { isRecord } from '../../util/guards.js';
 import { assertConfirmationPairingTerminals } from '../composite-checks.js';
+import type { SynthesizedSpecFile } from './modular-spec.js';
 
-export function validateSynthesizedSpec(specYaml: string): void {
+export function validateSynthesizedSpec(
+  specYaml: string,
+  specFiles?: readonly SynthesizedSpecFile[],
+): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-'));
   const parsed = load(specYaml);
   try {
@@ -15,8 +19,14 @@ export function validateSynthesizedSpec(specYaml: string): void {
     }
     const programDir = join(dir, 'programs', parsed.name);
     mkdirSync(programDir, { recursive: true });
-    const specPath = join(programDir, 'specs.yml');
-    writeFileSync(specPath, specYaml);
+    if (specFiles && specFiles.length > 0) {
+      for (const file of specFiles) {
+        writeFileSync(join(programDir, file.path), file.content);
+      }
+    } else {
+      const specPath = join(programDir, 'specs.yml');
+      writeFileSync(specPath, specYaml);
+    }
     loadProgramByConvention(parsed.name, {
       programsRoot: dir,
       validationOptions: { blueprint: 'off' },

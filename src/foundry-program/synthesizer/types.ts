@@ -9,6 +9,7 @@ import type {
 } from '../synthesizer-store.js';
 import type { ClassifiedStage, StageArchetype } from '../stage-classifier.js';
 import type { ReasoningStageContract } from '../reasoning-contract.js';
+import type { SynthesizedSpecFile } from './modular-spec.js';
 
 export type CollectionStorageRepresentation = 'json_string' | 'indexed_array';
 export type NumericAggregatePredicateKind =
@@ -175,6 +176,7 @@ export interface ConfirmationLoopDescriptor {
 
 export interface SynthesizedSpec {
   spec_yaml: string;
+  spec_files: SynthesizedSpecFile[];
   mode_names: string[];
   sha256: string;
   registration_ts?: string;

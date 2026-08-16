@@ -7,6 +7,11 @@ import ts from 'typescript';
 import type { ViewSection } from '@simodelne/pgas-server/plugin.js';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
 import {
+  modularSpecFilesForYamlIfComplete,
+  specBlockFileNames,
+  type SynthesizedSpecFile,
+} from '../foundry-program/synthesizer/modular-spec.js';
+import {
   assertGeneratedProgramSourceGovernance,
   assertProgramDirPurity,
   type ProgramSourceGovernanceExemption,
@@ -48,6 +53,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   mandate?: string;
   synthesizedCapabilityGaps?: CapabilityGapInput[];
   synthesizedSpecYaml?: string;
+  synthesizedSpecFiles?: SynthesizedSpecFileInput[];
   synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
@@ -70,6 +76,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   targetProfile?: ExistingRepoTargetProfile;
   governedAttachFrontendMode?: SimoneOsGovernedAttachFrontendMode;
   synthesizedSpecYaml?: string;
+  synthesizedSpecFiles?: SynthesizedSpecFileInput[];
   synthesizedViewSections?: readonly ViewSection[];
   synthesizedSynthesisContext?: SynthesisContext;
   synthesizedRegistrationTs?: string;
@@ -96,6 +103,7 @@ interface TemplateSpec {
 
 interface SynthesizedSources {
   specYaml?: string;
+  specFiles?: SynthesizedSpecFile[];
   viewSections?: readonly ViewSection[];
   registrationTs?: string;
   projectionTs?: string;
@@ -128,6 +136,7 @@ interface SynthesizedChildSourceInput {
   slug: string;
   name: string;
   spec_yaml: string;
+  spec_files?: SynthesizedSpecFileInput[];
   registration_ts?: string;
   delegation_result_policy?: DelegationResultPolicyInput;
   contracts_ts: string;
@@ -146,6 +155,11 @@ interface SynthesizedChildSources extends SynthesizedSources {
 
 interface DelegationResultPolicyInput {
   fields: Array<{ path: string; key: string }>;
+}
+
+interface SynthesizedSpecFileInput {
+  path: string;
+  content: string;
 }
 
 interface ResolvedSynthesizedSources extends SynthesizedSources {
@@ -191,6 +205,7 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
     { slug: options.slug, name: options.name },
     {
       stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}),
+      specBlockFiles: specBlockFileNames(synthesizedSources.specFiles),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       capabilityGaps: synthesizedSources.capabilityGaps,
       exportSurfaces: synthesizedSources.exportSurfaces,
@@ -219,6 +234,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
       targetProfile: options.targetProfile,
       governedAttachFrontendMode: options.governedAttachFrontendMode,
       stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
+      specBlockFiles: specBlockFileNames(synthesizedSources.specFiles),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
       requestedArtifactPaths: options.requestedArtifactPaths,
@@ -254,6 +270,7 @@ function profiledSynthesizedSources(options: RenderExistingRepoOptions, sources:
         name: options.name,
         context: options.synthesizedSynthesisContext,
       }),
+      specFiles: undefined,
       registrationTs: renderSimoneOsGovernedAttachRegistration({
         slug: options.slug,
         name: options.name,
@@ -997,10 +1014,14 @@ function templateForSynthesizedArtifact(
   synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
   const selected = synthesizedSourcesForArtifact(artifact.path, slug, synthesizedSources);
-  if (!selected?.specYaml) {
+  if (!selected?.specYaml && !selected?.specFiles) {
     return undefined;
   }
-  if (artifact.path.endsWith(`/${selected.slug}/specs.yml`)) {
+  const specFile = synthesizedSpecFileForArtifact(artifact.path, selected);
+  if (specFile) {
+    return inlineTemplate(specFile.content);
+  }
+  if (artifact.path.endsWith(`/${selected.slug}/specs.yml`) && selected.specYaml) {
     return inlineTemplate(selected.specYaml);
   }
   if (artifact.path.endsWith(`/${selected.slug}/registration.ts`)) {
@@ -1055,6 +1076,14 @@ function templateForSynthesizedArtifact(
   return undefined;
 }
 
+function synthesizedSpecFileForArtifact(
+  artifactPath: string,
+  selected: ResolvedSynthesizedSources,
+): SynthesizedSpecFile | undefined {
+  return selected.specFiles?.find((file) =>
+    artifactPath.endsWith(`/${selected.slug}/${file.path}`));
+}
+
 function synthesizedSourcesForArtifact(
   artifactPath: string,
   primarySlug: string,
@@ -1103,6 +1132,10 @@ function childProgramArtifacts(child: SynthesizedChildSources): PlannedArtifact[
     plannedArtifact('spec', `src/programs/${slug}/specs.yml`, 'Declare synthesized delegated child PGAS program spec.', 'branch_write', [
       'spec-load',
     ]),
+    ...specBlockFileNames(child.specFiles).map((fileName) =>
+      plannedArtifact('spec', `src/programs/${slug}/${fileName}`, `Declare delegated child modular PGAS spec ${fileName} fragment.`, 'branch_write', [
+        'spec-load',
+      ])),
     ...(stageSlugs.length > 0
       ? [
           plannedArtifact('contract', `src/programs/${slug}/contracts.ts`, 'Declare delegated child stage contracts.', 'domain_synthesis', [
@@ -1869,6 +1902,7 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
 
 function synthesizedSourcesFor(options: {
   synthesizedSpecYaml?: string;
+  synthesizedSpecFiles?: SynthesizedSpecFileInput[];
   synthesizedViewSections?: readonly ViewSection[];
   synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
@@ -1882,8 +1916,10 @@ function synthesizedSourcesFor(options: {
   synthesizedCapabilityGaps?: CapabilityGapInput[];
   synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
 }): SynthesizedSources {
+  const specFiles = synthesizedSpecFilesFor(options.synthesizedSpecYaml, options.synthesizedSpecFiles);
   return {
     specYaml: options.synthesizedSpecYaml,
+    specFiles,
     viewSections: options.synthesizedViewSections ?? [],
     registrationTs: options.synthesizedRegistrationTs,
     projectionTs: undefined,
@@ -1905,6 +1941,7 @@ function synthesizedSourcesFor(options: {
       name: child.name,
       delegationResultPolicy: child.delegation_result_policy,
       specYaml: child.spec_yaml,
+      specFiles: synthesizedSpecFilesFor(child.spec_yaml, child.spec_files),
       viewSections: [],
       registrationTs: child.registration_ts,
       projectionTs: undefined,
@@ -1922,6 +1959,19 @@ function synthesizedSourcesFor(options: {
       childArtifacts: [],
     })),
   };
+}
+
+function synthesizedSpecFilesFor(
+  specYaml: string | undefined,
+  files: readonly SynthesizedSpecFileInput[] | undefined,
+): SynthesizedSpecFile[] | undefined {
+  if (files && files.length > 0) {
+    return files.map((file) => ({
+      path: file.path,
+      content: file.content,
+    }));
+  }
+  return modularSpecFilesForYamlIfComplete(specYaml);
 }
 
 function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo?: string; mandate?: string }, plan: ArtifactPlan): Record<string, string> {

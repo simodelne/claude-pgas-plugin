@@ -65,6 +65,13 @@ describe('program purity backstop', () => {
     expect(kindForRequestedArtifact('src/programs/lead-research-agent/report-data.ts')).toBe('metadata');
   });
 
+  it('classifies modular spec block YAML files as spec artifacts', () => {
+    for (const block of ['identity', 'domain', 'lifecycle', 'channels', 'actions', 'guidance', 'validation', 'view', 'render', 'policy']) {
+      expect(kindForRequestedArtifact(`src/programs/lead-research-agent/${block}.yml`)).toBe('spec');
+      expect(kindForRequestedArtifact(`programs/lead-research-agent/${block}.yaml`)).toBe('spec');
+    }
+  });
+
   it('KILL TEST: refuses an unclassified per-program TypeScript file at render time', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-program-purity-rogue-'));
     try {

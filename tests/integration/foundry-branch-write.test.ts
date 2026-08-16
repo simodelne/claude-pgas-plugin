@@ -132,6 +132,9 @@ describe('foundry branch_write', () => {
       expect(existsSync(join(targetDir, 'src/programs/incident-triage/registration.ts'))).toBe(false);
 
       expect(readFileSync(join(targetDir, 'src/programs/incident-triage/specs.yml'), 'utf8')).toContain(
+        'import:',
+      );
+      expect(readFileSync(join(targetDir, 'src/programs/incident-triage/guidance.yml'), 'utf8')).toContain(
         'Program: Incident Triage.',
       );
       const handlersRoot = readFileSync(join(targetDir, 'src/programs/incident-triage/handlers.ts'), 'utf8');

@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { load } from 'js-yaml';
-import { loadProgramByConvention } from '@simodelne/pgas-server/plugin.js';
+import { loadProgramByConvention, resolveSpecFile } from '@simodelne/pgas-server/plugin.js';
 
 import { assertSynthesizableCapabilities } from '../../src/foundry-program/capability-registry.js';
 import { loadRenderedGeneratedProgramEntry } from '../fixtures/generated-convention-entry.js';
@@ -68,17 +67,15 @@ describe('lead-research-agent hermetic smoke', () => {
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/connectors/pdf-report.ts'))).toBe(true);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/report-data.ts'))).toBe(false);
       expect(existsSync(join(tempDir, 'src/programs/lead-research-agent/registration.ts'))).toBe(false);
-      const parentSpecPath = join(tempDir, 'src/programs/lead-research-agent/specs.yml');
-      const childSpecPath = join(tempDir, 'src/programs/lead-research-source-navigation/specs.yml');
-      expect(() => loadProgramByConvention('lead-research-agent', {
+      const parentProgram = loadProgramByConvention('lead-research-agent', {
         programsRoot: join(tempDir, 'src'),
         validationOptions: { blueprint: 'off' },
-      })).not.toThrow();
+      });
       expect(() => loadProgramByConvention('lead-research-source-navigation', {
         programsRoot: join(tempDir, 'src'),
         validationOptions: { blueprint: 'off' },
       })).not.toThrow();
-      const parentSpec = load(readFileSync(parentSpecPath, 'utf8')) as ParsedSpec;
+      const parentSpec = parentProgram.spec as unknown as ParsedSpec;
       expect(parentSpec.features).toContain('keyed_collection');
       expect(parentSpec.keyed_collections).toEqual([
         { collection: 'extract_leads.result.leads', key: 'email' },
@@ -107,10 +104,14 @@ describe('lead-research-agent hermetic smoke', () => {
         tempDir,
         'src/programs/lead-research-agent/contracts.ts',
       ), 'utf8');
-      const parentSpec = load(readFileSync(join(
+      loadProgramByConvention('lead-research-agent', {
+        programsRoot: join(tempDir, 'src'),
+        validationOptions: { blueprint: 'off' },
+      });
+      const parentSpec = resolveSpecFile(join(
         tempDir,
         'src/programs/lead-research-agent/specs.yml',
-      ), 'utf8')) as ParsedSpec;
+      )) as unknown as ParsedSpec;
 
       expect(contracts).toContain('"name": "leads"');
       expect(contracts).toContain('"type": "record_array"');
