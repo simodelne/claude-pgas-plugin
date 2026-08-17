@@ -423,15 +423,56 @@ describe('delegation children descriptor synthesis gate', () => {
         { kind: 'FieldTruthy', path: 'dispatch_research.delegation.research.settled' },
       ]),
     );
-    expect(parsed.reactions.settle_research_delegation).toEqual({
-      event: 'AfterRound',
-      watch: [],
-      write_scope: [
-        'dispatch_research.delegation.research.settled',
-        'dispatch_research.delegation.research.degraded',
-        'dispatch_research.delegation.research.degrade_reason',
-      ],
-    });
+    expect(parsed.reactions).not.toHaveProperty('settle_research_delegation');
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      {
+        target: 'dispatch_research.delegation.research.settled',
+        when: {
+          kind: 'Any',
+          subs: [
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'complete' },
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'failed' },
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'declined' },
+          ],
+        },
+        set: {
+          kind: 'from_predicate',
+          params: {
+            predicate: {
+              kind: 'Any',
+              subs: [
+                { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'complete' },
+                { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'failed' },
+                { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'declined' },
+              ],
+            },
+          },
+        },
+      },
+      {
+        target: 'dispatch_research.delegation.research.degraded',
+        when: {
+          kind: 'Any',
+          subs: [
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'complete' },
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'failed' },
+            { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'declined' },
+          ],
+        },
+        set: {
+          kind: 'from_predicate',
+          params: {
+            predicate: {
+              kind: 'Any',
+              subs: [
+                { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'failed' },
+                { kind: 'FieldEquals', path: 'dispatch_research.delegation.research.result.status', value: 'declined' },
+              ],
+            },
+          },
+        },
+      },
+    ]));
     expect(parsed.projection.dispatch_research.include).toEqual(expect.arrayContaining([
       'dispatch_research.delegation.research.result.status',
       'dispatch_research.delegation.research.result.summary',
@@ -467,8 +508,8 @@ describe('delegation children descriptor synthesis gate', () => {
     expect(parsed.prompts.dispatch_research).toContain('Call request_research once with a request object');
     expect(parsed.prompts.dispatch_research).toContain('Valid terminal action JSON example: {"actions":[{"kind":"EffectAction","name":"request_research","channel":"research_call","payload":{}}]}');
     expect(parsed.prompts.dispatch_research).toContain('Emit exactly ONE such terminal action; do not emit raw MutationActions for a named action.');
-    expect(artifact.handlers_ts).toContain("['settle_research_delegation', (snapshot, trigger, mode) =>");
-    expect(artifact.handlers_ts).toContain('settleDelegationResult(');
+    expect(artifact.handlers_ts).not.toContain("['settle_research_delegation', (snapshot, trigger, mode) =>");
+    expect(artifact.handlers_ts).not.toContain('settleDelegationResult(');
     expect(artifact.smoke_test_ts).toContain('generated delegation smoke');
     expect(artifact.smoke_test_ts).toContain('createPgasServer');
     expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
@@ -607,6 +648,11 @@ interface ParsedDelegationSpec {
   prompts: Record<string, string>;
   guidance: Record<string, string[]>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+  derived_paths?: Array<{
+    target: string;
+    when: Record<string, unknown>;
+    set: { kind: string; params?: Record<string, unknown> };
+  }>;
   policies: {
     delegationPolicy: {
       allowedTargetPrograms: string[];

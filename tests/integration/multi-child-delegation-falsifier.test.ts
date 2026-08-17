@@ -120,18 +120,37 @@ describe('multi-child delegation route-level engine falsifier (Slice B)', () => 
     process.stdout.write(`[multi-child-falsifier] M-2 KILL PASS (fan_out on N-child still refuses)\n`);
   });
 
-  it('M-3: synthesizer fans a 2-child domain out to N channels/actions/reactions + both allowedTargetPrograms', () => {
+  it('M-3: synthesizer fans a 2-child domain out to N channels/actions/derived settle flags + both allowedTargetPrograms', () => {
     const artifact = synthesizeProgramSpecFromDomain(twoChildDomain());
     const parsed = load(artifact.spec_yaml) as {
       channels: Record<string, unknown>;
       action_map: Record<string, unknown>;
       reactions: Record<string, unknown>;
+      derived_paths?: Array<{ target: string; set: { kind: string; params?: Record<string, unknown> } }>;
     };
     expect(Object.keys(parsed.channels)).toEqual(expect.arrayContaining(['ingest_call', 'review_call']));
     expect(Object.keys(parsed.action_map)).toEqual(expect.arrayContaining(['request_ingest', 'request_review']));
-    expect(Object.keys(parsed.reactions)).toEqual(
+    expect(Object.keys(parsed.reactions)).not.toEqual(
       expect.arrayContaining(['settle_ingest_delegation', 'settle_review_delegation']),
     );
+    expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        target: `${INGEST_BASE}.settled`,
+        set: expect.objectContaining({ kind: 'from_predicate' }),
+      }),
+      expect.objectContaining({
+        target: `${INGEST_BASE}.degraded`,
+        set: expect.objectContaining({ kind: 'from_predicate' }),
+      }),
+      expect.objectContaining({
+        target: `${REVIEW_BASE}.settled`,
+        set: expect.objectContaining({ kind: 'from_predicate' }),
+      }),
+      expect.objectContaining({
+        target: `${REVIEW_BASE}.degraded`,
+        set: expect.objectContaining({ kind: 'from_predicate' }),
+      }),
+    ]));
     // Both spec names land in allowedTargetPrograms.
     expect(artifact.registration_ts).toContain(INGEST_PROGRAM);
     expect(artifact.registration_ts).toContain(REVIEW_PROGRAM);

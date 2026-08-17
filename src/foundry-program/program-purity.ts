@@ -37,8 +37,8 @@ export const DECLARATIVE_DEBT: readonly DeclarativeDebtEntry[] = [
   {
     kind: 'handler',
     bucket: 'logic',
-    engine_ask: 'K/L/M declarative choreography (pgas #844 comment)',
-    north_star: 'delete handlers.ts; reactions declarative',
+    engine_ask: 'per-item delegation fan-out primitive (pgas #922, filed 2026-08-13)',
+    north_star: 'delete residual fan-out handlers.ts paths; reactions declarative',
   },
   {
     kind: 'stage',
