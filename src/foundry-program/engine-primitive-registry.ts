@@ -68,7 +68,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'Specification.confirmation_pairing', status: 'emitted', note: 'Confirmation loops emit pairing prefixes, policy, and terminal actions.' },
   { construct: 'Specification.proceeds_to', status: 'emitted', note: 'Generated transition actions emit v5 proceeds_to targets.' },
   { construct: 'Specification.notice_terminal_exemptions', status: 'available_unused', note: 'No generated action currently needs notice-terminal rewrite exemption.' },
-  { construct: 'Specification.derived_paths', status: 'emitted', note: 'Collection lifecycles and confirmation loops emit derived path rules.' },
+  { construct: 'Specification.derived_paths', status: 'emitted', note: 'Collection lifecycles, confirmation loops, flat stage-output mirrors, and delegation settle flags emit derived path rules.' },
   { construct: 'Specification.derived_state_machines', status: 'available_unused', note: 'No generated stage currently uses engine-owned state-machine derivation.' },
   { construct: 'Specification.collection_finalizers', status: 'available_unused', note: 'No generator surface maps collection cleanup pipelines to finalizers yet.' },
   { construct: 'Specification.collection', status: 'available_unused', note: 'v5 keeps singular PGAS-L collection blocks; the foundry emits scattered primitives directly rather than PGAS-L collection blocks. Anchor node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:2979-3060.' },
@@ -160,10 +160,10 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'derived_paths.any_item_field_eq', status: 'emitted', note: 'Confirmation loops emit existential proposed-item flags.' },
   { construct: 'derived_paths.items_where_field_eq', status: 'emitted', note: 'Confirmation loops emit status bucket partitions.' },
   { construct: 'derived_paths.sum_of', status: 'emitted', note: 'Collection lifecycle numeric sums emit sum_of derivation.' },
-  { construct: 'derived_paths.from_predicate', status: 'available_unused', note: 'Generated specs compose predicates directly in guards/steers rather than deriving predicate truth into state.' },
+  { construct: 'derived_paths.from_predicate', status: 'emitted', note: 'Plain delegation settle flags derive settled/degraded booleans from child result status predicates.' },
   { construct: 'derived_paths.count_of', status: 'emitted', note: 'PDF report render adoption derives report row counts from typed stage result collections; collection-lifecycle synthesis still uses its narrower status/count guards directly.' },
   { construct: 'derived_paths.concat', status: 'available_unused', note: 'No generated descriptor needs string concatenation derivation yet.' },
-  { construct: 'derived_paths.field_value', status: 'available_unused', note: 'No generated descriptor needs field copy derivation yet.' },
+  { construct: 'derived_paths.field_value', status: 'emitted', note: 'Demand-driven flat stage-output mirrors copy <stage>.output.result_json/items_json into legacy flat paths through field_value rules.' },
   { construct: 'derived_paths.now_iso', status: 'available_unused', note: 'Generated programs currently use handlers/runtime values for timestamps.' },
   { construct: 'derived_paths.current_round', status: 'available_unused', note: 'Generated programs do not persist the current round via derived_paths yet.' },
   { construct: 'derived_paths.min_of', status: 'adopt_backlog', note: 'v4.10.0 #836 SetMinOf computes the minimum numeric field across a collection; foundry does not yet have a min-report or min-threshold descriptor. Anchor node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:1470 and raw YAML set kind at 2805.' },
@@ -176,7 +176,7 @@ export const ENGINE_DECLARATION_AWARENESS: readonly EngineDeclarationAwarenessEn
   { construct: 'ProgramEntry.reliabilityPolicy', status: 'adopt_backlog', note: 'Phase E backlog: ProgramEntry can carry ProgramReliabilityPolicy retry/round/denial budgets at node_modules/@simodelne/pgas-server/dist-bundle/_shared-types.d.ts:5660-5681; Phase B emits no reliability policies.' },
   { construct: 'ProgramEntry.reactionHandlers', status: 'emitted', note: 'Standalone convention helpers pass generated reaction handlers through RegisterProgramByConventionOptions.reactionHandlers; existing-repo targets keep residual registration wiring.' },
   { construct: 'ProgramEntry.syncOutContinuationPolicy', status: 'emitted', note: 'Standalone programs emit policies.syncOutContinuationPolicy for registered tool channels and convention loading maps it onto ProgramEntry; existing-repo targets keep residual registration wiring.' },
-  { construct: 'registerProgramByConvention', status: 'emitted', note: 'v5.0.0 publishes registerProgramByConvention/loadProgramByConvention through the public plugin entrypoint. Standalone generated programs no longer emit registration.ts and build entries through the public convention loader; child delegationResultPolicy remains a minimal entryOverrides residual because it has no convention sidecar home.' },
+  { construct: 'registerProgramByConvention', status: 'emitted', note: 'v5.x publishes registerProgramByConvention/loadProgramByConvention through the public plugin entrypoint. Standalone generated programs no longer emit registration.ts and build entries through the public convention loader; child delegationResultPolicy remains a minimal entryOverrides residual because it has no convention sidecar home.' },
 ] as const;
 
 export const ENGINE_PRIMITIVE_REGISTRY: readonly EnginePrimitiveEntry[] = [

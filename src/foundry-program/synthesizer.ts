@@ -664,6 +664,7 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
+  applyStageOutputMirrorDerivedPaths(spec, intermediateModes, stageOutputMirrorStages);
   applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageOutputMirrorStages, stageOutputResultFieldsBySlug);
   applyReasoningFieldMirrorReactions(recordField(spec, 'reactions'), reasoningContractsBySlug);
   if (completion.collection_lifecycle && confirmationLoops.length === 0) {
@@ -811,6 +812,7 @@ export function synthesizeProgramSpecFromDomain(
   applyNoActionEscapeSchema(schema, noActionEscapePlans);
   applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren, documents);
+  applyDelegationSettleFlagDerivedPaths(spec, delegationChildren, documents);
   applyRegisteredToolSchema(schema, registeredTools);
   applyHubSectionArtifactSchema(schema, hubSectionArtifacts);
   applySkillTriageSpec(spec, skills);
@@ -1200,6 +1202,10 @@ function documentSkipRequestedPredicate(): MutableRecord {
 
 function alwaysPredicate(): MutableRecord {
   return { kind: 'Always' };
+}
+
+function anyPredicates(predicates: MutableRecord[]): MutableRecord {
+  return predicates.length === 1 ? predicates[0] as MutableRecord : { kind: 'Any', subs: predicates };
 }
 
 function allPredicates(predicates: MutableRecord[]): MutableRecord {
@@ -2101,6 +2107,32 @@ function uniqueKeyedCollections(declarations: KeyedCollectionSpecDecl[]): KeyedC
   return uniqueDeclarations;
 }
 
+function applyStageOutputMirrorDerivedPaths(
+  spec: MutableRecord,
+  intermediateModes: string[],
+  mirrorStages: ReadonlySet<string>,
+): void {
+  const derivedPaths = Array.isArray(spec.derived_paths) ? spec.derived_paths as MutableRecord[] : [];
+  for (const modeName of intermediateModes) {
+    if (!mirrorStages.has(modeName)) {
+      continue;
+    }
+    appendFieldValueDerivedPathRule(
+      derivedPaths,
+      `${modeName}.result_json`,
+      `${modeName}.output.result_json`,
+    );
+    appendFieldValueDerivedPathRule(
+      derivedPaths,
+      `${modeName}.items_json`,
+      `${modeName}.output.items_json`,
+    );
+  }
+  if (derivedPaths.length > 0) {
+    spec.derived_paths = derivedPaths;
+  }
+}
+
 function applyStageOutputMirrorReactions(
   reactions: MutableRecord,
   intermediateModes: string[],
@@ -2112,13 +2144,12 @@ function applyStageOutputMirrorReactions(
       continue;
     }
     const resultFields = stageResultFieldsBySlug.get(modeName) ?? [];
-    reactions[stageOutputMirrorReactionName(modeName)] = {
+    if (resultFields.length === 0) {
+      continue;
+    }
+    reactions[stageResultFieldMirrorReactionName(modeName)] = {
       event: 'AfterRound',
-      write_scope: [
-        `${modeName}.result_json`,
-        `${modeName}.items_json`,
-        ...resultFields.map((field) => `${modeName}.result.${field}`),
-      ],
+      write_scope: resultFields.map((field) => `${modeName}.result.${field}`),
     };
   }
 }
@@ -2144,8 +2175,8 @@ function applyReasoningFieldMirrorReactions(
   }
 }
 
-function stageOutputMirrorReactionName(stage: string): string {
-  return `mirror_${safeIdentifier(stage)}_output`;
+function stageResultFieldMirrorReactionName(stage: string): string {
+  return `mirror_${safeIdentifier(stage)}_result_fields`;
 }
 
 function reasoningFieldMirrorReactionName(stage: string): string {
@@ -2275,6 +2306,21 @@ function appendFieldEqualityDerivedPathRule(
         field,
         value,
       },
+    },
+  });
+}
+
+function appendFieldValueDerivedPathRule(
+  derivedPaths: MutableRecord[],
+  target: string,
+  sourcePath: string,
+): void {
+  appendDerivedPathRule(derivedPaths, {
+    target,
+    when: { kind: 'FieldTruthy', path: sourcePath },
+    set: {
+      kind: 'field_value',
+      params: { path: sourcePath },
     },
   });
 }
@@ -2667,6 +2713,67 @@ function applyDelegationActionPreconditions(
   }
 }
 
+function applyDelegationSettleFlagDerivedPaths(
+  spec: MutableRecord,
+  children: DelegationChildDescriptor[],
+  documents?: DocumentsDescriptor,
+): void {
+  const derivedPaths = Array.isArray(spec.derived_paths) ? spec.derived_paths as MutableRecord[] : [];
+  for (const child of children) {
+    if (!delegationSettleFlagsAreDeclarative(child, documents)) {
+      continue;
+    }
+    const base = delegationStateBase(child);
+    const statusPath = `${child.result_path}.status`;
+    const terminalPredicate = delegationTerminalStatusPredicate(statusPath);
+    appendDerivedPathRule(derivedPaths, {
+      target: `${base}.settled`,
+      when: terminalPredicate,
+      set: {
+        kind: 'from_predicate',
+        params: { predicate: terminalPredicate },
+      },
+    });
+    appendDerivedPathRule(derivedPaths, {
+      target: `${base}.degraded`,
+      when: terminalPredicate,
+      set: {
+        kind: 'from_predicate',
+        params: {
+          predicate: delegationDegradedStatusPredicate(statusPath),
+        },
+      },
+    });
+  }
+  if (derivedPaths.length > 0) {
+    spec.derived_paths = derivedPaths;
+  }
+}
+
+function delegationSettleFlagsAreDeclarative(
+  child: DelegationChildDescriptor,
+  documents?: DocumentsDescriptor,
+): boolean {
+  return !documentFanOutDescriptor(child, documents) &&
+    !sourceConfigFanOutDescriptor(child) &&
+    !(documents && isDocumentIngestUploadDelegationChild(child, documents));
+}
+
+function delegationTerminalStatusPredicate(statusPath: string): MutableRecord {
+  return anyPredicates([
+    { kind: 'FieldEquals', path: statusPath, value: 'complete' },
+    { kind: 'FieldEquals', path: statusPath, value: 'failed' },
+    { kind: 'FieldEquals', path: statusPath, value: 'declined' },
+  ]);
+}
+
+function delegationDegradedStatusPredicate(statusPath: string): MutableRecord {
+  return anyPredicates([
+    { kind: 'FieldEquals', path: statusPath, value: 'failed' },
+    { kind: 'FieldEquals', path: statusPath, value: 'declined' },
+  ]);
+}
+
 function applyDelegationReactions(
   reactions: MutableRecord,
   children: DelegationChildDescriptor[],
@@ -2729,10 +2836,10 @@ function applyDelegationReactions(
       };
       continue;
     }
+    if (!documents || !isDocumentIngestUploadDelegationChild(child, documents)) {
+      continue;
+    }
     const base = delegationStateBase(child);
-    const harvestScope = documents && isDocumentIngestUploadDelegationChild(child, documents)
-      ? documentIngestHarvestWriteScope(documents)
-      : [];
     reactions[delegationSettleReactionName(child)] = {
       event: 'AfterRound',
       watch: [],
@@ -2740,7 +2847,7 @@ function applyDelegationReactions(
         `${base}.settled`,
         `${base}.degraded`,
         `${base}.degrade_reason`,
-        ...harvestScope,
+        ...documentIngestHarvestWriteScope(documents),
       ],
     };
   }
@@ -5663,7 +5770,8 @@ function renderHandlersSource(
   const usesIndexedCollectionLifecycle = options.includeReactionHandlers &&
     options.collectionLifecycle?.storage.representation === 'indexed_array';
   const usesConfirmationLoopHandlers = options.includeReactionHandlers && confirmationLoops.length > 0;
-  const usesDelegationHandlers = options.includeReactionHandlers && options.delegationChildren.length > 0;
+  const usesDelegationHandlers = options.includeReactionHandlers &&
+    options.delegationChildren.some((child) => !delegationSettleFlagsAreDeclarative(child, options.documents));
   const usesDocumentHandlers = options.documents !== undefined;
   const usesDocumentReactionHandlers = options.includeReactionHandlers && options.documents !== undefined;
   const usesDocumentFanOutHandlers = options.includeReactionHandlers &&
@@ -5838,11 +5946,14 @@ ${fieldResolvers}
   const usesLeadResearchHostOutputMirrorHandlers = options.includeReactionHandlers &&
     options.delegationChildren.some(childHasSourceConfigFanOut);
   const stageOutputMirrorHandlerStages = unique([...bodyActions, ...contractActionSources]);
-  const stageOutputMirrorReactionEntries = options.includeReactionHandlers
+  const stageResultFieldMirrorReactionEntries = options.includeReactionHandlers
     ? stageOutputMirrorHandlerStages.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => {
         const resultFields = options.stageResultFieldsBySlug.get(stage) ?? [];
+        if (resultFields.length === 0) {
+          return '';
+        }
         return `,
-  [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)}, ${tsString(`${stage}.result`)}, [${resultFields.map(tsString).join(', ')}])]`;
+  [${tsString(stageResultFieldMirrorReactionName(stage))}, (snapshot) => mirrorStageResultFields(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result`)}, [${resultFields.map(tsString).join(', ')}])]`;
       }).join('')
     : '';
   const leadResearchHostOutputMirrorReactionEntries = usesLeadResearchHostOutputMirrorHandlers
@@ -5863,7 +5974,7 @@ ${fieldResolvers}
       }).join('')
     : '';
   const hasReactionEntries = Boolean(
-    stageOutputMirrorReactionEntries ||
+    stageResultFieldMirrorReactionEntries ||
     leadResearchHostOutputMirrorReactionEntries ||
     reasoningFieldMirrorReactionEntries ||
     exportRenderPendingReactionEntries ||
@@ -5916,7 +6027,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageResultFieldMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageResultFieldMirrorReactionEntries ? stageResultFieldMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const handlerAdapterOverrides = exportActions.length > 0
     ? `\n\nexport function createHandlerAdapterOverrides() {\n  return {\n    ${tsString(EXPORT_HOOK_CHANNEL)}: createExportHookAdapter(),\n  };\n}`
@@ -6670,14 +6781,12 @@ function documentStringListFidelityFloor(documents: DocumentsDescriptor, field: 
   });
 }
 
-function stageOutputMirrorReactionHelper(): string {
+function stageResultFieldMirrorReactionHelper(): string {
   return `
 
-function mirrorStageOutput(
+function mirrorStageResultFields(
   snapshot: ReadonlyMap<string, unknown>,
   outputPath: string,
-  resultPath: string,
-  itemsPath: string,
   resultRootPath: string,
   resultFieldNames: readonly string[],
 ): ReactionResult | undefined {
@@ -6687,12 +6796,6 @@ function mirrorStageOutput(
   }
   const record = output as Record<string, unknown>;
   const mutations: ReactionResult['mutations'] = [];
-  if (typeof record.result_json === 'string' && snapshot.get(resultPath) !== record.result_json) {
-    mutations.push({ op: 'MSet' as const, path: resultPath, value: record.result_json });
-  }
-  if (typeof record.items_json === 'string' && snapshot.get(itemsPath) !== record.items_json) {
-    mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
-  }
   if (typeof record.result_json === 'string' && resultFieldNames.length > 0) {
     const parsed = parseStageResultRecord(record.result_json);
     for (const field of resultFieldNames) {
@@ -7211,18 +7314,7 @@ function renderDelegationReactionEntries(children: DelegationChildDescriptor[], 
     );
   }]`;
     }
-    return `,
-  [${tsString(delegationSettleReactionName(child))}, (snapshot, trigger, mode) => {
-    void trigger;
-    void mode;
-    return settleDelegationResult(
-      snapshot,
-      ${tsString(child.result_path)},
-      ${tsString(`${base}.settled`)},
-      ${tsString(`${base}.degraded`)},
-      ${tsString(`${base}.degrade_reason`)},
-    );
-  }]`;
+    return '';
   }).join('');
 }
 
@@ -7254,50 +7346,6 @@ interface SourceConfigDelegationFanOutConfig {
   indexPath: string;
   completePath: string;
   resultsPath: string;
-}
-
-function settleDelegationResult(
-  snapshot: ReadonlyMap<string, unknown>,
-  resultPath: string,
-  settledPath: string,
-  degradedPath: string,
-  degradeReasonPath: string,
-): ReactionResult | undefined {
-  if (snapshot.get(settledPath) === true) {
-    return undefined;
-  }
-  const direct = snapshot.get(resultPath);
-  const result = direct && typeof direct === 'object' && !Array.isArray(direct)
-    ? direct as Record<string, unknown>
-    : {};
-  const status = typeof result.status === 'string'
-    ? result.status
-    : snapshot.get(\`\${resultPath}.status\`);
-  if (typeof status !== 'string' || status.length === 0) {
-    return undefined;
-  }
-  if (status === 'complete') {
-    return {
-      mutations: [
-        { op: 'MSet' as const, path: settledPath, value: true },
-        { op: 'MSet' as const, path: degradedPath, value: false },
-        { op: 'MSet' as const, path: degradeReasonPath, value: '' },
-      ],
-    };
-  }
-  if (status !== 'failed' && status !== 'declined') {
-    return undefined;
-  }
-  const reason = typeof result.reason === 'string'
-    ? result.reason
-    : snapshot.get(\`\${resultPath}.reason\`);
-  return {
-    mutations: [
-      { op: 'MSet' as const, path: settledPath, value: true },
-      { op: 'MSet' as const, path: degradedPath, value: true },
-      { op: 'MSet' as const, path: degradeReasonPath, value: typeof reason === 'string' && reason.length > 0 ? reason : status },
-    ],
-  };
 }
 
 function settleDocumentIngestDelegationResult(

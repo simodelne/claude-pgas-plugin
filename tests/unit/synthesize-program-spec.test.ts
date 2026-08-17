@@ -1177,6 +1177,11 @@ describe('synthesize_program_spec handler', () => {
 
     interface ParsedFlatMirrorSpec {
       reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+      derived_paths?: Array<{
+        target: string;
+        when: Record<string, unknown>;
+        set: { kind: string; params?: Record<string, unknown> };
+      }>;
       schema: Record<string, string>;
       projection: Record<string, { include: string[]; exclude: string[] }>;
     }
@@ -1209,10 +1214,19 @@ describe('synthesize_program_spec handler', () => {
       );
       const parsed = load(artifact.spec_yaml) as ParsedFlatMirrorSpec;
 
-      expect(parsed.reactions.mirror_normalize_request_output).toEqual({
-        event: 'AfterRound',
-        write_scope: ['normalize_request.result_json', 'normalize_request.items_json'],
-      });
+      expect(parsed.derived_paths).toEqual(expect.arrayContaining([
+        {
+          target: 'normalize_request.result_json',
+          when: { kind: 'FieldTruthy', path: 'normalize_request.output.result_json' },
+          set: { kind: 'field_value', params: { path: 'normalize_request.output.result_json' } },
+        },
+        {
+          target: 'normalize_request.items_json',
+          when: { kind: 'FieldTruthy', path: 'normalize_request.output.items_json' },
+          set: { kind: 'field_value', params: { path: 'normalize_request.output.items_json' } },
+        },
+      ]));
+      expect(parsed.reactions).not.toHaveProperty('mirror_normalize_request_output');
       expect(parsed.reactions).not.toHaveProperty('mirror_apply_policy_output');
       expect(parsed.reactions).not.toHaveProperty('mirror_update_ledger_output');
 
@@ -1229,15 +1243,239 @@ describe('synthesize_program_spec handler', () => {
       expect(parsed.projection.apply_policy?.include).not.toContain('apply_policy.result_json');
       expect(parsed.projection.update_ledger?.include).not.toContain('update_ledger.result_json');
 
-      expect(artifact.handlers_ts).toContain('mirror_normalize_request_output');
-      expect(artifact.handlers_ts).toContain('function mirrorStageOutput(');
-      expect(artifact.handlers_ts).toContain('ReactionResult');
-      expect(artifact.handlers_ts).toContain('new Map<string, ReactionHandler>');
+      expect(artifact.handlers_ts).not.toContain('mirror_normalize_request_output');
+      expect(artifact.handlers_ts).not.toContain('function mirrorStageOutput(');
       expect(artifact.handlers_ts).not.toContain('mirror_apply_policy_output');
       expect(artifact.handlers_ts).not.toContain('mirror_update_ledger_output');
       expect(artifact.handlers_index_ts).not.toContain('mirrorStageOutput');
 
       expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+    });
+
+    it('drives flat mirrors through derived_paths without a generated mirror handler body', async () => {
+      const artifact = synthesizeProgramSpecFromDomain(
+        flatMirrorDomain(['normalize_request.result_json.order_id']),
+      );
+      const resultJson = JSON.stringify({ stage: 'normalize_request', order_id: 'ORD-51' });
+      const itemsJson = JSON.stringify(['ORD-51']);
+      const entry = generatedProgramEntryWithHandlers(artifact, {
+        async complete_normalize_request() {
+          return {
+            result_json: resultJson,
+            items_json: itemsJson,
+            digest: 'sha256:flat-mirror-derived',
+          };
+        },
+      });
+      const harness = await createTestHarness(withProgramName(entry, 'flat-mirror-derived-paths'), {
+        programName: 'flat-mirror-derived-paths',
+        defaultChannel: 'user_text',
+        authorResponses: [
+          effect('begin_work', {}, 'widget_output'),
+          effect('complete_normalize_request', {}, 'stage_output'),
+        ],
+      });
+
+      try {
+        await harness.trigger('start flat mirror flow');
+        await harness.trigger('finish normalize request');
+        const snapshot = await harness.snapshot();
+
+        expect(snapshot.domain['normalize_request.output']).toMatchObject({
+          result_json: resultJson,
+          items_json: itemsJson,
+        });
+        expect(snapshot.domain['normalize_request.result_json']).toBe(resultJson);
+        expect(snapshot.domain['normalize_request.items_json']).toBe(itemsJson);
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('drives a config-driven extraction flow with identical terminal and mirrored output behavior', async () => {
+      const artifact = synthesizeProgramSpecFromDomain({
+        'program.slug': 'config-extraction-parity',
+        'program.name': 'Config Extraction Parity',
+        'program.target_dir': '/tmp/config-extraction-parity',
+        'program.design_path': 'design',
+        'intake.purpose': 'Extract configured lead fields, summarize the output, and complete.',
+        'intake.entry_channel': 'user_text',
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          {
+            slug: 'extract_leads',
+            domain_spec: {
+              reads: ['inputs.initial_user_text'],
+              produces: {
+                result_json: {
+                  leads: [{ name: 'string', email: 'string', relevance_score: 'number' }],
+                },
+                items_json: 'string[]',
+              },
+              rules: ['Extract only fields listed in the configured schema.'],
+              invariants: ['Every emitted lead has name, email, and relevance_score.'],
+            },
+          },
+          {
+            slug: 'summarize_extraction',
+            domain_spec: {
+              reads: ['extract_leads.result_json'],
+              produces: { result_json: { lead_count: 'number' }, items_json: 'string[]' },
+              rules: ['Summarize the extracted lead collection.'],
+              invariants: ['lead_count must equal the number of extracted leads.'],
+            },
+          },
+          { slug: 'complete', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'extract_leads', trigger: 'started', guard_field: 'intake.started' },
+          { from: 'extract_leads', to: 'summarize_extraction', trigger: 'extracted', guard_field: 'extract_leads.ready' },
+          { from: 'summarize_extraction', to: 'complete', trigger: 'summarized', guard_field: 'summarize_extraction.ready' },
+        ]),
+        'intake.delegation_json': JSON.stringify({
+          extract_leads: { kind: 'pure-compute' },
+          summarize_extraction: { kind: 'pure-compute' },
+        }),
+        'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'summarize_extraction.ready' }),
+      });
+      const extractionResult = JSON.stringify({
+        leads: [{ name: 'Ada Lovelace', email: 'ada@example.com', relevance_score: 0.98 }],
+      });
+      const extractionItems = JSON.stringify(['lead:ada@example.com']);
+      const summaryResult = JSON.stringify({ lead_count: 1 });
+      const entry = generatedProgramEntryWithHandlers(artifact, {
+        async complete_extract_leads() {
+          return { result_json: extractionResult, items_json: extractionItems, digest: 'sha256:extract' };
+        },
+        async complete_summarize_extraction() {
+          return { result_json: summaryResult, items_json: JSON.stringify(['lead_count:1']), digest: 'sha256:summary' };
+        },
+      });
+      const harness = await createTestHarness(withProgramName(entry, 'config-extraction-parity'), {
+        programName: 'config-extraction-parity',
+        defaultChannel: 'user_text',
+        authorResponses: [
+          effect('begin_work', {}, 'widget_output'),
+          effect('complete_extract_leads', {}, 'stage_output'),
+          effect('complete_summarize_extraction', {}, 'stage_output'),
+        ],
+      });
+
+      try {
+        await harness.trigger('start config extraction');
+        await harness.trigger('finish extraction');
+        await harness.trigger('finish summary');
+        const snapshot = await harness.snapshot();
+
+        expect(snapshot.mode).toBe('complete');
+        expect(snapshot.domain['extract_leads.output']).toMatchObject({
+          result_json: extractionResult,
+          items_json: extractionItems,
+        });
+        expect(snapshot.domain['extract_leads.result_json']).toBe(extractionResult);
+        expect(snapshot.domain['summarize_extraction.output']).toMatchObject({
+          result_json: summaryResult,
+        });
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('drives a compute/dedup emitter flow with identical terminal and key output behavior', async () => {
+      const artifact = synthesizeProgramSpecFromDomain({
+        'program.slug': 'compute-dedup-emitter-parity',
+        'program.name': 'Compute Dedup Emitter Parity',
+        'program.target_dir': '/tmp/compute-dedup-emitter-parity',
+        'program.design_path': 'design',
+        'intake.purpose': 'Normalize contacts, emit one keyed upsert per unique email, and complete.',
+        'intake.entry_channel': 'user_text',
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          {
+            slug: 'normalize_contacts',
+            domain_spec: {
+              reads: ['inputs.initial_user_text'],
+              produces: {
+                result_json: {
+                  contacts: [{ name: 'string', email: 'string' }],
+                },
+                items_json: 'string[]',
+              },
+              rules: ['Normalize contacts before persistence.'],
+              invariants: ['Every normalized contact must include an email.'],
+            },
+          },
+          {
+            slug: 'persist_contacts',
+            domain_spec: {
+              reads: ['normalize_contacts.result_json'],
+              produces: {
+                result_json: { upserted: 'number', dedup_key: 'string' },
+                items_json: 'string[]',
+              },
+              rules: ['Emit one persistence record per unique email.'],
+              invariants: ['dedup_key must equal email.'],
+            },
+          },
+          { slug: 'complete', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'normalize_contacts', trigger: 'started', guard_field: 'intake.started' },
+          { from: 'normalize_contacts', to: 'persist_contacts', trigger: 'normalized', guard_field: 'normalize_contacts.ready' },
+          { from: 'persist_contacts', to: 'complete', trigger: 'persisted', guard_field: 'persist_contacts.ready' },
+        ]),
+        'intake.delegation_json': JSON.stringify({
+          normalize_contacts: { kind: 'pure-compute' },
+          persist_contacts: { kind: 'pure-compute' },
+        }),
+        'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'persist_contacts.ready' }),
+      });
+      const contactsResult = JSON.stringify({
+        contacts: [
+          { name: 'Ada Lovelace', email: 'ada@example.com' },
+          { name: 'Ada L.', email: 'ada@example.com' },
+        ],
+      });
+      const contactsItems = JSON.stringify(['email:ada@example.com', 'email:ada@example.com']);
+      const persistResult = JSON.stringify({ upserted: 1, dedup_key: 'email' });
+      const persistItems = JSON.stringify(['upserted:ada@example.com']);
+      const entry = generatedProgramEntryWithHandlers(artifact, {
+        async complete_normalize_contacts() {
+          return { result_json: contactsResult, items_json: contactsItems, digest: 'sha256:contacts' };
+        },
+        async complete_persist_contacts() {
+          return { result_json: persistResult, items_json: persistItems, digest: 'sha256:persist' };
+        },
+      });
+      const harness = await createTestHarness(withProgramName(entry, 'compute-dedup-emitter-parity'), {
+        programName: 'compute-dedup-emitter-parity',
+        defaultChannel: 'user_text',
+        authorResponses: [
+          effect('begin_work', {}, 'widget_output'),
+          effect('complete_normalize_contacts', {}, 'stage_output'),
+          effect('complete_persist_contacts', {}, 'stage_output'),
+        ],
+      });
+
+      try {
+        await harness.trigger('start compute dedup emitter');
+        await harness.trigger('finish normalization');
+        await harness.trigger('finish persistence');
+        const snapshot = await harness.snapshot();
+
+        expect(snapshot.mode).toBe('complete');
+        expect(snapshot.domain['normalize_contacts.output']).toMatchObject({
+          result_json: contactsResult,
+          items_json: contactsItems,
+        });
+        expect(snapshot.domain['normalize_contacts.result_json']).toBe(contactsResult);
+        expect(snapshot.domain['persist_contacts.output']).toMatchObject({
+          result_json: persistResult,
+          items_json: persistItems,
+        });
+      } finally {
+        await harness.close();
+      }
     });
   });
 });
@@ -1350,13 +1588,31 @@ async function expectBranchDrive(
 }
 
 function generatedProgramEntry(artifact: SynthesizedSpec): ProgramEntry {
+  return generatedProgramEntryWithHandlers(artifact, {});
+}
+
+function generatedProgramEntryWithHandlers(
+  artifact: SynthesizedSpec,
+  overrides: Record<string, ToolHandler>,
+): ProgramEntry {
   const { spec } = loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml));
   const handlerMap = handlerMapFromSource(artifact.handlers_ts);
-  const handlers = Object.fromEntries(handlerMap);
-  validateSpecWiring(spec, handlerMap);
+  const handlers = { ...Object.fromEntries(handlerMap), ...overrides };
+  const effectiveHandlerMap = new Map(Object.entries(handlers));
+  validateSpecWiring(spec, effectiveHandlerMap);
   return {
     spec,
-    reactionHandlers: new Map(),
+    reactionHandlers: new Map([
+      ['capture_initial_entry_input', (snapshot) => {
+        if (typeof snapshot.get('inputs.initial_user_text') === 'string') {
+          return undefined;
+        }
+        const current = snapshot.get('inputs.user_text');
+        return typeof current === 'string'
+          ? { mutations: [{ op: 'MSet' as const, path: 'inputs.initial_user_text', value: current }] }
+          : undefined;
+      }],
+    ]),
     createAdapters: (ctx) => createProgramAdapters(spec, ctx, handlers),
   };
 }

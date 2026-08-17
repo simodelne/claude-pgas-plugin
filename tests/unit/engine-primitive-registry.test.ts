@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v5.0.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v5.1.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -201,6 +201,12 @@ describe('engine-primitive-registry', () => {
     });
     expect(awarenessByConstruct.get('derived_paths.join_from')).toMatchObject({
       status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('derived_paths.field_value')).toMatchObject({
+      status: 'emitted',
+    });
+    expect(awarenessByConstruct.get('derived_paths.from_predicate')).toMatchObject({
+      status: 'emitted',
     });
     expect(awarenessByConstruct.get('collections.invariant_require_on')).toMatchObject({
       status: 'available_unused',
