@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v5.1.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v5.2.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -249,6 +249,18 @@ describe('engine-primitive-registry', () => {
     });
     expect(awarenessByConstruct.get('EngineCapability.document_extraction')).toMatchObject({
       status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('Feature.reference_data')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Specification.reference_data')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Predicate.StringLengthLessThan')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Predicate.FieldMatchesNoneOfPatternSet')).toMatchObject({
+      status: 'available_unused',
     });
     expect(awarenessByConstruct.get('registerProgramByConvention')).toMatchObject({
       status: 'emitted',
