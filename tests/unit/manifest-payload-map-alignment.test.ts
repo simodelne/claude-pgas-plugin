@@ -106,9 +106,9 @@ describe('manifest per-agent payload_map alignment', () => {
   const registration = artifact.registration_ts ?? '';
 
   it('rewrites each delegation to its agent\'s real input contract (not generic request.topic)', () => {
-    expect(registration).toContain('answers.research_question');
+    expect(registration).toContain("target: 'inputs.answers.research_question'");
     expect(registration).toContain('request.extraction_contract');
-    expect(registration).toContain('document_intake.work_product');
+    expect(registration).toContain("target: 'inputs.document_intake.work_product'");
     expect(registration).toContain('domain_context.review_axes');
     expect(registration).not.toContain("target: 'request.topic'");
   });
