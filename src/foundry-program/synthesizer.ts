@@ -11138,16 +11138,17 @@ function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
   for (const child of children) {
     const targetProgram = delegationTargetSpec(child);
     for (const [target, source] of Object.entries(child.payload_map)) {
+      const policyTarget = delegationPolicyInputEnrichmentTarget(target);
       const key = scopePerTargetProgram
-        ? `${targetProgram}\u0000${source}\u0000${target}`
-        : `${source}\u0000${target}`;
+        ? `${targetProgram}\u0000${source}\u0000${policyTarget}`
+        : `${source}\u0000${policyTarget}`;
       if (seenEnrichment.has(key)) {
         continue;
       }
       seenEnrichment.add(key);
       inputEnrichment.push(scopePerTargetProgram
-        ? { source, target, targetProgram }
-        : { source, target });
+        ? { source, target: policyTarget, targetProgram }
+        : { source, target: policyTarget });
     }
   }
   return {
@@ -11157,6 +11158,13 @@ function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
     ])),
     inputEnrichment,
   };
+}
+
+function delegationPolicyInputEnrichmentTarget(payloadMapTarget: string): string {
+  if (payloadMapTarget.startsWith('request.') || payloadMapTarget.startsWith('domain_context.')) {
+    return payloadMapTarget;
+  }
+  return `inputs.${payloadMapTarget}`;
 }
 
 function delegationResultPolicyForChild(child: DelegationChildDescriptor): {

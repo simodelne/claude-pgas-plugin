@@ -23,6 +23,19 @@ const rawWritePatterns = [
   },
 ] as const;
 
+const legacyV4TerminologyPatterns = [
+  { name: 'proceed_to', pattern: /\bproceed_to\b/u },
+  { name: 'triggerSet', pattern: /\btriggerSet\b/u },
+  {
+    name: 'YAML guard key',
+    pattern: /(?:^|\n)[ \t]*guard:[ \t]*(?:\n|$)/u,
+  },
+  {
+    name: 'PGAS-L collections block',
+    pattern: /(?:^|\n)[ \t]*collections:[ \t]*(?:\n|$)/u,
+  },
+] as const;
+
 describe('v4 world-write static guard', () => {
   it('does not reintroduce raw domain-write surfaces under src or templates', () => {
     const violations = sourceFiles(['src', 'templates'])
@@ -31,6 +44,24 @@ describe('v4 world-write static guard', () => {
         return rawWritePatterns
           .filter(({ pattern }) => pattern.test(source))
           .map(({ name }) => `${relative(process.cwd(), file)}: ${name}`);
+      });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('reports no residual legacy v4 PGAS-L terminology under src outside the declaration-only cache bridge', () => {
+    const violations = sourceFiles(['src'])
+      .flatMap((file) => {
+        const source = readFileSync(file, 'utf8');
+        return legacyV4TerminologyPatterns
+          .flatMap(({ name, pattern }) =>
+            Array.from(source.matchAll(new RegExp(pattern, 'gu')), (match) => ({
+              file,
+              line: lineNumberAt(source, match.index ?? 0),
+              name,
+            })))
+          .filter((violation) => !allowedLegacyTerminologyBridge(relative(process.cwd(), violation.file), violation.name))
+          .map((violation) => `${relative(process.cwd(), violation.file)}:${violation.line}: ${violation.name}`);
       });
 
     expect(violations).toEqual([]);
@@ -107,4 +138,13 @@ function shouldScan(path: string): boolean {
   }
   const normalized = path.split('\\').join('/');
   return !normalized.includes('/tests/') && !normalized.includes('/sota/fixtures/');
+}
+
+function lineNumberAt(source: string, index: number): number {
+  return source.slice(0, index).split('\n').length;
+}
+
+function allowedLegacyTerminologyBridge(relativePath: string, name: string): boolean {
+  return relativePath === 'src/foundry-program/domain-synthesis.ts' &&
+    (name === 'proceed_to' || name === 'triggerSet');
 }

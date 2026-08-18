@@ -11,6 +11,7 @@ import {
   type ReactionHandler,
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
+import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
@@ -68,6 +69,18 @@ const REVIEW_AGENT: AgentScenario = {
   // A stage named "review" is classified llm-reasoning by the stage-classifier,
   // so its completion effect rides widget_output with a result_json arg.
   stage: 'dispatch_review',
+  completionArchetype: 'llm-reasoning',
+};
+
+const DOCUMENT_INTAKE_ENRICHMENT_AGENT: AgentScenario = {
+  parentProgram: 'generated-document-intake-enrichment-parent',
+  parentName: 'Generated Document Intake Enrichment Parent',
+  targetDir: '/tmp/generated-document-intake-enrichment-parent',
+  purpose: 'Dispatch a review child that requires document_intake input enrichment.',
+  targetSpec: 'contract-review-service',
+  childRegistryKey: 'contract-review-service',
+  childId: 'review',
+  stage: 'document_intake_review',
   completionArchetype: 'llm-reasoning',
 };
 
@@ -176,6 +189,22 @@ describe('manifest reuse engine falsifier — document-ingest + review agents (S
   }
 });
 
+describe('manifest reuse engine falsifier — inputEnrichment adoption', () => {
+  it('F-A3 seeds manifest-reused child inputs.document_intake from generated inputEnrichment', async () => {
+    const evidence = await runGeneratedDocumentIntakeEnrichmentScenario();
+
+    expect(evidence.delegationPolicy.inputEnrichment).toContainEqual({
+      source: 'inputs.initial_user_text',
+      target: 'inputs.document_intake.work_product.summary',
+    });
+    expect(evidence.result.status).toBe('complete');
+    expect(evidence.result.summary).toBe('DOCUMENT_INTAKE_SENTINEL');
+    expect(evidence.result.mode).toBe('complete');
+    expect(evidence.result.rounds).toBeGreaterThanOrEqual(1);
+    expect(evidence.finalMode).toBe('complete');
+  });
+});
+
 async function runManifestReuseScenario(options: ManifestReuseScenario): Promise<ScenarioEvidence> {
   const { agent } = options;
   return withManifestReuseServer(options, async ({ client }) => {
@@ -264,6 +293,66 @@ function createChildEntry(tempDir: string, specName: string): ProgramEntry {
   };
 }
 
+async function runGeneratedDocumentIntakeEnrichmentScenario(): Promise<ScenarioEvidence & {
+  delegationPolicy: NonNullable<ProgramEntry['delegationPolicy']>;
+}> {
+  const agent = DOCUMENT_INTAKE_ENRICHMENT_AGENT;
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-generated-input-enrichment-falsifier-'));
+  const artifact = synthesizeProgramSpecFromDomain(documentIntakeEnrichmentParentDomain(agent));
+  const parsedArtifact = loadGeneratedArtifact(artifact.spec_yaml);
+  const specPath = path.join(tempDir, `parent-${randomUUID()}.yml`);
+  writeFileSync(specPath, stripConventionSidecars(artifact.spec_yaml), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  const parentEntry: ProgramEntry = {
+    spec,
+    delegationPolicy: parsedArtifact.policies.delegationPolicy,
+    reactionHandlers: new Map<string, ReactionHandler>([
+      ['capture_initial_entry_input', captureInitialEntryInput],
+      [`settle_${agent.childId}_delegation`, settleDelegationFor(agent)],
+    ]),
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, parentHandlersFor(agent)),
+  };
+  const childEntry = createDocumentIntakeEchoChildEntry(tempDir, agent.targetSpec);
+  const { client, close } = await startRouteHarness({
+    programs: [
+      { name: agent.parentProgram, entry: parentEntry },
+      { name: agent.childRegistryKey, entry: childEntry },
+    ],
+    authorHandle: scriptedAuthor([
+      scripted('parent:begin_work', effect('begin_work', {}, 'stage_output')),
+      scripted('parent:request_review', effect('request_review', {}, `${agent.childId}_call`)),
+      scripted('child:accept_request', effect('accept_request', { accepted: true }, 'child_output')),
+      scripted('child:finish_work', effect('finish_work', {}, 'child_output')),
+      scripted(`parent:complete_${agent.stage}`, completionEffect(agent)),
+    ]),
+    observerModelId: 'generated-input-enrichment-observer',
+  });
+  try {
+    const created = await client.sessions.create({ program: agent.parentProgram });
+    const parentSessionId = created.sessionId;
+    for (const payload of ['DOCUMENT_INTAKE_SENTINEL', 'dispatch delegated work', 'complete parent']) {
+      try {
+        await client.sessions.trigger(parentSessionId, { channel: 'user_text', payload });
+      } catch (error) {
+        if (String((error as Error).message).includes('terminal')) break;
+        throw error;
+      }
+    }
+    const parentDomain = (await client.sessions.world(parentSessionId)).domain;
+    const finalParent = await client.sessions.get(parentSessionId);
+    const result = resultAt(parentDomain, actionResultPath(agent));
+    return {
+      parentSessionId,
+      result,
+      finalMode: modeOf(finalParent),
+      delegationPolicy: parsedArtifact.policies.delegationPolicy,
+    };
+  } finally {
+    await close();
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 function parentDomain(agent: AgentScenario): Record<string, unknown> {
   return {
     'program.slug': agent.parentProgram,
@@ -297,6 +386,27 @@ function parentDomain(agent: AgentScenario): Record<string, unknown> {
           stage: agent.stage,
           target_spec: agent.targetSpec,
           payload_map: { 'request.topic': 'inputs.initial_user_text' },
+          result_path: actionResultPath(agent),
+          max_delegated_rounds: 12,
+          optional: true,
+        },
+      ],
+    }),
+  };
+}
+
+function documentIntakeEnrichmentParentDomain(agent: AgentScenario): Record<string, unknown> {
+  return {
+    ...parentDomain(agent),
+    'intake.delegation_json': JSON.stringify({
+      children: [
+        {
+          id: agent.childId,
+          action_name: 'request_review',
+          stage: agent.stage,
+          target_spec: agent.targetSpec,
+          registered_name: agent.childRegistryKey,
+          payload_map: { 'document_intake.work_product.summary': 'inputs.initial_user_text' },
           result_path: actionResultPath(agent),
           max_delegated_rounds: 12,
           optional: true,
@@ -349,6 +459,16 @@ function parentHandlersFor(agent: AgentScenario): Record<string, ToolHandler> {
     },
   };
 }
+
+const captureInitialEntryInput: ReactionHandler = (snapshot) => {
+  if (typeof snapshot.get('inputs.initial_user_text') === 'string') {
+    return undefined;
+  }
+  const current = snapshot.get('inputs.user_text');
+  return typeof current === 'string'
+    ? { mutations: [{ op: 'MSet' as const, path: 'inputs.initial_user_text', value: current }] }
+    : undefined;
+};
 
 const childHandlers: Record<string, ToolHandler> = {
   async accept_request(payload) {
@@ -443,6 +563,107 @@ schema:
   child.received: boolean
   work.done: boolean
   work.summary: string
+
+repair_bound: 2
+
+fallback:
+  channel: child_output
+  payload: { ok: false }
+`;
+}
+
+function createDocumentIntakeEchoChildEntry(tempDir: string, specName: string): ProgramEntry {
+  const specPath = path.join(tempDir, `child-${randomUUID()}.yml`);
+  writeFileSync(specPath, documentIntakeEchoChildSpecYaml(specName), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  return {
+    spec,
+    delegationResultPolicy: {
+      fields: [{ path: 'inputs.document_intake.work_product.summary', key: 'summary' }],
+    },
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, childHandlers),
+  };
+}
+
+function documentIntakeEchoChildSpecYaml(specName: string): string {
+  return `name: "${specName}"
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+
+preamble: |
+  Hand-authored review child that proves document_intake enrichment reached state.
+
+initial: receive
+terminal: [complete]
+
+features:
+  - base
+
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
+
+modes:
+  receive:
+    vocabulary: [accept_request]
+    channels: [user_text, child_output]
+    transitions:
+      - target: work
+        when: { kind: FieldTruthy, path: child.received }
+  work:
+    vocabulary: [finish_work]
+    channels: [user_text, child_output]
+    transitions:
+      - target: complete
+        when: { kind: FieldTruthy, path: work.done }
+  complete:
+    vocabulary: []
+    channels: [child_output]
+
+proceeds_to:
+  accept_request: work
+  finish_work: complete
+
+projection:
+  receive:
+    include: [inputs.document_intake, inputs.document_intake.work_product, inputs.document_intake.work_product.summary]
+    exclude: []
+  work:
+    include: [inputs.document_intake.work_product.summary, child.received]
+    exclude: []
+  complete:
+    include: [inputs.document_intake.work_product.summary, child.received, work.done]
+    exclude: []
+
+prompts:
+  receive: "Accept the delegated review request."
+  work: "Finish the delegated review request."
+  complete: "Terminal."
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  accept_request:
+    description: "Record that the request was received."
+    mutations:
+      - { op: MSet, path: child.received, value: true }
+    channel: child_output
+  finish_work:
+    description: "Complete review and copy the enriched document_intake summary."
+    mutations:
+      - { op: MSet, path: work.done, value: true }
+    channel: child_output
+
+schema:
+  inputs.user_text: string
+  inputs.document_intake: object
+  inputs.document_intake.work_product: object
+  inputs.document_intake.work_product.summary: string
+  child.received: boolean
+  work.done: boolean
 
 repair_bound: 2
 
@@ -554,4 +775,28 @@ interface ScenarioEvidence {
   parentSessionId: string;
   result: Record<string, unknown>;
   finalMode: string | null;
+}
+
+function loadGeneratedArtifact(specYaml: string): {
+  policies: {
+    delegationPolicy: NonNullable<ProgramEntry['delegationPolicy']>;
+  };
+} {
+  const parsed = loadSpecDocument(specYaml);
+  if (!isRecord(parsed.policies) || !isRecord(parsed.policies.delegationPolicy)) {
+    throw new Error('generated artifact did not include policies.delegationPolicy');
+  }
+  return parsed as {
+    policies: {
+      delegationPolicy: NonNullable<ProgramEntry['delegationPolicy']>;
+    };
+  };
+}
+
+function loadSpecDocument(specYaml: string): Record<string, unknown> {
+  const parsed = load(specYaml);
+  if (!isRecord(parsed)) {
+    throw new Error('generated spec YAML did not decode to an object');
+  }
+  return parsed;
 }
