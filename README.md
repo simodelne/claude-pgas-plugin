@@ -118,6 +118,8 @@ OpenAI-compatible provider:
 - `PGAS_OPENAI_MODEL`: model name for the engine provider.
 - `PGAS_OPENAI_API_KEY`: API key value for the upstream provider.
 - `PGAS_OPENAI_TOOL_CHOICE`: defaults to `required` in the CLI unless already set; override if the upstream provider needs a different engine tool-choice policy.
+- `PGAS_DISABLE_THINKING`: canonical thinking control, read by the pgas engine and by every author payload pgas-new builds (its own and the one emitted into generated programs). `1` disables thinking for every model family, `0` keeps it enabled. Set this — the engine no longer infers thinking-off from the model name.
+- `PGAS_OPENAI_DISABLE_THINKING`: consumer-owned fallback, consulted only when `PGAS_DISABLE_THINKING` is unset (Qwen-family default on; set `0` to keep thinking enabled).
 
 Session lifecycle commands map to the generated PGAS `control_plane` vocabulary:
 

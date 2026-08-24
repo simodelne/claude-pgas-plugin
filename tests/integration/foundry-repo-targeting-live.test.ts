@@ -394,6 +394,7 @@ function installLiveFoundryEnv(root: string, logRoot: string, env: LiveRepoTarge
     'PGAS_OPENAI_API_KEY',
     'PGAS_OPENAI_TOOL_CHOICE',
     'PGAS_OPENAI_DISABLE_THINKING',
+    'PGAS_DISABLE_THINKING',
     'PGAS_OPENAI_TEMPERATURE',
     'PGAS_SESSION_LOG_DIR',
     'npm_config_cache',
@@ -412,6 +413,7 @@ function installLiveFoundryEnv(root: string, logRoot: string, env: LiveRepoTarge
   process.env.PGAS_OPENAI_API_KEY ??= 'local';
   process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
   process.env.PGAS_OPENAI_DISABLE_THINKING ??= '1';
+  process.env.PGAS_DISABLE_THINKING ??= '1';
   process.env.PGAS_OPENAI_TEMPERATURE ??= '0.2';
   process.env.PGAS_SESSION_LOG_DIR = logRoot;
   process.env.npm_config_cache = join(root, '.npm-cache');
