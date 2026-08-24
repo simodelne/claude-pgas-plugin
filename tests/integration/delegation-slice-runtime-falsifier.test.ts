@@ -95,7 +95,23 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
       linkRootNodeModules(targetDir);
 
       const evidence = await runRenderedSliceScenario(targetDir, targetChild?.delegation_result_policy);
-      expect(evidence.target.parentRequestTopic).toBe(TARGET_DOCUMENT.text);
+      // pgas-server v5.7.0 (#1044 copy-on-write `setNestedPath`) corrected a state-integrity
+      // defect that this assertion previously encoded. Bisect: 5.6.0 GREEN / 5.7.0 FAIL / 5.7.1 FAIL,
+      // with engine `enrichInput` BYTE-IDENTICAL across all three — the only delta is the COW.
+      // Pre-5.7.0, `enrichInput`'s shallow root copy left `enriched.request === input.request`, so the
+      // engine's dispatch-time overlay mutated the author's payload object IN PLACE, retroactively
+      // rewriting a value the parent had ALREADY committed to domain state via the foundry-emitted
+      // `MSet <base>.request from_arg: 'request'` (synthesizer.ts). The parent's record only looked
+      // enriched as a side effect of that bug. Corrected semantics, now pinned on BOTH sides:
+      //   (a) the parent records the AUTHOR-declared payload and is never retro-mutated by the overlay;
+      //   (b) the CHILD still receives the enriched value -- this falsifier's actual kill-property (below).
+      // CONFIRMED INTENDED by the engine curator (2026-08-24): inputEnrichment owns a DETACHED child
+      // dispatch/seed payload; it must never mutate the author argument nor write back into parent
+      // World. Mirroring the enriched request into parent state would require an explicit authored
+      // mutation, never an aliasing side effect. Full ruling in
+      // docs/curator-requests/2026-08-24-delegation-request-record-no-longer-retro-enriched.md
+      expect(evidence.target.parentRequestTopic).toBe(`raw-${TARGET_DOCUMENT.id}-slug`);
+      expect(evidence.target.parentRequestDocumentId).toBe(`raw-${TARGET_DOCUMENT.id}`);
       expect(evidence.target.seededTopic).toBe(TARGET_DOCUMENT.text);
       expect(evidence.target.documentId).toBe(TARGET_DOCUMENT.id);
       expect(evidence.target.documentName).toBe(TARGET_DOCUMENT.name);
