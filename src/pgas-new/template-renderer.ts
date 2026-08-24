@@ -1506,14 +1506,49 @@ async function driveToTerminal(
 }
 
 function deterministicAuthor(actionChannels: Map<string, string>) {
+  const appendedActions = new Set<string>();
   return {
     modelId: 'generated-deterministic-route-author',
     async complete(prompt: string) {
+      // pgas#993: a keyed record_array field is appended ONE element per call
+      // through a repeatable append action before the stage's terminal completion
+      // (a keyed MAppend upserts a single element by key). Emit each such append
+      // once (idempotent upsert-by-key) so the keyed collection is populated for
+      // downstream stages, then fall through to the terminal action.
+      const append = pendingAppendAction(prompt, appendedActions);
+      if (append) {
+        appendedActions.add(append.name);
+        const appendChannel = actionChannels.get(append.name) ?? 'widget_output';
+        return JSON.stringify(effect(append.name, appendPayloadFor(append.arg), appendChannel));
+      }
       const example = terminalExample(prompt);
       const channel = example.channel ?? actionChannels.get(example.name) ?? 'widget_output';
       return JSON.stringify(effect(example.name, payloadFor(example.name, channel, prompt), channel));
     },
   };
+}
+
+function pendingAppendAction(prompt: string, appended: ReadonlySet<string>): { name: string; arg: string } | undefined {
+  // Match the active stage's keyed record_array append guidance:
+  // "call <append_action> once for EACH <label> (each upserted into <collection> by <key> ...".
+  // This guidance is present only while the owning reasoning stage is active, so it
+  // does not fire for later stages that merely reference the collection in history.
+  const pattern = /call (append_[A-Za-z0-9_]+) once for EACH [A-Za-z0-9_]+ \\(each upserted into ([A-Za-z0-9_.]+) by/gu;
+  for (const match of prompt.matchAll(pattern)) {
+    const name = match[1];
+    const collection = match[2];
+    if (name && collection && !appended.has(name)) {
+      const arg = collection.split('.').pop() ?? name;
+      return { name, arg };
+    }
+  }
+  return undefined;
+}
+
+function appendPayloadFor(arg: string): Record<string, unknown> {
+  const sample = sampleResultValue({ name: arg, type: 'record_array' });
+  const record = Array.isArray(sample) ? (sample[0] ?? {}) : sample;
+  return { [arg]: record };
 }
 
 function terminalExample(prompt: string): TerminalActionExample {

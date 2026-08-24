@@ -296,8 +296,9 @@ describe('engine-primitive-registry', () => {
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('#992');
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('render-section-list-primitive');
 
-    // Parity-confirmed v5.6.0 facts carried on already-emitted constructs
-    // (no emission change).
+    // v5.6.0 alignment facts carried on already-emitted constructs. #993 changed
+    // the keyed record_array emission (element-typed repeatable append); #976/#1014
+    // are parity-confirmed with no emission change.
     expect(awarenessByConstruct.get('Specification.keyed_collections')?.note).toContain('#993');
     expect(awarenessByConstruct.get('Specification.schema_invariants')?.note).toContain('#976');
     expect(awarenessByConstruct.get('Specification.view')?.note).toContain('#1014/#1023');

@@ -79,6 +79,9 @@ import {
   guardFieldsBySourceMode,
   isConversationalHubTransitionAction,
   isExportTransitionAction,
+  isKeyedRecordArrayField,
+  keyedRecordArrayAppendActionName,
+  keyedRecordArrayFieldsFor,
   outputProjectionFields,
   planTransitionActions,
   transitionActionChannel,
@@ -421,6 +424,11 @@ export function synthesizeProgramSpecFromDomain(
     stageClassificationBySlug,
   );
   const keyedCollections = keyedCollectionsForPersistence(stages, stageClassificationBySlug, reasoningContractsBySlug, domain);
+  // pgas#993 / v5.6.0: declared keyed/merge collection paths. A record_array
+  // reasoning field targeting one of these upserts ONE element by key, so its
+  // native-tool arg is the ELEMENT (object) type appended one-per-call through a
+  // repeatable append action — NOT a batch array on the one-shot terminal action.
+  const keyedCollectionPaths = new Set(keyedCollections.map((decl) => decl.collection));
   const recoverySteers = recoverySteersForConfirmationLoops(
     confirmationLoops,
     completion.collection_lifecycle,
@@ -637,7 +645,7 @@ export function synthesizeProgramSpecFromDomain(
       : `Terminal sink mode after ${name} cannot progress further.`;
   }
   for (const modeName of intermediateModes) {
-    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
+    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName), keyedCollectionPaths);
   }
   applyTerminalActionPrompts(prompts, transitionActionsBySource, suppressedTransitionActionNames, firstMode, reasoningContractsBySlug);
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle, transitionActions);
@@ -708,7 +716,7 @@ export function synthesizeProgramSpecFromDomain(
     if (suppressedTransitionActionNames.has(action.name)) {
       continue;
     }
-    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source));
+    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source), keyedCollectionPaths);
   }
   applyDocumentSliceTransitionActions(actionMap, documents, delegationChildren, transitionActions);
   if (completion.collection_lifecycle) {
@@ -829,6 +837,14 @@ export function synthesizeProgramSpecFromDomain(
   applyRegisteredToolGuidance(recordField(spec, 'guidance'), registeredTools);
   removeExportDecisionOnlyStageEntries(recordField(spec, 'guidance'), exportActions);
   applyEngineToolkitGuidance(recordField(spec, 'guidance'), synthesizedModes, queryPolicy.allowedWorldQueryPrefixes.length > 0);
+  applyKeyedRecordArrayAppendActions(
+    actionMap,
+    synthesizedModes,
+    recordField(spec, 'guidance'),
+    reasoningContractsBySlug,
+    keyedCollections,
+    transitionActionsBySource,
+  );
 
   if (registeredTools.length > 0) {
     spec.tools = Object.fromEntries(registeredTools.map((tool) => [
@@ -2105,6 +2121,108 @@ function uniqueKeyedCollections(declarations: KeyedCollectionSpecDecl[]): KeyedC
     uniqueDeclarations.push(declaration);
   }
   return uniqueDeclarations;
+}
+
+function singularizeRecordLabel(name: string): string {
+  if (/ies$/u.test(name)) {
+    return `${name.slice(0, -3)}y`;
+  }
+  if (/(?:s|x|z|ch|sh)es$/u.test(name)) {
+    return name.slice(0, -2);
+  }
+  if (/s$/u.test(name) && !/ss$/u.test(name)) {
+    return name.slice(0, -1);
+  }
+  return name;
+}
+
+/**
+ * pgas#993 / pgas-server v5.6.0: emit a REPEATABLE per-record append action for
+ * every keyed/merge `record_array` reasoning field.
+ *
+ * A keyed/merge-collection `MAppend` upserts a SINGLE element by key (the engine
+ * executor unwraps only a length-1 array; a batch array never resolves the
+ * top-level key → the upsert no-ops), and v5.6.0's loader accordingly infers the
+ * `from_arg` as the ELEMENT (`object`) type — rejecting the stale #825 whole-array
+ * `arg_schema.type: array`. The one-shot terminal completion action can therefore
+ * carry only ONE record, so multi-record extraction must be a REPEATABLE
+ * element-append (each call idempotent-by-key) SEPARATE from the terminal
+ * completion — exactly the engine's proven keyed drafting-loop pattern (#994 e2e).
+ *
+ * The keyed record_array field is removed from the terminal action's mutations /
+ * arg_schema / arg_descriptions (see `actionMapEntryFor`); this adds the append
+ * action to the stage's action_map + vocabulary + guidance. The generated stage
+ * handler already reads the collection path as a fallback source for the field
+ * (see the reasoning-stage handler's `resolveReasoningRecordField`), so appended
+ * records flow into the stage output with no handler change. Non-keyed
+ * record_array fields are untouched (they keep the #825 whole-array fan-out).
+ */
+export function applyKeyedRecordArrayAppendActions(
+  actionMap: MutableRecord,
+  modes: MutableRecord,
+  guidance: MutableRecord,
+  reasoningContractsBySlug: ReadonlyMap<string, ReasoningStageContract>,
+  keyedCollections: KeyedCollectionSpecDecl[],
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+): void {
+  if (keyedCollections.length === 0) {
+    return;
+  }
+  const keyByCollection = new Map(keyedCollections.map((decl) => [decl.collection, decl.key]));
+  const keyedCollectionPaths = new Set(keyedCollections.map((decl) => decl.collection));
+  for (const [stage, contract] of reasoningContractsBySlug) {
+    const fields = keyedRecordArrayFieldsFor(stage, contract, keyedCollectionPaths);
+    if (fields.length === 0) {
+      continue;
+    }
+    const mode = recordField(modes, stage);
+    const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
+    const completionActionNames = (transitionActionsBySource.get(stage) ?? []).map((action) => action.name);
+    const completionClause = completionActionNames.length > 0
+      ? completionActionNames.join(' or ')
+      : 'the stage completion action';
+    const appendNames: string[] = [];
+    for (const field of fields) {
+      const collection = `${stage}.result.${field.name}`;
+      const key = keyByCollection.get(collection) ?? '';
+      const actionName = keyedRecordArrayAppendActionName(stage, field.name);
+      const label = singularizeRecordLabel(field.name);
+      const recordFields = JSON.stringify(field.record_fields ?? {});
+      actionMap[actionName] = {
+        description:
+          `Append ONE ${label} record to ${collection}; it is upserted by ${key} (re-appending the same ${key} REPLACES that record, never duplicates). ` +
+          `Call once per ${label}, then call ${completionClause} to record the summary fields and advance. ${field.description}`,
+        arg_descriptions: {
+          [field.name]: `A single ${label} record (object) with fields: ${recordFields}. Provide exactly ONE record per call; it is upserted into ${collection} by ${key}.`,
+        },
+        arg_schema: {
+          [field.name]: { type: 'object', required: true },
+        },
+        mutations: [
+          { op: 'MAppend', path: collection, value: {}, from_arg: field.name },
+        ],
+        // widget_output: a declarative model-callable channel that applies the
+        // action's mutations WITHOUT requiring a synchronous stage handler (the
+        // same channel the confirmation-loop propose action uses). stage_output
+        // is synchronous and would demand a handler for a pure-mutation upsert.
+        channel: 'widget_output',
+      };
+      appendNames.push(actionName);
+    }
+    mode.vocabulary = unique([...vocabulary, ...appendNames]);
+    const fieldClause = fields
+      .map((field) => {
+        const collection = `${stage}.result.${field.name}`;
+        const label = singularizeRecordLabel(field.name);
+        return `call ${keyedRecordArrayAppendActionName(stage, field.name)} once for EACH ${label} (each upserted into ${collection} by ${keyByCollection.get(collection) ?? ''}, so re-appending a ${label} is idempotent)`;
+      })
+      .join('; and ');
+    const existing = Array.isArray(guidance[stage]) ? guidance[stage] as string[] : [];
+    guidance[stage] = [
+      ...existing,
+      `Record each extracted record one at a time: ${fieldClause}. Emit ONE append action per response and repeat until every record is appended; then call ${completionClause} exactly once to record the remaining summary fields and advance. Do not attempt to pass the whole batch as an array — each keyed record is appended individually.`,
+    ];
+  }
 }
 
 function applyStageOutputMirrorDerivedPaths(
@@ -13429,6 +13547,7 @@ function promptForStage(
   programName: string,
   domainSpec?: StageDomainSpec,
   reasoningContract?: ReasoningStageContract,
+  keyedCollectionPaths?: ReadonlySet<string>,
 ): string {
   const domainSpecSuffix = domainSpec
     ? [
@@ -13437,10 +13556,23 @@ function promptForStage(
       ]
     : [];
   if (reasoningContract) {
-    const hasRecordArrayField = reasoningContract.result_schema.fields.some((field) => field.type === 'record_array');
+    const fields = reasoningContract.result_schema.fields;
+    // pgas#993: keyed record_array fields are appended one record per call
+    // through their repeatable append action (upsert-by-key), not populated as a
+    // batch array on the terminal action. Direct fields (scalars / non-keyed
+    // record arrays) stay top-level args of the completion action.
+    const keyedFields = fields.filter((field) => isKeyedRecordArrayField(modeName, field, keyedCollectionPaths));
+    const directFields = fields.filter((field) => !isKeyedRecordArrayField(modeName, field, keyedCollectionPaths));
+    const hasRecordArrayField = fields.some((field) => field.type === 'record_array');
+    const keyedClause = keyedFields.length > 0
+      ? ` Append each ${keyedFields.map((field) => field.name).join(', ')} record ONE AT A TIME by calling ${keyedFields.map((field) => keyedRecordArrayAppendActionName(modeName, field.name)).join(' / ')} with a single record object per call (each record is deduplicated by its key); do NOT pass a batch array. Once every record is appended, call the completion action with the remaining summary fields.`
+      : '';
+    const directSummary = directFields.length > 0
+      ? `Populate every declared result field directly: ${directFields.map(reasoningFieldSummary).join(', ')}.`
+      : 'Record the extracted records through the append actions described below.';
     const returnInstruction = hasRecordArrayField
-      ? `Return your reasoning through the stage action's top-level arguments. Populate every declared result field directly: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Do not wrap these fields inside result_json.`
-      : `Return your reasoning through the stage action's arguments. result_json must be a JSON object containing at least: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed. items_json must be a JSON array of strings matching: ${reasoningContract.items_schema.templates.join(', ')}.`;
+      ? `Return your reasoning through the stage action's top-level arguments. ${directSummary}${keyedClause} Do not wrap these fields inside result_json.`
+      : `Return your reasoning through the stage action's arguments. result_json must be a JSON object containing at least: ${fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed. items_json must be a JSON array of strings matching: ${reasoningContract.items_schema.templates.join(', ')}.`;
     return [
       reasoningContract.reasoning_prompt,
       returnInstruction,

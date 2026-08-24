@@ -396,6 +396,12 @@ async function captureProviderToolParameters(
     if (!progressionTool) {
       throw new Error('did not receive a generated progression tool');
     }
+    // begin_work is a bootstrap action with no declared args; pgas-server v5.6.0
+    // rejects a tool call that carries undeclared args (result_json/items_json),
+    // so the bootstrap hop must be driven with an empty payload.
+    if (progressionTool.function.name === 'begin_work') {
+      return toolCall('begin_work', {});
+    }
     return toolCall(progressionTool.function.name, {
       result_json: '{}',
       items_json: '[]',
