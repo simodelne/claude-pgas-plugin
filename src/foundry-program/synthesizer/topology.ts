@@ -190,11 +190,63 @@ function recordArrayProjectionFields(modeName: string, contract: ReasoningStageC
   });
 }
 
+/**
+ * pgas#993 / pgas-server v5.6.0: is `path` a DECLARED keyed/merge collection?
+ * Mirrors the engine loader's `isKeyedOrMergeCollectionPathInLoader` and the
+ * driver's `isKeyedOrMergeCollectionPath`. The foundry only ever emits concrete
+ * (non-wildcard) keyed-collection paths, and the MAppend target is that same
+ * concrete path, so an exact-set membership test is the faithful mirror. Absent
+ * set ⇒ false (no path is keyed ⇒ #825 whole-array emission stays byte-identical).
+ */
+export function isKeyedCollectionPath(
+  path: string,
+  keyedCollectionPaths: ReadonlySet<string> | undefined,
+): boolean {
+  return keyedCollectionPaths !== undefined && keyedCollectionPaths.has(path);
+}
+
+/**
+ * pgas#993: a `record_array` reasoning field whose collection path is a declared
+ * keyed/merge collection. Its native-tool arg is the ELEMENT (object) type — a
+ * single upsertable record carrying the key — appended ONE record per call, NOT
+ * the #825 whole-array shape. A non-keyed record_array field keeps the #825
+ * whole-array (fan-out) shape.
+ */
+export function isKeyedRecordArrayField(
+  stage: string,
+  field: ReasoningField,
+  keyedCollectionPaths: ReadonlySet<string> | undefined,
+): boolean {
+  return field.type === 'record_array' &&
+    isKeyedCollectionPath(`${stage}.result.${field.name}`, keyedCollectionPaths);
+}
+
+/** pgas#993: keyed/merge record_array fields of a reasoning contract, in order. */
+export function keyedRecordArrayFieldsFor(
+  stage: string,
+  contract: ReasoningStageContract,
+  keyedCollectionPaths: ReadonlySet<string> | undefined,
+): ReasoningField[] {
+  return contract.result_schema.fields.filter((field) =>
+    isKeyedRecordArrayField(stage, field, keyedCollectionPaths));
+}
+
+/**
+ * pgas#993: the repeatable per-record append action name for a keyed record_array
+ * field. A keyed/merge MAppend upserts ONE element by key, so multi-record
+ * extraction is a REPEATABLE element-append (each call idempotent-by-key) SEPARATE
+ * from the terminal completion — not a batch array on the one-shot terminal action.
+ */
+export function keyedRecordArrayAppendActionName(stage: string, fieldName: string): string {
+  return `append_${safeIdentifier(stage)}_${safeIdentifier(fieldName)}`;
+}
+
 export function actionMapEntryFor(
   action: TransitionAction,
   firstMode: string,
   domainSpec?: StageDomainSpec,
   reasoningContract?: ReasoningStageContract,
+  keyedCollectionPaths?: ReadonlySet<string>,
 ): MutableRecord {
   const isBootstrap = action.source === firstMode;
   const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
@@ -234,18 +286,27 @@ export function actionMapEntryFor(
       ]
     : [];
   const contractedReasoningFieldMutations = contract
-    ? contract.result_schema.fields.map((field) => field.type === 'record_array'
-      ? {
-          op: 'MAppend',
-          path: `${action.source}.result.${field.name}`,
-          value: {},
-          from_arg: field.name,
-        }
-      : {
-          op: 'MSet',
-          path: `${action.source}.raw_result_fields.${field.name}`,
-          from_arg: field.name,
-        })
+    ? contract.result_schema.fields
+        // pgas#993: a KEYED record_array field is appended ONE record per call
+        // through its dedicated repeatable append action (upsert-by-key), NOT on
+        // this one-shot terminal action — a batch array into a keyed collection
+        // no-ops the upsert (executor unwraps only singleton arrays). Emitting the
+        // whole-array `from_arg` here would also make the loader infer the arg as
+        // `object` and reject the #825 `array` arg_schema (v5.6.0). A NON-keyed
+        // record_array keeps the #825 whole-array MAppend (engine fans it out).
+        .filter((field) => !isKeyedRecordArrayField(action.source, field, keyedCollectionPaths))
+        .map((field) => field.type === 'record_array'
+          ? {
+              op: 'MAppend',
+              path: `${action.source}.result.${field.name}`,
+              value: {},
+              from_arg: field.name,
+            }
+          : {
+              op: 'MSet',
+              path: `${action.source}.raw_result_fields.${field.name}`,
+              from_arg: field.name,
+            })
     : [];
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
@@ -271,16 +332,22 @@ export function actionMapEntryFor(
             result_json: `Optional tolerant result for the ${action.source} LLM reasoning stage. May be a native JSON object or a JSON string encoding an object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
             items_json: `Optional tolerant item list produced by the ${action.source} LLM reasoning stage. May be a native JSON array or a JSON string array matching the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
             } : {}),
-            ...Object.fromEntries(contract.result_schema.fields.map((field) => [
-              field.name,
-              `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}${field.type === 'record_array' ? ` Provide a native JSON array of objects matching: ${JSON.stringify(field.record_fields ?? {})}.` : ''}`,
-            ])),
+            // pgas#993: keyed record_array fields are NOT args of the terminal
+            // action — they are appended one-per-call via the repeatable append
+            // action — so omit them here. Non-keyed record_array fields keep the
+            // #825 whole-array arg description.
+            ...Object.fromEntries(contract.result_schema.fields
+              .filter((field) => !isKeyedRecordArrayField(action.source, field, keyedCollectionPaths))
+              .map((field) => [
+                field.name,
+                `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}${field.type === 'record_array' ? ` Provide a native JSON array of objects matching: ${JSON.stringify(field.record_fields ?? {})}.` : ''}`,
+              ])),
           }
         : {
             result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
             items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
           },
-      ...(contract ? { arg_schema: reasoningContractArgSchema(contract) } : {}),
+      ...(contract ? { arg_schema: reasoningContractArgSchema(contract, action.source, keyedCollectionPaths) } : {}),
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
@@ -294,15 +361,21 @@ export function actionMapEntryFor(
 
 function reasoningContractArgSchema(
   contract: ReasoningStageContract,
+  stage: string,
+  keyedCollectionPaths: ReadonlySet<string> | undefined,
 ): Record<string, { enum?: Array<string | number>; type?: string; required: true }> {
-  return Object.fromEntries(contract.result_schema.fields.map((field) => [
-    field.name,
-    {
-      ...(field.type === 'enum' ? { enum: field.enum_values ?? [] } : {}),
-      type: reasoningFieldArgSchemaType(field),
-      required: true,
-    },
-  ]));
+  return Object.fromEntries(contract.result_schema.fields
+    // pgas#993: keyed record_array fields are appended one-per-call via the
+    // repeatable append action, so they are not terminal-action args here.
+    .filter((field) => !isKeyedRecordArrayField(stage, field, keyedCollectionPaths))
+    .map((field) => [
+      field.name,
+      {
+        ...(field.type === 'enum' ? { enum: field.enum_values ?? [] } : {}),
+        type: reasoningFieldArgSchemaType(field),
+        required: true,
+      },
+    ]));
 }
 
 function reasoningFieldArgSchemaType(field: ReasoningField): 'string' | 'number' | 'boolean' | 'array' {

@@ -16,7 +16,7 @@ import {
 describe('PGAS server version contract', () => {
   it('records the published pgas-server version checked for this foundry', () => {
     expect(PGAS_SERVER_PACKAGE).toBe('@simodelne/pgas-server');
-    expect(PGAS_SERVER_VERSION).toBe('5.3.1');
+    expect(PGAS_SERVER_VERSION).toBe('5.6.0');
   });
 
   it('keeps version.ts in lockstep with the package.json compatible dependency range (no skew)', () => {

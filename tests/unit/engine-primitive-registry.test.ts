@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v5.3.1 declaration adoption status', () => {
+  it('tracks v4.2.0 through v5.6.0 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -269,6 +269,39 @@ describe('engine-primitive-registry', () => {
       status: 'emitted',
     });
     expect(awarenessByConstruct.get('ProgramDelegationPolicy.inputEnrichment')?.note).toContain('v5.3.1 #986');
+
+    // v5.6.0 register-only acknowledgements (their consumers are pgas-rag/infra
+    // programs, not foundry-synthesized ones): none is adopt-now.
+    expect(awarenessByConstruct.get('Predicate.FieldKeyedSourceSpan')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Predicate.FieldKeyedSourceSpan')?.note).toContain('#1005');
+    expect(awarenessByConstruct.get('Predicate.FieldContainsAllFromCollection')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('Predicate.FieldContainsAllFromCollection')?.note).toContain('#1006');
+    expect(awarenessByConstruct.get('EngineCapability.audio_transcription')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('EngineCapability.audio_transcription')?.note).toContain('#1003');
+    expect(awarenessByConstruct.get('EngineCapability.surrogate_target_response')).toMatchObject({
+      status: 'available_unused',
+    });
+    expect(awarenessByConstruct.get('EngineCapability.surrogate_target_response')?.note).toContain('#999');
+    // #992 render capability + engine-native ArtifactStore: PARTIAL, drive-gated,
+    // registered only (not wired) in this PR.
+    expect(awarenessByConstruct.get('EngineCapability.render')).toMatchObject({
+      status: 'adopt_backlog',
+    });
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('#992');
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('render-section-list-primitive');
+
+    // v5.6.0 alignment facts carried on already-emitted constructs. #993 changed
+    // the keyed record_array emission (element-typed repeatable append); #976/#1014
+    // are parity-confirmed with no emission change.
+    expect(awarenessByConstruct.get('Specification.keyed_collections')?.note).toContain('#993');
+    expect(awarenessByConstruct.get('Specification.schema_invariants')?.note).toContain('#976');
+    expect(awarenessByConstruct.get('Specification.view')?.note).toContain('#1014/#1023');
   });
 
   it('requires backlog, available-unused, and held awareness notes', () => {

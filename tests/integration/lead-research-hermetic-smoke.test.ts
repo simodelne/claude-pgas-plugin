@@ -19,7 +19,11 @@ const RESYNTHESIS_MODULE = new URL(
 const VITEST_BIN = new URL('../../node_modules/vitest/vitest.mjs', import.meta.url);
 
 interface ParsedSpec {
-  action_map: Record<string, { mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }> }>;
+  action_map: Record<string, {
+    mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
+    arg_schema?: Record<string, { type?: string; required?: boolean }>;
+    channel?: string;
+  }>;
   features?: string[];
   keyed_collections?: Array<{ collection: string; key: string }>;
   projection: Record<string, { include?: string[] }>;
@@ -89,7 +93,7 @@ describe('lead-research-agent hermetic smoke', () => {
     }
   });
 
-  it('re-renders record_array lead extraction as a typed array tool argument', { timeout: 120_000 }, async () => {
+  it('re-renders keyed record_array lead extraction as an element-typed repeatable append action', { timeout: 120_000 }, async () => {
     const tempDir = mkdtempSync(join(fileURLToPath(TEMP_RENDER_PARENT), 'tmp-f1-record-array-'));
     try {
       const { renderLeadResearchScaffold } = await import(RESYNTHESIS_MODULE.href) as {
@@ -126,14 +130,35 @@ describe('lead-research-agent hermetic smoke', () => {
         'extract_leads.result.leads.*.email': 'string',
         'extract_leads.result.leads.*.relevance_score': 'number',
       });
-      const extractMutations = parentSpec.action_map.complete_extract_leads?.mutations ?? [];
-      expect(extractMutations).toEqual(expect.arrayContaining([
+      // pgas#993 / pgas-server v5.6.0: a keyed/merge MAppend upserts ONE element by
+      // key, so the leads record_array is appended one ELEMENT (object) per call
+      // through a REPEATABLE append action — NOT as a batch array on the one-shot
+      // terminal action (a wrapping array never resolves the top-level key → the
+      // upsert no-ops; and v5.6.0's loader infers the arg as `object` and rejects a
+      // stale `arg_schema.type: array`). This corrects the old batch-array
+      // expectation to the engine-forced element/keyed contract.
+      const appendAction = parentSpec.action_map.append_extract_leads_leads;
+      expect(appendAction?.mutations).toEqual(expect.arrayContaining([
         expect.objectContaining({
           op: 'MAppend',
           path: 'extract_leads.result.leads',
           value: {},
           from_arg: 'leads',
         }),
+      ]));
+      // The keyed record_array arg is presented as the ELEMENT (object) type, never
+      // the #825 whole-array shape, mirroring the engine loader/driver.
+      expect(appendAction?.arg_schema?.leads?.type).toBe('object');
+
+      // The terminal completion action no longer carries the leads MAppend or a
+      // leads arg — it advances (sets done) and records the scalar summary fields.
+      const extractMutations = parentSpec.action_map.complete_extract_leads?.mutations ?? [];
+      expect(extractMutations).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ op: 'MAppend', path: 'extract_leads.result.leads' }),
+      ]));
+      expect(parentSpec.action_map.complete_extract_leads?.arg_schema?.leads).toBeUndefined();
+      expect(extractMutations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ op: 'MSet', path: 'extract_leads.done', value: true }),
       ]));
       expect(extractMutations).not.toEqual(expect.arrayContaining([
         expect.objectContaining({ from_arg: 'result_json' }),
@@ -244,7 +269,24 @@ describe('lead-research-agent hermetic smoke', () => {
       try {
         const created = await client.sessions.create({ program: 'lead-research-agent' });
         let finalSession: unknown = created;
-        for (let attempt = 0; attempt < 24; attempt += 1) {
+        // The deterministic tail (aggregate → persist → render_report) advances via
+        // the engine's sync-out continuation on stage_output — a user_text trigger
+        // in those modes is an EXTERNAL MUTATION that aborts the in-flight
+        // continuation. The reasoning stages (intake/navigate_source/extract_leads,
+        // now including the per-lead append loop) are the user_text-driven ones. So
+        // only trigger in the author-driven modes and poll (never trigger) while the
+        // continuation settles the deterministic tail.
+        const continuationTailModes = new Set(['aggregate', 'persist', 'render_report', 'complete']);
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          finalSession = await client.sessions.get(created.sessionId);
+          if (statusOf(finalSession) === 'complete') {
+            break;
+          }
+          const mode = modeOf(finalSession);
+          if (mode !== null && continuationTailModes.has(mode)) {
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            continue;
+          }
           try {
             await client.sessions.trigger(created.sessionId, {
               channel: 'user_text',
@@ -254,10 +296,6 @@ describe('lead-research-agent hermetic smoke', () => {
             if (!errorMessage(error).includes('terminal')) {
               throw error;
             }
-          }
-          finalSession = await client.sessions.get(created.sessionId);
-          if (modeOf(finalSession) === 'complete' || statusOf(finalSession) === 'complete') {
-            break;
           }
         }
 
@@ -329,6 +367,7 @@ function createLeadResearchDriveAuthor(options: {
   let sourceRequests = 0;
   let childStarts = 0;
   let childCompletions = 0;
+  let leadsAppended = 0;
   let extractCompleted = false;
   let aggregateCompleted = false;
   let persistCompleted = false;
@@ -389,43 +428,28 @@ function createLeadResearchDriveAuthor(options: {
           },
         }, 'source_navigation_call'));
       }
-      if (prompt.includes('complete_extract_leads') && !extractCompleted) {
-        extractCompleted = true;
+      // Gate on the ACTIVE extract_leads reasoning prompt (its stage opener), not
+      // on the append/complete action-name substrings — those also appear in the
+      // later aggregate/persist prompts via session history, which would otherwise
+      // route those rounds here and emit an out-of-mode action.
+      if (prompt.includes('You are performing the extract_leads stage') && !extractCompleted) {
         const leads = leadFixtures(options.config);
-        return JSON.stringify(effectWithMutations(
-          'complete_extract_leads',
-          [
-            { kind: 'MutationAction', name: 'complete_extract_leads', op: 'MSet', path: 'extract_leads.done', value: true },
-            ...leads.map((lead) => ({
-              kind: 'MutationAction',
-              name: 'complete_extract_leads',
-              op: 'MAppend',
-              path: 'extract_leads.result.leads',
-              value: lead,
-            })),
-            {
-              kind: 'MutationAction',
-              name: 'complete_extract_leads',
-              op: 'MSet',
-              path: 'extract_leads.raw_result_fields.lead_count',
-              value: leads.length,
-            },
-            {
-              kind: 'MutationAction',
-              name: 'complete_extract_leads',
-              op: 'MSet',
-              path: 'extract_leads.raw_result_fields.extraction_notes',
-              value: 'Hermetic extraction from mock navigation items.',
-            },
-          ],
-          {
-          result_json: JSON.stringify({
-            leads,
-            lead_count: leads.length,
-            extraction_notes: 'Hermetic extraction from mock navigation items.',
-          }),
-          items_json: JSON.stringify(leads.map((lead) => `lead:${String(lead.email)}`)),
-          leads,
+        // pgas#993 / v5.6.0: a keyed record_array field (extract_leads.result.leads,
+        // key=email) is upserted ONE element per call through the repeatable append
+        // action — NOT a batch array on the terminal action (a batch array never
+        // resolves the top-level key, so the keyed upsert no-ops). Append each lead
+        // as a single ELEMENT object; the engine dedups by email natively (lead1 is
+        // seeded twice in the fixtures, so the collection converges to the unique set).
+        if (leadsAppended < leads.length) {
+          const lead = leads[leadsAppended];
+          leadsAppended += 1;
+          return JSON.stringify(effect('append_extract_leads_leads', { leads: lead }, 'widget_output'));
+        }
+        extractCompleted = true;
+        // The terminal action carries only the scalar summary fields now; the
+        // generated reasoning handler reconstructs result_json from the appended
+        // keyed collection (its record-field resolver reads extract_leads.result.leads).
+        return JSON.stringify(effect('complete_extract_leads', {
           lead_count: leads.length,
           extraction_notes: 'Hermetic extraction from mock navigation items.',
         }, 'stage_output'));
