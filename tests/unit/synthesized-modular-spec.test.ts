@@ -202,9 +202,13 @@ describe('synthesized modular spec emission', () => {
   // new top-level key (e.g. a `render:` deliverable profile) emitted into the wrong
   // block, or a block emitted out of order, would silently regress it.
   //
-  // (The MONOLITHIC `spec_yaml` is a SEPARATE, already-known canonical-order task:
-  // it is dumped in `spec` insertion order and is strict-REJECTED with BLOCK_ORDER
-  // today. Deliberately not asserted here so the two efforts do not collide.)
+  // (The MONOLITHIC `spec_yaml` now goes through the SAME partition via
+  // `canonicalBlueprintRootOrder`; it is pinned in
+  // tests/unit/synthesized-monolithic-spec.test.ts.)
+  //
+  // A strict LOAD is NOT sufficient here: the loader's `parseImportBlock` re-walks
+  // the engine's own SPEC_BLOCKS list, so a misordered `import:` map still loads.
+  // The explicit import-order assertions below are the only guard on this order.
   it('loads the modular emission under blueprint: strict — including the render: deliverable slot', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-modular-strict-load-'));
     const renderOutDir = mkdtempSync(join(tmpdir(), 'pgas-new-modular-strict-render-'));
@@ -237,6 +241,21 @@ describe('synthesized modular spec emission', () => {
       );
       expect(importOrder.indexOf('render')).toBeGreaterThan(importOrder.indexOf('view'));
       expect(importOrder.indexOf('render')).toBeLessThan(importOrder.indexOf('policy'));
+      // Literal pin of the WHOLE emitted import order, not just the render slot:
+      // the strict load above tolerates any permutation of this map, so without
+      // this assertion a reordered BLUEPRINT_SPEC_BLOCKS would go undetected here.
+      expect(importOrder).toEqual([
+        'identity',
+        'domain',
+        'lifecycle',
+        'channels',
+        'actions',
+        'guidance',
+        'validation',
+        'view',
+        'render',
+        'policy',
+      ]);
     } finally {
       rmSync(outDir, { recursive: true, force: true });
       rmSync(renderOutDir, { recursive: true, force: true });

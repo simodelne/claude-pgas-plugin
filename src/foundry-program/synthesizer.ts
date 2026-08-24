@@ -17,7 +17,11 @@ import {
 } from './governance-gate.js';
 import { enforcedConstructsForArtifact } from './program-purity.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
-import { modularSpecFilesFor, modularSpecFilesForYamlIfComplete } from './synthesizer/modular-spec.js';
+import {
+  canonicalBlueprintRootOrder,
+  modularSpecFilesFor,
+  modularSpecFilesForYamlIfComplete,
+} from './synthesizer/modular-spec.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
@@ -879,7 +883,12 @@ export function synthesizeProgramSpecFromDomain(
   }
   assertNoForbiddenLeadResearchWebVocabulary(spec, slug, stageClassification, domain);
 
-  const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
+  // Root keys are regrouped into canonical blueprint block order before the
+  // dump. Key order compiles to nothing, but pgas#946 makes the engine's
+  // blueprint gate STRICT by default in v6, and a non-canonical single-file
+  // spec is rejected outright ([BLOCK_ORDER]). The modular emission below
+  // walks the same partition, so both emissions stay in lockstep.
+  const specYaml = dump(canonicalBlueprintRootOrder(spec), { lineWidth: -1, noRefs: true, sortKeys: false });
   const specFiles = modularSpecFilesFor(spec);
   validateSynthesizedSpec(specYaml, specFiles);
   const bodyStageSlugs = bodyStageSlugsFor(stages, completion, stageClassificationBySlug);
@@ -10811,7 +10820,9 @@ function patchDelegationChildSpecForDelegation(specYaml: string, child: Delegati
   }
   completeStage.mutations = mutations;
 
-  const rendered = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
+  // Same canonical blueprint block order as the parent emission: a delegated
+  // CHILD spec that fails the strict blueprint gate is the same v6 failure.
+  const rendered = dump(canonicalBlueprintRootOrder(spec), { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(rendered);
   return rendered;
 }

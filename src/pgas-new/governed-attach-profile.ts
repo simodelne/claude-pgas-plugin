@@ -1,5 +1,6 @@
 import { dump } from 'js-yaml';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
+import { canonicalBlueprintRootOrder } from '../foundry-program/synthesizer/modular-spec.js';
 
 export type ExistingRepoTargetProfile = 'simoneos-governed-attach';
 export type SimoneOsGovernedAttachFrontendMode = 'backend-only' | 'user-facing';
@@ -255,7 +256,10 @@ export function renderSimoneOsGovernedAttachSpec(options: SimoneOsGovernedSpecOp
     },
   };
 
-  return dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
+  // Canonical blueprint block order (pgas#946). This profile also carries a
+  // `patterns:` manifest key, which the engine requires to LEAD the spec
+  // (MANIFEST_NOT_LEADING); `canonicalBlueprintRootOrder` hoists it.
+  return dump(canonicalBlueprintRootOrder(spec), { lineWidth: -1, noRefs: true, sortKeys: false });
 }
 
 export function renderSimoneOsGovernedAttachRegistration(options: SimoneOsGovernedProgramOptions): string {

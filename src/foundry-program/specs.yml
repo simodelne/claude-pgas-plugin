@@ -1,31 +1,217 @@
+# Root keys are grouped in the engine's CANONICAL BLUEPRINT BLOCK ORDER:
+#   identity -> domain -> lifecycle -> channels -> actions -> guidance
+#   -> delegation -> validation -> view -> render -> policy
+# pgas#946 makes `validationOptions.blueprint` STRICT by default in v6, and a
+# non-canonical single-file spec is rejected outright ([BLOCK_ORDER]). Key order
+# compiles to nothing, so regrouping is behaviour-preserving -- but do NOT
+# reintroduce a key outside its block. The same order is emitted for synthesized
+# programs by `canonicalBlueprintRootOrder` in
+# src/foundry-program/synthesizer/modular-spec.ts (BLUEPRINT_SPEC_BLOCKS is the
+# single source of truth).
 name: "pgas-new"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Program: PGAS New. You create PGAS programs through governed modes,
-  explicit artifact planning, repo-curator wiring manifests, and static
-  then live verification. Use only the current mode vocabulary and keep
-  user decisions in the notebook-backed domain.
-
-initial: intake_intelligence
-terminal: [ pr_graduation ]
 
 features:
   - base
   - reactions
   - runtime_control
+pure: true
 
-channels:
-  seed: { direction: In, sync: Async }
-  user_text: { direction: In, sync: Async }
-  user_confirmation: { direction: In, sync: Async, structured_decision: true }
-  system_mode_entry: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Async }
-  artifact_plan_output: { direction: Out, sync: Sync }
-  composite_checks_output: { direction: Out, sync: Sync }
-  live_drive_output: { direction: Out, sync: Sync }
+schema:
+  inputs.user_text: string
+  inputs.user_decision: object
+  inputs.user_decision.decision: string
+  inputs.user_decision.instruction: string
+  inputs.user_decision.note_mode: string
+  inputs.user_decision.timestamp: string
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+  inputs.domain_context: object
+  inputs.domain_context.query: string
+  inputs.domain_context.value: any
+  intake.mandate: string
+  intake.last_question_asked: number
+  intake.last_question_text: string
+  intake.purpose: string
+  intake.q1_recorded: boolean
+  intake.entry_channel: string
+  intake.q2_recorded: boolean
+  intake.stages_json: string
+  intake.q3_recorded: boolean
+  intake.transitions_json: string
+  intake.q4_recorded: boolean
+  intake.delegation_json: string
+  intake.q5_recorded: boolean
+  intake.delegation_validation_error: string
+  intake.documents_json: string
+  intake.documents_recorded: boolean
+  intake.completion_json: string
+  intake.q6_recorded: boolean
+  intake.skills_json: string
+  intake.skills_recorded: boolean
+  intake.program_intake_finalized: boolean
+  intake.design_confirmation_summary: string
+  intake.research_confirmed: boolean
+  intake.user_requested_research: boolean
+  intake.research_allowed: boolean
+  intake.user_research_authorized: boolean
+  notebook.entries: array
+  notebook.pins: array
+  research.queries: array
+  research.completed: boolean
+  repo.target_kind: string
+  repo.blocked: boolean
+  repo.write_authorized: boolean
+  repo.curator_request_lodged: boolean
+  repo.wiring_manifest.status: string
+  repo.wiring_manifest.path: string
+  repo.wiring_manifest.repo_root: string
+  repo.wiring_manifest_json: string
+  repo.allowed_imports: array
+  repo.allowed_imports.*: string
+  repo.required_facilities_missing: array
+  program.runtime: string
+  program.slug: string
+  program.name: string
+  program.design_path: string
+  program.design_confirmed: boolean
+  program.synthesis_complete: boolean
+  program.domain_synthesis_complete: boolean
+  program.target_dir: string
+  program.target_dir_confirmed: boolean
+  program.skip_dimensions: array
+  program.skip_dimensions.*: string
+  program.architecture_ready: boolean
+  artifact_plan.status: string
+  artifact_plan.artifacts: array
+  artifact_plan.artifacts.*: object
+  artifact_plan.approved: boolean
+  artifact_plan.write_authorized: boolean
+  artifacts.written: boolean
+  artifacts.generated_paths: array
+  curator_requests.requests: array
+  graduation.static_verification: string
+  graduation.static_verification_status_text: string
+  graduation.static_verification_recorded: boolean
+  graduation.static_evidence_id: string
+  graduation.smoke_verification: string
+  graduation.smoke_verification_status_text: string
+  graduation.smoke_verification_recorded: boolean
+  graduation.smoke_evidence_id: string
+  graduation.live_verification: string
+  graduation.live_verification_status_text: string
+  graduation.live_verification_recorded: boolean
+  graduation.live_provider_intent: boolean
+  graduation.ready_for_live: boolean
+  graduation.live_evidence_id: string
+  graduation.generated_live_drive: string
+  graduation.generated_live_drive_status_text: string
+  graduation.generated_live_drive_recorded: boolean
+  graduation.generated_live_drive_evidence_id: string
+  graduation.generated_live_drive_report: object
+  graduation.rebase_status: string
+  graduation.rebase_status_text: string
+  graduation.rebase_recorded: boolean
+  graduation.rebase_evidence_id: string
+  graduation.rebase_verification: string
+  graduation.rebase_verification_status_text: string
+  graduation.rebase_static_verification_recorded: boolean
+  graduation.rebase_static_evidence_id: string
+  graduation.composite_checks: object
+  debug.approve_artifact_plan_preconditions_checked: boolean
+  governance.round_counter: number
+
+reactions:
+  debug_approve_artifact_plan_preconditions:
+    event: AfterIngestion
+    watch:
+      - repo.write_authorized
+      - program.synthesis_complete
+      - artifact_plan.status
+      - artifact_plan.approved
+      - inputs.user_decision.decision
+    write_scope:
+      - debug.approve_artifact_plan_preconditions_checked
+  normalize_intake_json_fields:
+    event: AfterMutation
+    watch:
+      - intake.q3_recorded
+      - intake.q4_recorded
+      - intake.q5_recorded
+      - intake.documents_recorded
+      - intake.q6_recorded
+      - intake.skills_recorded
+    write_scope:
+      - intake.stages_json
+      - intake.transitions_json
+      - intake.delegation_json
+      - intake.documents_json
+      - intake.completion_json
+      - intake.skills_json
+  validate_reusable_delegation_payload_map:
+    event: AfterMutation
+    watch:
+      - intake.delegation_json
+    write_scope:
+      - intake.q5_recorded
+      - intake.delegation_validation_error
+      - intake.last_question_asked
+      - intake.last_question_text
+  summarize_design_confirmation:
+    event: AfterMutation
+    watch:
+      - intake.program_intake_finalized
+    write_scope:
+      - intake.design_confirmation_summary
+  normalize_static_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.static_verification_recorded
+    write_scope:
+      - graduation.static_verification
+      - graduation.static_verification_status_text
+  normalize_smoke_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.smoke_verification_recorded
+    write_scope:
+      - graduation.smoke_verification
+      - graduation.smoke_verification_status_text
+  normalize_live_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.live_verification_recorded
+    write_scope:
+      - graduation.live_verification
+      - graduation.live_verification_status_text
+  # RC-4 forbids watching the written path itself, so (like the other
+  # normalize_* reactions) this watches the recorded flag + the deterministic
+  # handler report. Scripted/live writers must set
+  # graduation.generated_live_drive_recorded to trigger normalization.
+  normalize_generated_live_drive_status:
+    event: AfterMutation
+    watch:
+      - graduation.generated_live_drive_recorded
+      - graduation.generated_live_drive_report
+    write_scope:
+      - graduation.generated_live_drive
+      - graduation.generated_live_drive_evidence_id
+      - graduation.generated_live_drive_status_text
+  normalize_rebase_status:
+    event: AfterMutation
+    watch:
+      - graduation.rebase_recorded
+    write_scope:
+      - graduation.rebase_status
+      - graduation.rebase_status_text
+  normalize_rebase_static_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.rebase_static_verification_recorded
+    write_scope:
+      - graduation.rebase_verification
+      - graduation.rebase_verification_status_text
 
 modes:
   intake_intelligence:
@@ -412,6 +598,11 @@ modes:
       - target: repo_targeting
         when: { kind: FieldTruthy, path: repo.curator_request_lodged }
 
+initial: intake_intelligence
+terminal: [ pr_graduation ]
+topology: CyclicTopology
+termination: BoundedSession
+
 proceeds_to:
   authorize_standalone_target: architecture_design
   authorize_existing_repo_target: architecture_design
@@ -427,330 +618,19 @@ proceeds_to:
   run_generated_live_drive_verification: rebase_verify
   run_rebase_static_verification: pr_graduation
 
-projection:
-  intake_intelligence:
-    include:
-      - inputs.user_text
-      - inputs.user_decision
-      - inputs.user_decision.decision
-      - inputs.user_decision.instruction
-      - inputs.user_decision.note_mode
-      - inputs.user_decision.timestamp
-      - intake.mandate
-      - intake.research_allowed
-      - intake.research_confirmed
-      - intake.user_requested_research
-      - intake.purpose
-      - intake.q1_recorded
-      - intake.entry_channel
-      - intake.q2_recorded
-      - intake.stages_json
-      - intake.q3_recorded
-      - intake.transitions_json
-      - intake.q4_recorded
-      - intake.delegation_json
-      - intake.q5_recorded
-      - intake.delegation_validation_error
-      - intake.documents_json
-      - intake.documents_recorded
-      - intake.completion_json
-      - intake.q6_recorded
-      - intake.skills_json
-      - intake.skills_recorded
-      - intake.program_intake_finalized
-      - intake.design_confirmation_summary
-      - program.slug
-      - program.name
-      - program.target_dir
-      - program.target_dir_confirmed
-      - program.design_path
-      - program.design_confirmed
-      - program.skip_dimensions
-      - notebook.entries
-      - notebook.pins
-    exclude: []
-  repo_targeting:
-    include:
-      [
-        program.slug,
-        program.name,
-        program.target_dir,
-        program.target_dir_confirmed,
-        repo.target_kind,
-        repo.wiring_manifest.status,
-        repo.wiring_manifest.path,
-        repo.wiring_manifest_json,
-        repo.allowed_imports,
-        repo.write_authorized,
-        repo.required_facilities_missing
-      ]
-    exclude: []
-  architecture_design:
-    include:
-      [
-        program.slug,
-        program.name,
-        program.target_dir,
-        program.runtime,
-        program.design_confirmed,
-        program.synthesis_complete,
-        intake.skills_json,
-        intake.skills_recorded
-      ]
-    exclude: []
-  scaffold_plan:
-    include:
-      [
-        program.slug,
-        program.name,
-        program.target_dir,
-        program.synthesis_complete,
-        inputs.user_decision,
-        inputs.user_decision.decision,
-        inputs.user_decision.instruction,
-        inputs.user_decision.note_mode,
-        inputs.user_decision.timestamp,
-        artifact_plan.status,
-        artifact_plan.artifacts,
-        artifact_plan.approved,
-        artifact_plan.write_authorized,
-        notebook.entries,
-        notebook.pins
-      ]
-    exclude: []
-  domain_synthesis:
-    include:
-      [
-        program.slug,
-        program.name,
-        program.target_dir,
-        repo.target_kind,
-        program.synthesis_complete,
-        program.domain_synthesis_complete,
-        artifact_plan.status,
-        artifact_plan.artifacts,
-        artifact_plan.write_authorized,
-        intake.skills_json,
-        intake.skills_recorded
-      ]
-    exclude: []
-  branch_write:
-    include:
-      [
-        program.slug,
-        program.name,
-        program.target_dir,
-        repo.target_kind,
-        program.synthesis_complete,
-        program.domain_synthesis_complete,
-        artifact_plan.status,
-        artifact_plan.artifacts,
-        artifact_plan.write_authorized,
-        artifacts.written,
-        artifacts.generated_paths
-      ]
-    exclude: []
-  static_verify:
-    include:
-      [
-        program.target_dir,
-        graduation.static_verification,
-        graduation.static_evidence_id,
-        graduation.composite_checks
-      ]
-    exclude: []
-  smoke_verify:
-    include:
-      [
-        program.target_dir,
-        graduation.static_verification,
-        graduation.smoke_verification,
-        graduation.smoke_evidence_id,
-        graduation.live_provider_intent,
-        graduation.ready_for_live
-      ]
-    exclude: []
-  live_verify:
-    include:
-      [
-        program.target_dir,
-        graduation.live_verification,
-        graduation.live_provider_intent,
-        graduation.live_evidence_id,
-        graduation.generated_live_drive,
-        graduation.generated_live_drive_evidence_id
-      ]
-    exclude: []
-  rebase_verify:
-    include:
-      [
-        program.target_dir,
-        graduation.rebase_status,
-        graduation.rebase_evidence_id,
-        graduation.rebase_verification,
-        graduation.rebase_static_evidence_id
-      ]
-    exclude: []
-  pr_graduation:
-    include: [ program.target_dir, graduation.rebase_verification ]
-    exclude: []
-  curator_request:
-    include:
-      [
-        program.slug,
-        repo.curator_request_lodged,
-        repo.wiring_manifest_json,
-        repo.required_facilities_missing,
-        curator_requests.requests
-      ]
-    exclude: []
+channels:
+  seed: { direction: In, sync: Async }
+  user_text: { direction: In, sync: Async }
+  user_confirmation: { direction: In, sync: Async, structured_decision: true }
+  system_mode_entry: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Async }
+  artifact_plan_output: { direction: Out, sync: Sync }
+  composite_checks_output: { direction: Out, sync: Sync }
+  live_drive_output: { direction: Out, sync: Sync }
 
-prompts:
-  intake_intelligence: |
-    Output protocol (MUST follow):
-    - When you need to commit state (record a Q-answer, choose a path,
-      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
-      are listed in the system's tools array -- their schemas define the
-      exact argument names.
-    - DO NOT emit a JSON object in the message content describing the
-      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
-      use the spec's `from` + `_arg: <name>` syntax as a literal argument
-      key -- that mapping marker is internal spec syntax describing how the
-      engine maps your tool argument named `<name>` to a state path.
-    - Every round must emit exactly one NATIVE OpenAI tool_call from the
-      current mode vocabulary. Do not output free-form question text as
-      assistant message content; the engine parses uncalled content as an
-      invalid empty-name action.
-    - To ask Q1-Q6, call `ask_design_question` with `question_number` (1..6)
-      and `question_text`. The engine pauses the round; the user's typed
-      reply arrives next round via inputs.user_text.
-    - One tool_call per round.
-
-    This mode collects the program-design intake. You MUST drive the design
-    interview by calling the declared tools as tool calls when you are ready
-    to commit governed state -- NOT by emitting raw JSON mutations.
-
-    Per turn:
-    - Process `inputs.user_text` and either call `ask_design_question` for
-      the next Q1-Q6 design-interview question, OR fire the single terminal
-      tool call that commits the governed state you have enough information
-      to record.
-    Design interview enforcement (Q1-Q6):
-    - The engine enforces strict left-to-right ordering via per-question
-      preconditions. You CANNOT skip ahead.
-    - For each question:
-      1. Call `ask_design_question` with `question_number` and
-         `question_text`. The engine pauses.
-      2. The user's answer arrives via user_text on the next round.
-      3. Fire the corresponding `record_qN_<topic>` action with the user's
-         answer parsed into that action's named argument.
-      4. Move to the next question.
-    - After Q6 fires, if the requested program needs opt-in skills or the user
-      provided a skill catalog, first fire `record_skill_catalog`; otherwise
-      immediately fire `record_program_intake_finalize`.
-    - Do NOT attempt to batch multiple answers into one action. Do NOT attempt
-      to fire `record_program_intake_finalize` before all six qN_recorded flags
-      are true -- the engine will reject it.
-    - Do NOT fire `record_program_intake_finalize` before `record_skill_catalog`
-      when the user requested skills, skill activation, a skill catalog, or a
-      conversational hub that activates skill playbooks.
-    - When you are ready to commit state: Make exactly ONE terminal tool call
-      from the mode's vocabulary. The arguments to each tool are structured
-      per the tool's schema; emit them as the tool's argument object, not as a
-      `mutations` array. One tool call per round when committing.
-
-    Order of intake:
-    1. If `program.target_dir_confirmed` is false: call `record_program_target`
-       with `{slug, name, target_dir}` derived from the user's initial message
-       OR from the CLI-seeded domain (check `program.slug`, `program.name`,
-       `program.target_dir` if they are pre-set).
-    2. After target capture: call `choose_design_path` with `{choice: "default"}`
-       or `{choice: "design"}` based on what the user asked for.
-    3. If `choice = "default"`: call `apply_default_skeleton` immediately.
-    4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
-       recording each answer with its corresponding Q-action. If the program
-       needs opt-in skills or the user provided a skill catalog, call
-       `record_skill_catalog` after Q6 and before
-       `record_program_intake_finalize`; otherwise call
-       `record_program_intake_finalize` after Q6.
-       If and only if the user explicitly needs uploaded document intake,
-       call `record_documents_descriptor` after Q5 and before Q6 with a
-       JSON-string `documents_json` descriptor.
-    5. Finally call `confirm_design` to gate transition to repo_targeting.
-    6. If the user_confirmation decision is `reject` and the instruction names
-       Q1, Q2, Q3, Q4, Q5, or Q6, call the matching
-       `reject_design_and_revise_qN` action first. Then re-run that Q-action
-       and continue from there through Q6 before asking for confirmation again.
-
-    Do not pre-fill or batch multiple tool calls in one response.
-  repo_targeting: |
-    Output protocol (MUST follow):
-    - Emit exactly one NATIVE OpenAI tool_call from the repo_targeting vocabulary.
-    - Do not emit free-form JSON action objects or multiple tool calls.
-
-    Resolve repository write authorization before architecture_design.
-    - If `program.target_dir` is set and the target is a standalone/new repo
-      with no known `.pgas/wiring.yml`, call `authorize_standalone_target`.
-      This action selects `repo.target_kind = standalone_repo` and sets
-      `repo.write_authorized = true`.
-    - If `program.target_dir` is set and the target is an existing repo with
-      `.pgas/wiring.yml`, call `load_wiring_manifest` with
-      `{ "repo_root": "<program.target_dir>" }`. After it succeeds, call
-      `authorize_existing_repo_target`.
-      A valid manifest authorizes the existing-repo path even if its
-      registration strategy is `curator_request`; do not call
-      `create_curator_request` for a valid manifest.
-    - If `repo.target_kind` is already `standalone_repo`, call
-      `authorize_standalone_target`.
-    - If `repo.target_kind` is already `existing_repo`, call
-      `load_wiring_manifest` first unless `repo.wiring_manifest.status` is
-      already `valid`; then call `authorize_existing_repo_target`.
-    - Call `create_curator_request` only when wiring is missing, invalid, or
-      otherwise blocked. Do not treat the manifest's registration strategy as
-      a reason to create a curator request after validation succeeds.
-    - If the target kind or target directory is unclear, ask the user to
-      clarify whether this is a standalone repo or an existing-repo attach
-      before any write authorization.
-  architecture_design: "Run the deterministic program-spec synthesizer."
-  scaffold_plan: |
-    Output protocol (MUST follow):
-    - When you need to commit state (record a Q-answer, choose a path,
-      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
-      are listed in the system's tools array -- their schemas define the
-      exact argument names.
-    - DO NOT emit a JSON object in the message content describing the
-      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
-      use the spec's `from` + `_arg: <name>` syntax as a literal argument
-      key -- that mapping marker is internal spec syntax describing how the
-      engine maps your tool argument named `<name>` to a state path.
-    - Every round must emit exactly one NATIVE OpenAI tool_call from the
-      current mode vocabulary. Do not output free-form prose without a
-      tool_call; the engine parses uncalled content as an invalid action.
-    - One tool_call per round.
-
-    Create and approve the artifact plan before writes.
-    - On system_mode_entry with no artifact_plan.status, call plan_artifacts.
-    - On user_confirmation decision='approve' with artifact_plan.status='draft',
-      call approve_artifact_plan. Do NOT call plan_artifacts on approval.
-    - On user_confirmation decision='reject' with artifact_plan.status='draft',
-      call revise_artifact_plan. Do NOT call approve_artifact_plan on rejection.
-      The revision instruction in inputs.user_decision.instruction is mandatory
-      feedback to preserve in the regenerated artifact list.
-  domain_synthesis: "Run synthesize_domain_logic once after artifact-plan
-    approval. This fills accepted stage bodies in transit before branch_write."
-  branch_write: "Write only planned artifacts after domain_synthesis has accepted
-    all generated bodies."
-  static_verify: "Run static verification and record evidence."
-  smoke_verify: "Run deterministic generated-program smoke verification before
-    live-provider verification."
-  live_verify: "Run run_generated_live_drive_verification FIRST (drives the
-    generated program to its completion stage against the live provider), then
-    run_live_provider_verification (real provider round trip).
-    run_live_provider_verification is precondition-blocked until the generated
-    live drive has recorded 'passed'."
-  rebase_verify: "Rebase on latest target repo state and rerun static verification."
-  pr_graduation: "Open the PR after post-rebase verification."
-  curator_request: "Prepare a curator request for missing repo wiring."
+fallback:
+  channel: widget_output
+  payload: { ok: false }
 
 ingestion:
   seed:
@@ -789,6 +669,261 @@ ingestion:
     - inputs.user_decision.note_mode
     - inputs.user_decision.timestamp
   system_mode_entry: [ inputs.mode_entry ]
+
+control_plane:
+  version: 1
+  session:
+    program: "pgas-new"
+    binding: identity_channel_program
+    concurrency:
+      policy: single_active
+      on_busy: reject_with_status
+  free_text:
+    control: ask
+    bind:
+      query: "$text"
+  controls:
+    ask:
+      title: Ask
+      aliases: [ "/ask" ]
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: "pgas-new"
+        - op: trigger
+          session: "$session.id"
+          channel: user_text
+          payload: "$args.query"
+          mode: async
+    approve_artifact_plan:
+      title: Approve current gate
+      aliases: [ "/approve" ]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: approve
+          mode: async
+      presentation:
+        priority: primary
+    revise_artifact_plan:
+      title: Reject and revise artifact plan
+      aliases: [ "/revise-plan" ]
+      args:
+        instruction:
+          type: string
+          required: false
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    confirm_design:
+      title: Confirm design intake
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: approve
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q1:
+      title: Reject and revise Q1
+      aliases: [ "/reject-q1" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q2:
+      title: Reject and revise Q2
+      aliases: [ "/reject-q2" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q3:
+      title: Reject and revise Q3
+      aliases: [ "/reject-q3" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q4:
+      title: Reject and revise Q4
+      aliases: [ "/reject-q4" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q5:
+      title: Reject and revise Q5
+      aliases: [ "/reject-q5" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q6:
+      title: Reject and revise Q6
+      aliases: [ "/reject-q6" ]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    abort:
+      title: Abort run
+      aliases: [ "/abort", "/stop" ]
+      availability:
+        when: "active_session.running"
+      dispatch:
+        - op: abort_session
+          session: "$active_session.id"
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases: [ "/new", "/reset", "/restart" ]
+      dispatch:
+        - op: create_session
+          as: session
+          program: "pgas-new"
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases: [ "/history", "/recent" ]
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases: [ "/status" ]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: render_session
+          session: "$active_session.id"
+          view: status
+      presentation:
+        priority: contextual
+    resume:
+      title: Resume
+      aliases: [ "/resume" ]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: send_runtime_control
+          session: "$active_session.id"
+          control: resume
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases: [ "/help" ]
+      dispatch:
+        - op: render_help
+      presentation:
+        priority: secondary
 
 action_map:
   record_program_target:
@@ -1459,208 +1594,158 @@ action_map:
     channel: widget_output
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
 
-reactions:
-  debug_approve_artifact_plan_preconditions:
-    event: AfterIngestion
-    watch:
-      - repo.write_authorized
-      - program.synthesis_complete
-      - artifact_plan.status
-      - artifact_plan.approved
-      - inputs.user_decision.decision
-    write_scope:
-      - debug.approve_artifact_plan_preconditions_checked
-  normalize_intake_json_fields:
-    event: AfterMutation
-    watch:
-      - intake.q3_recorded
-      - intake.q4_recorded
-      - intake.q5_recorded
-      - intake.documents_recorded
-      - intake.q6_recorded
-      - intake.skills_recorded
-    write_scope:
-      - intake.stages_json
-      - intake.transitions_json
-      - intake.delegation_json
-      - intake.documents_json
-      - intake.completion_json
-      - intake.skills_json
-  validate_reusable_delegation_payload_map:
-    event: AfterMutation
-    watch:
-      - intake.delegation_json
-    write_scope:
-      - intake.q5_recorded
-      - intake.delegation_validation_error
-      - intake.last_question_asked
-      - intake.last_question_text
-  summarize_design_confirmation:
-    event: AfterMutation
-    watch:
-      - intake.program_intake_finalized
-    write_scope:
-      - intake.design_confirmation_summary
-  normalize_static_verification_status:
-    event: AfterMutation
-    watch:
-      - graduation.static_verification_recorded
-    write_scope:
-      - graduation.static_verification
-      - graduation.static_verification_status_text
-  normalize_smoke_verification_status:
-    event: AfterMutation
-    watch:
-      - graduation.smoke_verification_recorded
-    write_scope:
-      - graduation.smoke_verification
-      - graduation.smoke_verification_status_text
-  normalize_live_verification_status:
-    event: AfterMutation
-    watch:
-      - graduation.live_verification_recorded
-    write_scope:
-      - graduation.live_verification
-      - graduation.live_verification_status_text
-  # RC-4 forbids watching the written path itself, so (like the other
-  # normalize_* reactions) this watches the recorded flag + the deterministic
-  # handler report. Scripted/live writers must set
-  # graduation.generated_live_drive_recorded to trigger normalization.
-  normalize_generated_live_drive_status:
-    event: AfterMutation
-    watch:
-      - graduation.generated_live_drive_recorded
-      - graduation.generated_live_drive_report
-    write_scope:
-      - graduation.generated_live_drive
-      - graduation.generated_live_drive_evidence_id
-      - graduation.generated_live_drive_status_text
-  normalize_rebase_status:
-    event: AfterMutation
-    watch:
-      - graduation.rebase_recorded
-    write_scope:
-      - graduation.rebase_status
-      - graduation.rebase_status_text
-  normalize_rebase_static_verification_status:
-    event: AfterMutation
-    watch:
-      - graduation.rebase_static_verification_recorded
-    write_scope:
-      - graduation.rebase_verification
-      - graduation.rebase_verification_status_text
+preamble: |
+  Program: PGAS New. You create PGAS programs through governed modes,
+  explicit artifact planning, repo-curator wiring manifests, and static
+  then live verification. Use only the current mode vocabulary and keep
+  user decisions in the notebook-backed domain.
 
-schema:
-  inputs.user_text: string
-  inputs.user_decision: object
-  inputs.user_decision.decision: string
-  inputs.user_decision.instruction: string
-  inputs.user_decision.note_mode: string
-  inputs.user_decision.timestamp: string
-  inputs.mode_entry: object
-  inputs.mode_entry.mode: string
-  inputs.mode_entry.from_mode: string
-  inputs.mode_entry.entry_round: number
-  inputs.domain_context: object
-  inputs.domain_context.query: string
-  inputs.domain_context.value: any
-  intake.mandate: string
-  intake.last_question_asked: number
-  intake.last_question_text: string
-  intake.purpose: string
-  intake.q1_recorded: boolean
-  intake.entry_channel: string
-  intake.q2_recorded: boolean
-  intake.stages_json: string
-  intake.q3_recorded: boolean
-  intake.transitions_json: string
-  intake.q4_recorded: boolean
-  intake.delegation_json: string
-  intake.q5_recorded: boolean
-  intake.delegation_validation_error: string
-  intake.documents_json: string
-  intake.documents_recorded: boolean
-  intake.completion_json: string
-  intake.q6_recorded: boolean
-  intake.skills_json: string
-  intake.skills_recorded: boolean
-  intake.program_intake_finalized: boolean
-  intake.design_confirmation_summary: string
-  intake.research_confirmed: boolean
-  intake.user_requested_research: boolean
-  intake.research_allowed: boolean
-  intake.user_research_authorized: boolean
-  notebook.entries: array
-  notebook.pins: array
-  research.queries: array
-  research.completed: boolean
-  repo.target_kind: string
-  repo.blocked: boolean
-  repo.write_authorized: boolean
-  repo.curator_request_lodged: boolean
-  repo.wiring_manifest.status: string
-  repo.wiring_manifest.path: string
-  repo.wiring_manifest.repo_root: string
-  repo.wiring_manifest_json: string
-  repo.allowed_imports: array
-  repo.allowed_imports.*: string
-  repo.required_facilities_missing: array
-  program.runtime: string
-  program.slug: string
-  program.name: string
-  program.design_path: string
-  program.design_confirmed: boolean
-  program.synthesis_complete: boolean
-  program.domain_synthesis_complete: boolean
-  program.target_dir: string
-  program.target_dir_confirmed: boolean
-  program.skip_dimensions: array
-  program.skip_dimensions.*: string
-  program.architecture_ready: boolean
-  artifact_plan.status: string
-  artifact_plan.artifacts: array
-  artifact_plan.artifacts.*: object
-  artifact_plan.approved: boolean
-  artifact_plan.write_authorized: boolean
-  artifacts.written: boolean
-  artifacts.generated_paths: array
-  curator_requests.requests: array
-  graduation.static_verification: string
-  graduation.static_verification_status_text: string
-  graduation.static_verification_recorded: boolean
-  graduation.static_evidence_id: string
-  graduation.smoke_verification: string
-  graduation.smoke_verification_status_text: string
-  graduation.smoke_verification_recorded: boolean
-  graduation.smoke_evidence_id: string
-  graduation.live_verification: string
-  graduation.live_verification_status_text: string
-  graduation.live_verification_recorded: boolean
-  graduation.live_provider_intent: boolean
-  graduation.ready_for_live: boolean
-  graduation.live_evidence_id: string
-  graduation.generated_live_drive: string
-  graduation.generated_live_drive_status_text: string
-  graduation.generated_live_drive_recorded: boolean
-  graduation.generated_live_drive_evidence_id: string
-  graduation.generated_live_drive_report: object
-  graduation.rebase_status: string
-  graduation.rebase_status_text: string
-  graduation.rebase_recorded: boolean
-  graduation.rebase_evidence_id: string
-  graduation.rebase_verification: string
-  graduation.rebase_verification_status_text: string
-  graduation.rebase_static_verification_recorded: boolean
-  graduation.rebase_static_evidence_id: string
-  graduation.composite_checks: object
-  debug.approve_artifact_plan_preconditions_checked: boolean
-  governance.round_counter: number
+prompts:
+  intake_intelligence: |
+    Output protocol (MUST follow):
+    - When you need to commit state (record a Q-answer, choose a path,
+      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
+      are listed in the system's tools array -- their schemas define the
+      exact argument names.
+    - DO NOT emit a JSON object in the message content describing the
+      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
+      use the spec's `from` + `_arg: <name>` syntax as a literal argument
+      key -- that mapping marker is internal spec syntax describing how the
+      engine maps your tool argument named `<name>` to a state path.
+    - Every round must emit exactly one NATIVE OpenAI tool_call from the
+      current mode vocabulary. Do not output free-form question text as
+      assistant message content; the engine parses uncalled content as an
+      invalid empty-name action.
+    - To ask Q1-Q6, call `ask_design_question` with `question_number` (1..6)
+      and `question_text`. The engine pauses the round; the user's typed
+      reply arrives next round via inputs.user_text.
+    - One tool_call per round.
 
-repair_bound: 2
+    This mode collects the program-design intake. You MUST drive the design
+    interview by calling the declared tools as tool calls when you are ready
+    to commit governed state -- NOT by emitting raw JSON mutations.
 
-fallback:
-  channel: widget_output
-  payload: { ok: false }
+    Per turn:
+    - Process `inputs.user_text` and either call `ask_design_question` for
+      the next Q1-Q6 design-interview question, OR fire the single terminal
+      tool call that commits the governed state you have enough information
+      to record.
+    Design interview enforcement (Q1-Q6):
+    - The engine enforces strict left-to-right ordering via per-question
+      preconditions. You CANNOT skip ahead.
+    - For each question:
+      1. Call `ask_design_question` with `question_number` and
+         `question_text`. The engine pauses.
+      2. The user's answer arrives via user_text on the next round.
+      3. Fire the corresponding `record_qN_<topic>` action with the user's
+         answer parsed into that action's named argument.
+      4. Move to the next question.
+    - After Q6 fires, if the requested program needs opt-in skills or the user
+      provided a skill catalog, first fire `record_skill_catalog`; otherwise
+      immediately fire `record_program_intake_finalize`.
+    - Do NOT attempt to batch multiple answers into one action. Do NOT attempt
+      to fire `record_program_intake_finalize` before all six qN_recorded flags
+      are true -- the engine will reject it.
+    - Do NOT fire `record_program_intake_finalize` before `record_skill_catalog`
+      when the user requested skills, skill activation, a skill catalog, or a
+      conversational hub that activates skill playbooks.
+    - When you are ready to commit state: Make exactly ONE terminal tool call
+      from the mode's vocabulary. The arguments to each tool are structured
+      per the tool's schema; emit them as the tool's argument object, not as a
+      `mutations` array. One tool call per round when committing.
+
+    Order of intake:
+    1. If `program.target_dir_confirmed` is false: call `record_program_target`
+       with `{slug, name, target_dir}` derived from the user's initial message
+       OR from the CLI-seeded domain (check `program.slug`, `program.name`,
+       `program.target_dir` if they are pre-set).
+    2. After target capture: call `choose_design_path` with `{choice: "default"}`
+       or `{choice: "design"}` based on what the user asked for.
+    3. If `choice = "default"`: call `apply_default_skeleton` immediately.
+    4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
+       recording each answer with its corresponding Q-action. If the program
+       needs opt-in skills or the user provided a skill catalog, call
+       `record_skill_catalog` after Q6 and before
+       `record_program_intake_finalize`; otherwise call
+       `record_program_intake_finalize` after Q6.
+       If and only if the user explicitly needs uploaded document intake,
+       call `record_documents_descriptor` after Q5 and before Q6 with a
+       JSON-string `documents_json` descriptor.
+    5. Finally call `confirm_design` to gate transition to repo_targeting.
+    6. If the user_confirmation decision is `reject` and the instruction names
+       Q1, Q2, Q3, Q4, Q5, or Q6, call the matching
+       `reject_design_and_revise_qN` action first. Then re-run that Q-action
+       and continue from there through Q6 before asking for confirmation again.
+
+    Do not pre-fill or batch multiple tool calls in one response.
+  repo_targeting: |
+    Output protocol (MUST follow):
+    - Emit exactly one NATIVE OpenAI tool_call from the repo_targeting vocabulary.
+    - Do not emit free-form JSON action objects or multiple tool calls.
+
+    Resolve repository write authorization before architecture_design.
+    - If `program.target_dir` is set and the target is a standalone/new repo
+      with no known `.pgas/wiring.yml`, call `authorize_standalone_target`.
+      This action selects `repo.target_kind = standalone_repo` and sets
+      `repo.write_authorized = true`.
+    - If `program.target_dir` is set and the target is an existing repo with
+      `.pgas/wiring.yml`, call `load_wiring_manifest` with
+      `{ "repo_root": "<program.target_dir>" }`. After it succeeds, call
+      `authorize_existing_repo_target`.
+      A valid manifest authorizes the existing-repo path even if its
+      registration strategy is `curator_request`; do not call
+      `create_curator_request` for a valid manifest.
+    - If `repo.target_kind` is already `standalone_repo`, call
+      `authorize_standalone_target`.
+    - If `repo.target_kind` is already `existing_repo`, call
+      `load_wiring_manifest` first unless `repo.wiring_manifest.status` is
+      already `valid`; then call `authorize_existing_repo_target`.
+    - Call `create_curator_request` only when wiring is missing, invalid, or
+      otherwise blocked. Do not treat the manifest's registration strategy as
+      a reason to create a curator request after validation succeeds.
+    - If the target kind or target directory is unclear, ask the user to
+      clarify whether this is a standalone repo or an existing-repo attach
+      before any write authorization.
+  architecture_design: "Run the deterministic program-spec synthesizer."
+  scaffold_plan: |
+    Output protocol (MUST follow):
+    - When you need to commit state (record a Q-answer, choose a path,
+      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
+      are listed in the system's tools array -- their schemas define the
+      exact argument names.
+    - DO NOT emit a JSON object in the message content describing the
+      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
+      use the spec's `from` + `_arg: <name>` syntax as a literal argument
+      key -- that mapping marker is internal spec syntax describing how the
+      engine maps your tool argument named `<name>` to a state path.
+    - Every round must emit exactly one NATIVE OpenAI tool_call from the
+      current mode vocabulary. Do not output free-form prose without a
+      tool_call; the engine parses uncalled content as an invalid action.
+    - One tool_call per round.
+
+    Create and approve the artifact plan before writes.
+    - On system_mode_entry with no artifact_plan.status, call plan_artifacts.
+    - On user_confirmation decision='approve' with artifact_plan.status='draft',
+      call approve_artifact_plan. Do NOT call plan_artifacts on approval.
+    - On user_confirmation decision='reject' with artifact_plan.status='draft',
+      call revise_artifact_plan. Do NOT call approve_artifact_plan on rejection.
+      The revision instruction in inputs.user_decision.instruction is mandatory
+      feedback to preserve in the regenerated artifact list.
+  domain_synthesis: "Run synthesize_domain_logic once after artifact-plan
+    approval. This fills accepted stage bodies in transit before branch_write."
+  branch_write: "Write only planned artifacts after domain_synthesis has accepted
+    all generated bodies."
+  static_verify: "Run static verification and record evidence."
+  smoke_verify: "Run deterministic generated-program smoke verification before
+    live-provider verification."
+  live_verify: "Run run_generated_live_drive_verification FIRST (drives the
+    generated program to its completion stage against the live provider), then
+    run_live_provider_verification (real provider round trip).
+    run_live_provider_verification is precondition-blocked until the generated
+    live drive has recorded 'passed'."
+  rebase_verify: "Rebase on latest target repo state and rerun static verification."
+  pr_graduation: "Open the PR after post-rebase verification."
+  curator_request: "Prepare a curator request for missing repo wiring."
 
 guidance:
   intake_intelligence:
@@ -1815,257 +1900,182 @@ guidance:
       transit state, re-run synthesize_program_spec; same intake produces the
       same YAML."
 
-control_plane:
-  version: 1
-  session:
-    program: "pgas-new"
-    binding: identity_channel_program
-    concurrency:
-      policy: single_active
-      on_busy: reject_with_status
-  free_text:
-    control: ask
-    bind:
-      query: "$text"
-  controls:
-    ask:
-      title: Ask
-      aliases: [ "/ask" ]
-      args:
-        query:
-          type: string
-          required: true
-          capture: rest
-      dispatch:
-        - op: create_session
-          as: session
-          program: "pgas-new"
-        - op: trigger
-          session: "$session.id"
-          channel: user_text
-          payload: "$args.query"
-          mode: async
-    approve_artifact_plan:
-      title: Approve current gate
-      aliases: [ "/approve" ]
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: approve
-          mode: async
-      presentation:
-        priority: primary
-    revise_artifact_plan:
-      title: Reject and revise artifact plan
-      aliases: [ "/revise-plan" ]
-      args:
-        instruction:
-          type: string
-          required: false
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    confirm_design:
-      title: Confirm design intake
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: approve
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q1:
-      title: Reject and revise Q1
-      aliases: [ "/reject-q1" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q2:
-      title: Reject and revise Q2
-      aliases: [ "/reject-q2" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q3:
-      title: Reject and revise Q3
-      aliases: [ "/reject-q3" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q4:
-      title: Reject and revise Q4
-      aliases: [ "/reject-q4" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q5:
-      title: Reject and revise Q5
-      aliases: [ "/reject-q5" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    reject_design_and_revise_q6:
-      title: Reject and revise Q6
-      aliases: [ "/reject-q6" ]
-      args:
-        instruction:
-          type: string
-          required: true
-          capture: rest
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: trigger
-          session: "$active_session.id"
-          channel: user_confirmation
-          payload:
-            decision: reject
-            instruction: "$args.instruction"
-          mode: async
-      presentation:
-        priority: contextual
-    abort:
-      title: Abort run
-      aliases: [ "/abort", "/stop" ]
-      availability:
-        when: "active_session.running"
-      dispatch:
-        - op: abort_session
-          session: "$active_session.id"
-      presentation:
-        priority: destructive
-        confirm: true
-    new:
-      title: New session
-      aliases: [ "/new", "/reset", "/restart" ]
-      dispatch:
-        - op: create_session
-          as: session
-          program: "pgas-new"
-      presentation:
-        priority: secondary
-    history:
-      title: Recent sessions
-      aliases: [ "/history", "/recent" ]
-      dispatch:
-        - op: list_sessions
-          as: sessions
-      presentation:
-        priority: secondary
-    status:
-      title: Status
-      aliases: [ "/status" ]
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: render_session
-          session: "$active_session.id"
-          view: status
-      presentation:
-        priority: contextual
-    resume:
-      title: Resume
-      aliases: [ "/resume" ]
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: send_runtime_control
-          session: "$active_session.id"
-          control: resume
-      presentation:
-        priority: contextual
-    help:
-      title: Help
-      aliases: [ "/help" ]
-      dispatch:
-        - op: render_help
-      presentation:
-        priority: secondary
+repair_bound: 2
+
+projection:
+  intake_intelligence:
+    include:
+      - inputs.user_text
+      - inputs.user_decision
+      - inputs.user_decision.decision
+      - inputs.user_decision.instruction
+      - inputs.user_decision.note_mode
+      - inputs.user_decision.timestamp
+      - intake.mandate
+      - intake.research_allowed
+      - intake.research_confirmed
+      - intake.user_requested_research
+      - intake.purpose
+      - intake.q1_recorded
+      - intake.entry_channel
+      - intake.q2_recorded
+      - intake.stages_json
+      - intake.q3_recorded
+      - intake.transitions_json
+      - intake.q4_recorded
+      - intake.delegation_json
+      - intake.q5_recorded
+      - intake.delegation_validation_error
+      - intake.documents_json
+      - intake.documents_recorded
+      - intake.completion_json
+      - intake.q6_recorded
+      - intake.skills_json
+      - intake.skills_recorded
+      - intake.program_intake_finalized
+      - intake.design_confirmation_summary
+      - program.slug
+      - program.name
+      - program.target_dir
+      - program.target_dir_confirmed
+      - program.design_path
+      - program.design_confirmed
+      - program.skip_dimensions
+      - notebook.entries
+      - notebook.pins
+    exclude: []
+  repo_targeting:
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.target_dir_confirmed,
+        repo.target_kind,
+        repo.wiring_manifest.status,
+        repo.wiring_manifest.path,
+        repo.wiring_manifest_json,
+        repo.allowed_imports,
+        repo.write_authorized,
+        repo.required_facilities_missing
+      ]
+    exclude: []
+  architecture_design:
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.runtime,
+        program.design_confirmed,
+        program.synthesis_complete,
+        intake.skills_json,
+        intake.skills_recorded
+      ]
+    exclude: []
+  scaffold_plan:
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        program.synthesis_complete,
+        inputs.user_decision,
+        inputs.user_decision.decision,
+        inputs.user_decision.instruction,
+        inputs.user_decision.note_mode,
+        inputs.user_decision.timestamp,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.approved,
+        artifact_plan.write_authorized,
+        notebook.entries,
+        notebook.pins
+      ]
+    exclude: []
+  domain_synthesis:
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        repo.target_kind,
+        program.synthesis_complete,
+        program.domain_synthesis_complete,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.write_authorized,
+        intake.skills_json,
+        intake.skills_recorded
+      ]
+    exclude: []
+  branch_write:
+    include:
+      [
+        program.slug,
+        program.name,
+        program.target_dir,
+        repo.target_kind,
+        program.synthesis_complete,
+        program.domain_synthesis_complete,
+        artifact_plan.status,
+        artifact_plan.artifacts,
+        artifact_plan.write_authorized,
+        artifacts.written,
+        artifacts.generated_paths
+      ]
+    exclude: []
+  static_verify:
+    include:
+      [
+        program.target_dir,
+        graduation.static_verification,
+        graduation.static_evidence_id,
+        graduation.composite_checks
+      ]
+    exclude: []
+  smoke_verify:
+    include:
+      [
+        program.target_dir,
+        graduation.static_verification,
+        graduation.smoke_verification,
+        graduation.smoke_evidence_id,
+        graduation.live_provider_intent,
+        graduation.ready_for_live
+      ]
+    exclude: []
+  live_verify:
+    include:
+      [
+        program.target_dir,
+        graduation.live_verification,
+        graduation.live_provider_intent,
+        graduation.live_evidence_id,
+        graduation.generated_live_drive,
+        graduation.generated_live_drive_evidence_id
+      ]
+    exclude: []
+  rebase_verify:
+    include:
+      [
+        program.target_dir,
+        graduation.rebase_status,
+        graduation.rebase_evidence_id,
+        graduation.rebase_verification,
+        graduation.rebase_static_evidence_id
+      ]
+    exclude: []
+  pr_graduation:
+    include: [ program.target_dir, graduation.rebase_verification ]
+    exclude: []
+  curator_request:
+    include:
+      [
+        program.slug,
+        repo.curator_request_lodged,
+        repo.wiring_manifest_json,
+        repo.required_facilities_missing,
+        curator_requests.requests
+      ]
+    exclude: []
