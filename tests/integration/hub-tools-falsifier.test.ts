@@ -84,16 +84,29 @@ describe('hub ad-hoc tools falsifier', () => {
     ]));
   });
 
-  // QUARANTINED: blocked by an engine-side frozen-nested-mutation bug, NOT a foundry
-  // defect. The foundry emits a legitimate inputEnrichment (parent
-  // inputs.initial_user_text -> child request.topic); the engine's ad-hoc/worker
-  // enrichInput path (plugin.mjs enrichInput -> setNestedPath) mutates the
-  // author-provided, now-frozen `request` object in place ("Cannot assign to read
-  // only property 'topic'"), unlike the copy-on-write sibling setNestedPathValue used
-  // by the fan-out seed path. Kept as a regression guard: un-skip when the engine
-  // ships the setNestedPath copy-on-write fix. See
-  // docs/curator-requests/2026-08-23-delegation-input-enrichment-frozen-nested-mutation.md
-  // and simodelne/pgas#1044 (write-side sibling of the readMapPath copy-on-write task).
+  // STILL QUARANTINED on 5.7.0 — but for a DIFFERENT, engine-side reason. Re-verified
+  // 2026-08-24 against the published @simodelne/pgas-server@5.7.0:
+  //
+  //   * simodelne/pgas#1044 IS FIXED. The shipped bundle's setNestedPath
+  //     (plugin.mjs) now clones every intermediate segment
+  //     (`const next = isRecord2(existing) ? { ...existing } : {}`) instead of
+  //     descending into the frozen author-provided object, and the old
+  //     "Cannot assign to read only property 'topic'" error no longer occurs.
+  //     Triggers 1 and 2 now pass, including the web_search world-state assertion.
+  //
+  //   * A DISTINCT failure is now reachable at the same call site: the THIRD
+  //     trigger (the one that dispatches delegation) is rejected with
+  //     `PgasApiError: SESSION_REVISION_CONFLICT`. This is DETERMINISTIC, not a
+  //     race — inserting a fixed 750ms delay before every trigger does not change
+  //     it, and there is no client-visible round-settle signal to wait on (the
+  //     session envelope exposes only the lifecycle `status: "Running"`, no
+  //     per-round busy flag), so it cannot be synchronized away test-side.
+  //
+  // Still NOT a foundry defect and still not fixable consumer-side: the foundry
+  // emits a legitimate inputEnrichment (parent inputs.initial_user_text -> child
+  // request.topic) and the conflict arises inside the engine's delegation-dispatch
+  // revision/CAS path. Kept as a regression guard: un-skip once the engine resolves
+  // the delegation-trigger revision conflict.
   it.skip('routes registered web_search and hub-triggered delegation results back into hub-visible state', { timeout: 120_000 }, async () => {
     const artifact = artifactFromDomain(hubToolsDomain());
     const childArtifacts = artifact.child_artifacts ?? [];
