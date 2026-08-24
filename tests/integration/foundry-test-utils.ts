@@ -40,6 +40,16 @@ export interface RouteHarnessOptions {
   storage?: PgasServerConfig['storage'];
   /** Bearer token the client presents. Default `'dev-token'`. */
   token?: string;
+  /**
+   * Consumer-owned renderer for the `capability: render` sidecar (#992).
+   * REQUIRED at construction when a registered program declares that capability.
+   */
+  renderProvider?: PgasServerConfig['renderProvider'];
+  /**
+   * Inject a durable output ArtifactStore (e.g. an in-memory store for a
+   * hermetic render falsifier). Omitted ⇒ the engine-native default store.
+   */
+  artifactStore?: NonNullable<PgasServerConfig['adapters']>['artifactStore'];
 }
 
 /**
@@ -61,6 +71,8 @@ export async function startRouteHarness(options: RouteHarnessOptions): Promise<R
     },
     devMode: true,
     ...(options.storage ? { storage: options.storage } : {}),
+    ...(options.renderProvider ? { renderProvider: options.renderProvider } : {}),
+    ...(options.artifactStore ? { adapters: { artifactStore: options.artifactStore } } : {}),
     telemetry: { enabled: false },
     port: 0,
   });

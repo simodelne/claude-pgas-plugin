@@ -1,6 +1,12 @@
 # Render Grammar: Repeat-Node Over An Authored Collection
 
-Status: confirmed against `@simodelne/pgas-server@5.6.0`.
+Status: confirmed against `@simodelne/pgas-server@5.6.0`. Filed as
+[`simodelne/pgas#1045`](https://github.com/simodelne/pgas/issues/1045) (additive →
+v5.7.0 bucket). Confirmed this session as the SINGLE blocker to the #992 0-TS docx
+migration: the render *mechanism* is hermetically proven
+(`tests/integration/render-capability-falsifier.test.ts`), but the foundry's docx
+deliverable is the dynamic per-approved-item class, which the current grammar cannot
+express — so the emission migration stays blocked until this repeat-node ships.
 
 ## Observation
 
