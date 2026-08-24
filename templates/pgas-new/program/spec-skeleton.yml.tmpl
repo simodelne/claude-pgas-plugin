@@ -1,129 +1,20 @@
+# Root keys are grouped in the engine's CANONICAL BLUEPRINT BLOCK ORDER:
+#   identity -> domain -> lifecycle -> channels -> actions -> guidance
+#   -> delegation -> validation -> view -> render -> policy
+# pgas#946 makes `validationOptions.blueprint` STRICT by default in v6, and a
+# non-canonical single-file spec is rejected outright ([BLOCK_ORDER]). Key order
+# compiles to nothing, so regrouping is behaviour-preserving -- but do NOT
+# reintroduce a key outside its block. The same order is emitted for synthesized
+# programs by `canonicalBlueprintRootOrder` in
+# src/foundry-program/synthesizer/modular-spec.ts (BLUEPRINT_SPEC_BLOCKS is the
+# single source of truth).
 name: "{{SLUG}}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Program: {{NAME}}. This is the generic pgas-new skeleton for a synthesized
-  TypeScript/Node PGAS program. Keep state changes declared in action_map
-  mutations and only use the current mode vocabulary.
-
-initial: start
-terminal: [complete]
 
 features:
   - base
   - runtime_control
   - inline_world_query
-
-channels:
-  seed: { direction: In, sync: Async }
-  user_text: { direction: In, sync: Async }
-  system_mode_entry: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Async }
-
-modes:
-  start:
-    vocabulary: [begin_work, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [seed, user_text, system_mode_entry, widget_output]
-    transitions:
-      - target: working
-        when: { kind: FieldTruthy, path: work.started }
-  working:
-    vocabulary: [example_action, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, system_mode_entry, widget_output]
-    transitions:
-      - target: complete
-        when: { kind: FieldTruthy, path: work.example_ready }
-  complete:
-    vocabulary: [session_status, session_history, session_help]
-    channels: [system_mode_entry, widget_output]
-
-proceeds_to:
-  begin_work: working
-  example_action: complete
-
-projection:
-  start:
-    include:
-      - inputs.user_text
-      - notebook.*
-      - notebook_pins
-      - work.started
-    exclude: []
-  working:
-    include:
-      - inputs.user_text
-      - notebook.*
-      - notebook_pins
-      - work.example_ready
-      - work.example_result_json
-      - work.example_items_json
-    exclude: []
-  complete:
-    include:
-      - work.example_ready
-      - work.example_result_json
-      - work.example_items_json
-    exclude: []
-
-prompts:
-  start: "Capture the initial request and start the work."
-  working: "Perform the program's primary work."
-  complete: "Terminal mode after the work is complete."
-
-ingestion:
-  seed:
-    - inputs.domain_context
-    - inputs.domain_context.query
-  user_text:
-    - inputs.user_text
-  system_mode_entry:
-    - inputs.mode_entry
-
-action_map:
-  begin_work:
-    description: "Record that the program has started."
-    mutations:
-      - { op: MSet, path: work.started, value: true }
-    channel: widget_output
-  record_note:
-    description: "Save or overwrite a working-memory note. Pass key and text."
-    mutations:
-      - { op: MSet, path: notebook.*, value: "", from_arg: "*" }
-    channel: widget_output
-  pin_note:
-    description: "Pin a note so its full body stays visible in later rounds."
-    arg_descriptions: { key: "The note key to pin." }
-    arg_schema: { key: { type: string, required: true } }
-    mutations:
-      - { op: MAppend, path: notebook_pins, value: "", from_arg: key }
-    channel: widget_output
-  unpin_note:
-    description: "Unpin a previously pinned note."
-    arg_descriptions: { key: "The note key to unpin." }
-    arg_schema: { key: { type: string, required: true } }
-    mutations:
-      - { op: MRemove, path: notebook_pins, value: "", from_arg: key }
-    channel: widget_output
-  delete_note:
-    description: "Clear a working-memory note you no longer need. Pass key."
-    mutations:
-      - { op: MSet, path: notebook.*, value: "", from_arg: "*" }
-    channel: widget_output
-  example_action:
-    description: "Example synthesized action using JSON-string scalar state for structured values."
-    mutations:
-      - { op: MSet, path: work.example_ready, value: true }
-      - { op: MSet, path: work.example_result_json, value: '{"status":"ready","source":"skeleton"}' }
-      - { op: MSet, path: work.example_items_json, value: '["example"]' }
-    channel: widget_output
-  session_new: { description: "Control-plane new session command. Session controls are for explicit control intent only; do not use session_new for normal stage progression.", mutations: [], channel: widget_output }
-  session_abort_current: { description: "Control-plane abort current session command. Session controls are for explicit control intent only; do not use session_abort_current for normal stage progression.", mutations: [], channel: widget_output }
-  session_status: { description: "Control-plane status command. Session controls are for explicit control intent only; do not use session_status for normal stage progression.", mutations: [], channel: widget_output }
-  session_history: { description: "Control-plane history command. Session controls are for explicit control intent only; do not use session_history for normal stage progression.", mutations: [], channel: widget_output }
-  session_resume: { description: "Control-plane resume command. Session controls are for explicit control intent only; do not use session_resume for normal stage progression.", mutations: [], channel: widget_output }
-  session_help: { description: "Control-plane help command. Session controls are for explicit control intent only; do not use session_help for normal stage progression.", mutations: [], channel: widget_output }
+pure: true
 
 schema:
   inputs.user_text: string
@@ -148,28 +39,50 @@ schema:
   work.example_result_json: string
   work.example_items_json: string
 
-repair_bound: 2
+modes:
+  start:
+    vocabulary: [begin_work, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [seed, user_text, system_mode_entry, widget_output]
+    transitions:
+      - target: working
+        when: { kind: FieldTruthy, path: work.started }
+  working:
+    vocabulary: [example_action, record_note, pin_note, unpin_note, delete_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [user_text, system_mode_entry, widget_output]
+    transitions:
+      - target: complete
+        when: { kind: FieldTruthy, path: work.example_ready }
+  complete:
+    vocabulary: [session_status, session_history, session_help]
+    channels: [system_mode_entry, widget_output]
+
+initial: start
+terminal: [complete]
+topology: CyclicTopology
+termination: BoundedSession
+
+proceeds_to:
+  begin_work: working
+  example_action: complete
+
+channels:
+  seed: { direction: In, sync: Async }
+  user_text: { direction: In, sync: Async }
+  system_mode_entry: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Async }
 
 fallback:
   channel: widget_output
   payload: { ok: false }
 
-guidance:
-  start:
-    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
-    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
-    - "NOTEBOOK tools are durable working memory: use record_note for reusable facts, read_note before relying on older notes, pin_note/unpin_note for facts that must stay visible, and delete_note for stale notes."
-    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
-  working:
-    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
-    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
-    - "NOTEBOOK tools are durable working memory: use record_note for reusable facts, read_note before relying on older notes, pin_note/unpin_note for facts that must stay visible, and delete_note for stale notes."
-    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
-  complete:
-    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
-    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
-    - "Notebook write tools are not active in this mode; use any projected notebook state only as read-only context."
-    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
+ingestion:
+  seed:
+    - inputs.domain_context
+    - inputs.domain_context.query
+  user_text:
+    - inputs.user_text
+  system_mode_entry:
+    - inputs.mode_entry
 
 control_plane:
   version: 1
@@ -258,6 +171,103 @@ control_plane:
         - op: render_help
       presentation:
         priority: secondary
+
+action_map:
+  begin_work:
+    description: "Record that the program has started."
+    mutations:
+      - { op: MSet, path: work.started, value: true }
+    channel: widget_output
+  record_note:
+    description: "Save or overwrite a working-memory note. Pass key and text."
+    mutations:
+      - { op: MSet, path: notebook.*, value: "", from_arg: "*" }
+    channel: widget_output
+  pin_note:
+    description: "Pin a note so its full body stays visible in later rounds."
+    arg_descriptions: { key: "The note key to pin." }
+    arg_schema: { key: { type: string, required: true } }
+    mutations:
+      - { op: MAppend, path: notebook_pins, value: "", from_arg: key }
+    channel: widget_output
+  unpin_note:
+    description: "Unpin a previously pinned note."
+    arg_descriptions: { key: "The note key to unpin." }
+    arg_schema: { key: { type: string, required: true } }
+    mutations:
+      - { op: MRemove, path: notebook_pins, value: "", from_arg: key }
+    channel: widget_output
+  delete_note:
+    description: "Clear a working-memory note you no longer need. Pass key."
+    mutations:
+      - { op: MSet, path: notebook.*, value: "", from_arg: "*" }
+    channel: widget_output
+  example_action:
+    description: "Example synthesized action using JSON-string scalar state for structured values."
+    mutations:
+      - { op: MSet, path: work.example_ready, value: true }
+      - { op: MSet, path: work.example_result_json, value: '{"status":"ready","source":"skeleton"}' }
+      - { op: MSet, path: work.example_items_json, value: '["example"]' }
+    channel: widget_output
+  session_new: { description: "Control-plane new session command. Session controls are for explicit control intent only; do not use session_new for normal stage progression.", mutations: [], channel: widget_output }
+  session_abort_current: { description: "Control-plane abort current session command. Session controls are for explicit control intent only; do not use session_abort_current for normal stage progression.", mutations: [], channel: widget_output }
+  session_status: { description: "Control-plane status command. Session controls are for explicit control intent only; do not use session_status for normal stage progression.", mutations: [], channel: widget_output }
+  session_history: { description: "Control-plane history command. Session controls are for explicit control intent only; do not use session_history for normal stage progression.", mutations: [], channel: widget_output }
+  session_resume: { description: "Control-plane resume command. Session controls are for explicit control intent only; do not use session_resume for normal stage progression.", mutations: [], channel: widget_output }
+  session_help: { description: "Control-plane help command. Session controls are for explicit control intent only; do not use session_help for normal stage progression.", mutations: [], channel: widget_output }
+
+preamble: |
+  Program: {{NAME}}. This is the generic pgas-new skeleton for a synthesized
+  TypeScript/Node PGAS program. Keep state changes declared in action_map
+  mutations and only use the current mode vocabulary.
+
+prompts:
+  start: "Capture the initial request and start the work."
+  working: "Perform the program's primary work."
+  complete: "Terminal mode after the work is complete."
+
+guidance:
+  start:
+    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
+    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
+    - "NOTEBOOK tools are durable working memory: use record_note for reusable facts, read_note before relying on older notes, pin_note/unpin_note for facts that must stay visible, and delete_note for stale notes."
+    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
+  working:
+    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
+    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
+    - "NOTEBOOK tools are durable working memory: use record_note for reusable facts, read_note before relying on older notes, pin_note/unpin_note for facts that must stay visible, and delete_note for stale notes."
+    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
+  complete:
+    - "Engine toolkit available in this mode: current projected state is shown each round; inspect it before choosing a tool."
+    - "If the query tool is listed, use query({\"path\":\"...\"}) to read schema-declared allowed world paths that are not shown in current state; do not query paths outside the allowed policy."
+    - "Notebook write tools are not active in this mode; use any projected notebook state only as read-only context."
+    - "Session controls are for explicit control intent only: status, history, help, new, abort, or resume. Do not use session_* actions for normal stage progression; use the stage completion action instead."
+
+repair_bound: 2
+
+projection:
+  start:
+    include:
+      - inputs.user_text
+      - notebook.*
+      - notebook_pins
+      - work.started
+    exclude: []
+  working:
+    include:
+      - inputs.user_text
+      - notebook.*
+      - notebook_pins
+      - work.example_ready
+      - work.example_result_json
+      - work.example_items_json
+    exclude: []
+  complete:
+    include:
+      - work.example_ready
+      - work.example_result_json
+      - work.example_items_json
+    exclude: []
 
 policies:
   queryPolicy:

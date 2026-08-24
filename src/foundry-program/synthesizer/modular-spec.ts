@@ -3,14 +3,22 @@ import { PGAS_SERVER_VERSION } from '../../pgas-new/version.js';
 
 /**
  * The engine's canonical root-key block order (`validationOptions.blueprint`).
- * `modularSpecFilesFor` walks this list in order, so the emitted `import:`
- * manifest is canonical BY CONSTRUCTION — that is the only reason the modular
- * emission is strict-clean. pgas#946 makes `blueprint: 'strict'` the default in
- * v6, so this order is load-bearing: pinned by
+ * Both emissions walk this list in order, so both are canonical BY
+ * CONSTRUCTION: `modularSpecFilesFor` for the `import:` manifest, and
+ * `canonicalBlueprintRootOrder` for the monolithic single-file `spec_yaml`.
+ * pgas#946 makes `blueprint: 'strict'` the default in v6, so this order is
+ * load-bearing. It is pinned by
  * `tests/unit/synthesized-modular-spec.test.ts` ("loads the modular emission
  * under blueprint: strict"), which also pins the `render:` deliverable slot
- * (after `view`, before `policy`). Reordering or misfiling a key here regresses
- * the whole emission; both failure modes are covered by that test.
+ * (after `view`, before `policy`), and by
+ * `tests/unit/synthesized-monolithic-spec.test.ts`, which pins the literal
+ * emitted root-key order. Reordering or misfiling a key here regresses the
+ * whole emission; both failure modes are covered by those tests.
+ *
+ * NOTE for the modular path: the strict loader TOLERATES a non-canonical
+ * `import:` order (`parseImportBlock` re-walks the engine's own block list),
+ * so a strict load alone does NOT catch a misordered block list there — only
+ * the explicit order assertion does.
  */
 export const BLUEPRINT_SPEC_BLOCKS = [
   'identity',
@@ -206,33 +214,107 @@ const BLOCK_KEY_ORDER: Record<BlueprintSpecBlock, readonly string[]> = {
   ],
 };
 
-const MANIFEST_KEYS = new Set(['import', 'patterns']);
+/**
+ * Manifest keys are block-less: the engine files them under a synthetic
+ * `manifest` block whose index is -1, and rejects any manifest key that does
+ * NOT lead the spec (`MANIFEST_NOT_LEADING`). They are emitted first, in this
+ * order, by `canonicalBlueprintRootOrder`.
+ */
+const MANIFEST_KEY_ORDER = ['import', 'patterns'] as const;
+const MANIFEST_KEYS = new Set<string>(MANIFEST_KEY_ORDER);
 const KEY_TO_BLOCK = new Map<string, BlueprintSpecBlock>(
   BLUEPRINT_SPEC_BLOCKS.flatMap((block) =>
     BLOCK_KEY_ORDER[block].map((key) => [key, block] as const)),
 );
 
-export function modularSpecFilesFor(spec: Record<string, unknown>): SynthesizedSpecFile[] {
-  const manifestValues = manifestValuesFor(spec);
-  const blocks = new Map<BlueprintSpecBlock, Record<string, unknown>>();
+/** The canonical blueprint block a synthesized spec root key belongs to. */
+export function blueprintBlockForRootKey(key: string): BlueprintSpecBlock | undefined {
+  return KEY_TO_BLOCK.get(key);
+}
+
+interface BlueprintPartition {
+  manifest: Record<string, unknown>;
+  blocks: Map<BlueprintSpecBlock, Record<string, unknown>>;
+}
+
+/**
+ * Split a synthesized spec's ROOT keys into the manifest keys plus the
+ * canonical blueprint blocks, walking `BLUEPRINT_SPEC_BLOCKS` in order so the
+ * result is canonical BY CONSTRUCTION. Every root-key consumer (the modular
+ * `import:` emission and the monolithic `spec_yaml` emission) goes through
+ * this one partition, so the two emissions can never disagree about which
+ * block a key belongs to or what order the blocks come in.
+ *
+ * Fail-closed: an unmapped root key throws rather than being silently
+ * appended, because a key the foundry cannot place is a key the engine's
+ * blueprint gate may place differently.
+ */
+function partitionSpecByBlueprintBlock(spec: Record<string, unknown>): BlueprintPartition {
+  const manifest: Record<string, unknown> = {};
+  const grouped = new Map<BlueprintSpecBlock, Record<string, unknown>>();
 
   for (const [key, value] of Object.entries(spec)) {
     if (MANIFEST_KEYS.has(key)) {
+      manifest[key] = value;
       continue;
     }
     const block = KEY_TO_BLOCK.get(key);
     if (!block) {
       throw new Error(`cannot modularize synthesized spec: top-level key "${key}" is not mapped to a blueprint block`);
     }
-    const target = blocks.get(block) ?? {};
+    const target = grouped.get(block) ?? {};
     target[key] = value;
-    blocks.set(block, target);
+    grouped.set(block, target);
   }
+
+  const blocks = new Map<BlueprintSpecBlock, Record<string, unknown>>();
+  for (const block of BLUEPRINT_SPEC_BLOCKS) {
+    const content = sortedBlockContent(block, grouped.get(block));
+    if (content) {
+      blocks.set(block, content);
+    }
+  }
+  return { manifest, blocks };
+}
+
+/**
+ * Regroup a synthesized spec's ROOT keys into canonical blueprint block order
+ * (manifest keys first, then `BLUEPRINT_SPEC_BLOCKS` in order, then each
+ * block's own `BLOCK_KEY_ORDER`). Values are carried by reference and no key
+ * is added, dropped, or renamed — YAML key ORDER compiles to nothing, so the
+ * `Specification` the engine compiles is unchanged.
+ *
+ * This is what makes the MONOLITHIC single-file `spec_yaml` emission load
+ * under `blueprint: 'strict'` (pgas#946 makes strict the default in v6). The
+ * modular emission was already strict-clean because `modularSpecFilesFor`
+ * walks the same partition; this exports that property to every other place
+ * the foundry dumps a whole spec.
+ */
+export function canonicalBlueprintRootOrder(spec: Record<string, unknown>): Record<string, unknown> {
+  const { manifest, blocks } = partitionSpecByBlueprintBlock(spec);
+  const ordered: Record<string, unknown> = {};
+
+  for (const key of MANIFEST_KEY_ORDER) {
+    if (Object.prototype.hasOwnProperty.call(manifest, key)) {
+      ordered[key] = manifest[key];
+    }
+  }
+  for (const block of BLUEPRINT_SPEC_BLOCKS) {
+    for (const [key, value] of Object.entries(blocks.get(block) ?? {})) {
+      ordered[key] = value;
+    }
+  }
+  return ordered;
+}
+
+export function modularSpecFilesFor(spec: Record<string, unknown>): SynthesizedSpecFile[] {
+  const manifestValues = manifestValuesFor(spec);
+  const { blocks } = partitionSpecByBlueprintBlock(spec);
 
   const importMap: Record<string, string> = {};
   const blockFiles: SynthesizedSpecFile[] = [];
   for (const block of BLUEPRINT_SPEC_BLOCKS) {
-    const content = sortedBlockContent(block, blocks.get(block));
+    const content = blocks.get(block);
     if (!content) {
       continue;
     }

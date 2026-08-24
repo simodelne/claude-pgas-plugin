@@ -994,7 +994,7 @@ describe('confirmation_loop descriptor synthesis', () => {
 
   it('keeps no-interaction generated artifacts stable apart from synthesized spec guidance', () => {
     expect(hashArtifact(synthesizeProgramSpecFromDomain(baseDomain))).toEqual({
-      spec_yaml: '5b934b661a57065daa231737a95ce439a6d9e27422eeef6943e7e67d4d6f6296',
+      spec_yaml: '4a9627b41104b087c089b5137e0e3c8ed2e7b72367998fbd9c9af477ee54c96e',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '14c54893ab1536af91ff364a5d1c74b58980b75e0a4377a2df8a714972f4b176',
       handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
