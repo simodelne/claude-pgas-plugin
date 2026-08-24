@@ -1,8 +1,57 @@
 # Render Grammar: Repeat-Node Over An Authored Collection
 
-Status: confirmed against `@simodelne/pgas-server@5.6.0`. Filed as
+**Status: RESOLVED — SHIPPED in `@simodelne/pgas-server@5.7.1`** (2026-08-24).
+Filed as [`simodelne/pgas#1045`](https://github.com/simodelne/pgas/issues/1045);
+the engine shipped `RenderSectionList` exactly as asked.
+
+## Resolution (2026-08-24, verified against 5.7.1)
+
+The shipped grammar matches the ask:
+
+```ts
+interface RenderSectionList { kind: "section_list"; from: RenderValueRef; template: RenderSection }
+type RenderNode = RenderSection | RenderSectionList | RenderClause | RenderTable | RenderSchedule | RenderParagraph
+RenderArtifact.sections: readonly (RenderSection | RenderSectionList)[]
+```
+
+with the anti-fabrication semantics we asked for, all three verified hermetically in
+`tests/integration/render-section-list-falsifier.test.ts` on engine 5.7.1:
+
+- **S-1** — a program-owned approved collection (the engine's own
+  `derived_paths[items_where_field_eq]` bucket) drives a top-level `section_list`
+  through `buildProviderRenderRequest` → the generic consumer `RenderProvider` →
+  engine `ArtifactStore`, producing ONE docx section per approved item with that
+  item's authored heading + prose verbatim, and the non-approved item ABSENT. Zero
+  shape-mapping TS.
+- **K-1 (kill, observed)** — rebinding `from` to another world path makes the
+  approved prose vanish from `word/document.xml`. Sabotage run confirmed the
+  assertion kills.
+- **K-2 (kill, observed)** — an empty approved bucket renders ZERO sections and
+  fabricates no placeholder. Sabotage run (a fabricated extra section) confirmed the
+  assertion kills.
+
+Engine constraints found while adopting it (all respected by the falsifier):
+a `section_list` must be declared at the TOP level of `artifact.sections` (a nested
+one throws *"nested section_list is not representable in the generic provider
+request"*); `from` must resolve to an authored array of objects; refs inside
+`template` are item-relative.
+
+**The emission migration did NOT unblock with this.** A second, narrower gap remains:
+the foundry's export stage is an author-less `decision_only` mode, and there is no way
+for such a stage to dispatch the `capability: render` `{artifact_id}` selector. Filed
+separately as
+`docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md`
+(guard: `G-1` in the same falsifier). Until that ships the foundry keeps emitting
+`renderDocxExportStageBody` / `approvedContentSectionsFromDomain`, and
+`EngineCapability.render` stays `adopt_backlog`.
+
+---
+
+## Original request (2026-08-23, against 5.6.0)
+
+Status at filing: confirmed against `@simodelne/pgas-server@5.6.0`. Filed as
 [`simodelne/pgas#1045`](https://github.com/simodelne/pgas/issues/1045) (additive →
-v5.7.0 bucket). Confirmed this session as the SINGLE blocker to the #992 0-TS docx
+v5.7.0 bucket). Confirmed that session as the SINGLE blocker to the #992 0-TS docx
 migration: the render *mechanism* is hermetically proven
 (`tests/integration/render-capability-falsifier.test.ts`), but the foundry's docx
 deliverable is the dynamic per-approved-item class, which the current grammar cannot
@@ -89,6 +138,13 @@ foundry keeps emitting the `approvedContentSectionsFromDomain` shape-mapping sta
 body for this class, and `EngineCapability.render` (`#992`) stays **ADOPT-BACKLOG
 (PARTIAL)** — the PDF-report `RenderProfile` is emitted but the per-clause class
 cannot migrate to declarative `render:`.
+
+> **Post-resolution note (2026-08-24):** the primitive shipped, and the falsifier
+> above was built and is green — but the foundry still emits
+> `approvedContentSectionsFromDomain`, because the author-less DISPATCH gap
+> (`docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md`)
+> now blocks emission. `EngineCapability.render` therefore remains `adopt_backlog`
+> for a DIFFERENT, narrower reason than the one described above.
 
 Cross-linked from the `EngineCapability.render` awareness entry in
 `src/foundry-program/engine-primitive-registry.ts` and the

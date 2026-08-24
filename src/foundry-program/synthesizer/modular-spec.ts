@@ -1,6 +1,17 @@
 import { dump, load } from 'js-yaml';
 import { PGAS_SERVER_VERSION } from '../../pgas-new/version.js';
 
+/**
+ * The engine's canonical root-key block order (`validationOptions.blueprint`).
+ * `modularSpecFilesFor` walks this list in order, so the emitted `import:`
+ * manifest is canonical BY CONSTRUCTION — that is the only reason the modular
+ * emission is strict-clean. pgas#946 makes `blueprint: 'strict'` the default in
+ * v6, so this order is load-bearing: pinned by
+ * `tests/unit/synthesized-modular-spec.test.ts` ("loads the modular emission
+ * under blueprint: strict"), which also pins the `render:` deliverable slot
+ * (after `view`, before `policy`). Reordering or misfiling a key here regresses
+ * the whole emission; both failure modes are covered by that test.
+ */
 export const BLUEPRINT_SPEC_BLOCKS = [
   'identity',
   'domain',
