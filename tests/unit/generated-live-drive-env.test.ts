@@ -79,6 +79,68 @@ describe('generated live-drive child environment', () => {
     expect(capturedEnv?.PGAS_OPENAI_API_KEY).toBe('caller-option-key');
   });
 
+  // pgas v6 removes the engine's model-prefix thinking inference, so a live drive that only
+  // sets PGAS_OPENAI_DISABLE_THINKING would silently start emitting thinking tokens again.
+  // The drive child must carry the canonical variable, and must not override an explicit one.
+  it('defaults the canonical PGAS_DISABLE_THINKING to 1 in the drive child, honouring an explicit value', async () => {
+    const capturedEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
+    spawnMock.mockImplementation((_command: string, _args: string[], options: SpawnOptions) => {
+      capturedEnvs.push(options.env);
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      const reportPath = options.env?.PGAS_LIVE_DRIVE_REPORT;
+      queueMicrotask(() => {
+        if (reportPath) {
+          writeFileSync(reportPath, JSON.stringify({
+            final_mode: 'complete',
+            terminal: true,
+            rounds: 0,
+            triggers: 0,
+            actions: [],
+            terminal_actions: [],
+            world: {},
+            author_driver: 'default',
+          }));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const drive = async (): Promise<void> => {
+      const targetDir = mkdtempSync(join(tmpdir(), 'pgas-live-thinking-'));
+      tempDirs.push(targetDir);
+      await driveGeneratedProgramLive({
+        targetDir,
+        slug: 'proposal-ops',
+        providerBaseUrl: 'http://127.0.0.1:1/v1',
+        model: 'unit-model',
+        initialText: 'start',
+        driveTimeoutMs: 60_000,
+      });
+    };
+
+    const originalCanonical = process.env.PGAS_DISABLE_THINKING;
+    try {
+      delete process.env.PGAS_DISABLE_THINKING;
+      await drive();
+      expect(capturedEnvs[0]?.PGAS_DISABLE_THINKING).toBe('1');
+
+      process.env.PGAS_DISABLE_THINKING = '0';
+      await drive();
+      expect(capturedEnvs[1]?.PGAS_DISABLE_THINKING).toBe('0');
+    } finally {
+      if (originalCanonical === undefined) delete process.env.PGAS_DISABLE_THINKING;
+      else process.env.PGAS_DISABLE_THINKING = originalCanonical;
+    }
+  });
+
   it('renders existing-repo attachments to import registration from programs/<slug>', async () => {
     let runnerSource = '';
     spawnMock.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {

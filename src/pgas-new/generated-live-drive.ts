@@ -1533,6 +1533,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         PGAS_OPENAI_API_KEY: options.env?.PGAS_OPENAI_API_KEY ?? process.env.PGAS_OPENAI_API_KEY ?? 'local',
         PGAS_OPENAI_TOOL_CHOICE: process.env.PGAS_OPENAI_TOOL_CHOICE ?? 'required',
         PGAS_OPENAI_DISABLE_THINKING: process.env.PGAS_OPENAI_DISABLE_THINKING ?? '1',
+        PGAS_DISABLE_THINKING: process.env.PGAS_DISABLE_THINKING ?? '1',
         PGAS_OPENAI_TEMPERATURE: process.env.PGAS_OPENAI_TEMPERATURE ?? '0.2',
         PGAS_DB: join(workDir, 'live-drive.db'),
         PGAS_SESSION_LOG_DIR: join(workDir, 'session-logs'),

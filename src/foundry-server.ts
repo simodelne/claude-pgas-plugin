@@ -11,6 +11,7 @@ import {
   type UnifiedAuthorDriverOptions,
 } from '@simodelne/pgas-server/plugin.js';
 import { createPgasNewFoundryProgramEntry } from './foundry-program/registration.js';
+import { shouldDisableThinking } from './pgas-new/disable-thinking.js';
 
 export interface FoundryServerOptions {
   port?: number;
@@ -242,7 +243,7 @@ function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {
   };
 }
 
-function createOpenAiUnifiedPayload(
+export function createOpenAiUnifiedPayload(
   messages: ConversationMessage[],
   tools: OpenAIToolDefinition[],
 ): Record<string, unknown> {
@@ -252,7 +253,7 @@ function createOpenAiUnifiedPayload(
   const temperature = optionalNumber('PGAS_OPENAI_TEMPERATURE') ?? (qwenModel ? 0.7 : 0.3);
   const payload: Record<string, unknown> = {
     model,
-    ...(qwenModel && process.env.PGAS_OPENAI_DISABLE_THINKING !== '0' ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+    ...(shouldDisableThinking(model) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
     messages,
     temperature,
     max_tokens: maxTokens,

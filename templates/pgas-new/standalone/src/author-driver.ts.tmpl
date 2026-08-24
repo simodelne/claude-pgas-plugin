@@ -31,9 +31,15 @@ const VALID_TOOL_CHOICES = new Set(['auto', 'required', 'none']);
  *
  * Optional env: `PGAS_OPENAI_TOOL_CHOICE` (auto|required|none, default auto),
  * `PGAS_OPENAI_MAX_TOKENS`, `PGAS_OPENAI_TEMPERATURE`, `PGAS_OPENAI_TOP_P`,
- * `PGAS_OPENAI_TOP_K`, `PGAS_OPENAI_MIN_P`, `PGAS_OPENAI_PRESENCE_PENALTY`,
- * `PGAS_OPENAI_DISABLE_THINKING` (Qwen-family default on; set 0 to keep
- * thinking enabled).
+ * `PGAS_OPENAI_TOP_K`, `PGAS_OPENAI_MIN_P`, `PGAS_OPENAI_PRESENCE_PENALTY`.
+ *
+ * Thinking control (see `shouldDisableThinking` below):
+ * - `PGAS_DISABLE_THINKING` — canonical, and what the pgas engine itself reads.
+ *   `1` disables thinking for every model family, `0` keeps it enabled. Set this
+ *   one; the engine no longer infers thinking-off from the model name.
+ * - `PGAS_OPENAI_DISABLE_THINKING` — consumer-owned fallback, consulted only when
+ *   the canonical variable is unset (Qwen-family default on; set `0` to keep
+ *   thinking enabled).
  */
 export function resolveAuthorDrivers(): PgasServerConfig['drivers'] {
   if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() !== 'unified') {
@@ -89,7 +95,7 @@ function createOpenAiUnifiedPayload(
   const qwenModel = model.toLowerCase().startsWith('qwen');
   const payload: Record<string, unknown> = {
     model,
-    ...(qwenModel && process.env.PGAS_OPENAI_DISABLE_THINKING !== '0' ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+    ...(shouldDisableThinking(model) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
     messages,
     temperature: optionalNumber('PGAS_OPENAI_TEMPERATURE') ?? (qwenModel ? 0.7 : 0.3),
     max_tokens: optionalNumber('PGAS_OPENAI_MAX_TOKENS') ?? 4096,
@@ -110,6 +116,36 @@ function createOpenAiUnifiedPayload(
 
   return payload;
 }
+
+// Copied VERBATIM from the foundry's `src/pgas-new/disable-thinking.ts`; a generated
+// program cannot import foundry `src/`, so the policy lives in both places and the
+// foundry test suite fails if the two copies drift.
+// --- BEGIN pgas thinking policy (parity-locked) ---
+/**
+ * Canonical thinking-disable policy.
+ *
+ * pgas v6 canonicalizes the engine's disable policy on `PGAS_DISABLE_THINKING=1`
+ * and removes the engine's Qwen/GLM model-prefix inference. `PGAS_OPENAI_DISABLE_THINKING`
+ * remains supported as the consumer-owned fallback, but the engine no longer treats
+ * it as sufficient, so the canonical variable wins whenever it is explicitly set:
+ *
+ *   PGAS_DISABLE_THINKING=1  -> disable thinking, whatever the model family
+ *   PGAS_DISABLE_THINKING=0  -> keep thinking enabled, even when PGAS_OPENAI_DISABLE_THINKING is set
+ *   unset / any other value  -> qwen-family fallback (PGAS_OPENAI_DISABLE_THINKING !== '0')
+ *
+ * Getting this wrong fails SILENTLY: nothing errors, the model simply resumes
+ * emitting thinking tokens into the author round.
+ */
+export function shouldDisableThinking(
+  model: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const canonical = env.PGAS_DISABLE_THINKING;
+  if (canonical === '1') return true;
+  if (canonical === '0') return false;
+  return model.toLowerCase().startsWith('qwen') && env.PGAS_OPENAI_DISABLE_THINKING !== '0';
+}
+// --- END pgas thinking policy ---
 
 function resolveToolChoiceFromEnv(): 'auto' | 'required' | 'none' {
   const fromEnv = process.env.PGAS_OPENAI_TOOL_CHOICE?.trim().toLowerCase();
