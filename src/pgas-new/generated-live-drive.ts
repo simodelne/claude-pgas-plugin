@@ -17,6 +17,7 @@
  * (hit count + request/response excerpts) — a canned-fallback pass cannot
  * masquerade as live.
  */
+import { load } from 'js-yaml';
 import { isRecord } from '../util/guards.js';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -131,6 +132,7 @@ export interface GeneratedLiveDriveOptions {
   uploadScript?: GeneratedLiveDriveUploadScript;
   exportScript?: GeneratedLiveDriveExportScript;
   extractionScript?: GeneratedLiveDriveExtractionScript;
+  keyedCollectionScript?: GeneratedLiveDriveKeyedCollectionScript;
 }
 
 export interface DriveTerminalAction {
@@ -170,6 +172,9 @@ export interface GeneratedLiveDriveResult {
   extraction: GeneratedLiveDriveExtractionReport | null;
   extraction_verdict: GeneratedLiveDriveExtractionVerdict;
   extraction_engaged: boolean;
+  keyed_collection: GeneratedLiveDriveKeyedCollectionReport | null;
+  keyed_collection_verdict: GeneratedLiveDriveKeyedCollectionVerdict;
+  keyed_collection_engaged: boolean;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
@@ -444,6 +449,98 @@ export interface GeneratedLiveDriveExtractionScript {
   sentinel: string;
 }
 
+/**
+ * pgas#993 keyed-collection element-append drive script. Every field is derived
+ * from the SYNTHESIZED spec (`keyed_collections` + the emitted
+ * `append_<stage>_<field>` action), never hand-chosen, so the runner harvests
+ * evidence for exactly the collection the foundry declared.
+ */
+export interface GeneratedLiveDriveKeyedCollectionScript {
+  /** the declared keyed collection path, e.g. `extract_records.result.records`. */
+  collectionPath: string;
+  /** the declared `keyed_collections[].key`, e.g. `record_id`. */
+  key: string;
+  /** the record_array field name; also the append action's single arg key. */
+  field: string;
+  /** the repeatable element-append action, e.g. `append_extract_records_records`. */
+  appendAction: string;
+  /** the one-shot stage completion action that must NOT carry the batch arg. */
+  terminalAction: string;
+  /** the stage hosting the keyed collection. */
+  stage: string;
+}
+
+export type GeneratedLiveDriveKeyedArgKind = 'object' | 'array' | 'missing' | 'other';
+
+/** One observed call of the repeatable element-append action. */
+export interface GeneratedLiveDriveKeyedAppendCall {
+  /** 1-based round index in which the append was the round's terminal action. */
+  round: number;
+  /** the shape of the record_array arg on THIS call — `object` is the only keyed-legal one. */
+  arg_kind: GeneratedLiveDriveKeyedArgKind;
+  /** the declared key's value on the appended element, when present. */
+  key: string | null;
+  /** the appended element itself, for the replaced-not-duplicated comparison. */
+  record: Record<string, unknown> | null;
+}
+
+/** One observed call of the one-shot stage completion action. */
+export interface GeneratedLiveDriveKeyedTerminalCall {
+  round: number;
+  /** `absent` is the only correct value: the keyed field is off the terminal action. */
+  arg_kind: GeneratedLiveDriveKeyedArgKind | 'absent';
+}
+
+export interface GeneratedLiveDriveKeyedCollectionReport {
+  collection_path: string;
+  key_field: string;
+  append_action: string;
+  terminal_action: string;
+  field: string;
+  append_calls: GeneratedLiveDriveKeyedAppendCall[];
+  terminal_calls: GeneratedLiveDriveKeyedTerminalCall[];
+  collection: Array<Record<string, unknown>>;
+  collection_size: number;
+}
+
+export interface GeneratedLiveDriveKeyedCollectionVerdict {
+  keyed_collection_engaged: boolean;
+  /** the element-append fired MORE THAN ONCE — one record per call, not a batch. */
+  append_action_repeated: boolean;
+  /** every append carried a single ELEMENT (object), never a wrapping array. */
+  one_record_per_call: boolean;
+  /** every appended element carried a value for the declared key. */
+  every_append_keyed: boolean;
+  /** the SAME key was genuinely re-appended, so upsert-by-key was exercised at all. */
+  duplicate_key_reappended: boolean;
+  /** landed elements == distinct appended keys: upserted, not duplicated, not dropped. */
+  upsert_deduped: boolean;
+  /** the re-appended key's element carries the LAST payload (replaced, not first-write-wins). */
+  upsert_replaced_latest: boolean;
+  collection_non_empty: boolean;
+  every_element_keyed: boolean;
+  /** the one-shot completion action never carried the record_array as a batch arg. */
+  terminal_batch_arg_absent: boolean;
+  parent_complete: boolean;
+  provider_hits_ok: boolean;
+  no_stub_markers: boolean;
+  append_call_count: number;
+  distinct_key_count: number;
+  collection_size: number;
+  reason: string | null;
+  notes: string[];
+}
+
+export interface GeneratedLiveDriveKeyedCollectionAssessmentInput {
+  report: GeneratedLiveDriveKeyedCollectionReport | null;
+  finalMode: string | null;
+  expectedFinalMode?: string;
+  providerHits: number;
+  stubFindings?: readonly string[];
+  /** the keyed host stage; its items_json is legitimately empty (records ride the collection). */
+  hostStage?: string;
+}
+
 export interface GeneratedLiveDriveDelegationReport {
   child_program: string;
   result_status: string | null;
@@ -630,6 +727,84 @@ export function buildUploadLiveDriveFixtureText(sentinel: string): string {
     'This ASCII source document exists only for the upload live-drive gate.',
     'The generated program must read these exact bytes through request.documents content_text.',
   ].join('\n');
+}
+
+/**
+ * pgas#993: derive the keyed-collection live-drive script from the SYNTHESIZED
+ * spec, so the drive can only ever probe what the foundry actually emitted.
+ *
+ * Every branch throws rather than degrading: if the reasoning contract produced
+ * no keyed `record_array`, or the element-append action is missing / not
+ * element-typed, or the record_array leaked back onto the one-shot terminal
+ * action, the drive must NOT run — a green drive against a non-keyed spec would
+ * prove nothing.
+ */
+export function deriveKeyedCollectionScript(specYaml: string): GeneratedLiveDriveKeyedCollectionScript {
+  const parsed = load(specYaml);
+  if (!isRecord(parsed)) {
+    throw new Error('keyed live drive: synthesized spec did not parse to a mapping');
+  }
+  const declarations = Array.isArray(parsed.keyed_collections) ? parsed.keyed_collections : [];
+  const declaration = declarations.find(
+    (entry): entry is { collection: string; key: string } =>
+      isRecord(entry) && typeof entry.collection === 'string' && typeof entry.key === 'string',
+  );
+  if (!declaration) {
+    throw new Error(
+      'keyed live drive: the synthesized spec declares no keyed_collections — the reasoning contract produced no keyed record_array field, so there is no keyed upsert to drive',
+    );
+  }
+  const match = /^([A-Za-z0-9_]+)\.result\.([A-Za-z0-9_]+)$/u.exec(declaration.collection);
+  if (!match) {
+    throw new Error(`keyed live drive: keyed collection ${declaration.collection} is not a <stage>.result.<field> reasoning path`);
+  }
+  const [, stage, field] = match as unknown as [string, string, string];
+  const actionMap = isRecord(parsed.action_map) ? parsed.action_map : {};
+
+  const appendAction = `append_${stage}_${field}`;
+  const append = actionMap[appendAction];
+  if (!isRecord(append)) {
+    throw new Error(`keyed live drive: the synthesized spec has no repeatable element-append action ${appendAction}`);
+  }
+  const appendArgSchema = isRecord(append.arg_schema) ? append.arg_schema : {};
+  const appendArg = appendArgSchema[field];
+  if (!isRecord(appendArg) || appendArg.type !== 'object') {
+    throw new Error(`keyed live drive: ${appendAction}.arg_schema.${field} must be the ELEMENT (object) type, got ${JSON.stringify(appendArg)}`);
+  }
+  const appendMutations = Array.isArray(append.mutations) ? append.mutations : [];
+  const hasElementAppend = appendMutations.some((mutation) =>
+    isRecord(mutation) &&
+    mutation.op === 'MAppend' &&
+    mutation.path === declaration.collection &&
+    mutation.from_arg === field);
+  if (!hasElementAppend) {
+    throw new Error(`keyed live drive: ${appendAction} does not MAppend ${declaration.collection} from arg ${field}`);
+  }
+
+  const terminalAction = Object.keys(actionMap).find((name) => {
+    const entry = actionMap[name];
+    if (!isRecord(entry) || name === appendAction) return false;
+    const mutations = Array.isArray(entry.mutations) ? entry.mutations : [];
+    return mutations.some((mutation) =>
+      isRecord(mutation) && mutation.op === 'MSet' && mutation.path === `${stage}.done` && mutation.value === true);
+  });
+  if (!terminalAction) {
+    throw new Error(`keyed live drive: no one-shot completion action sets ${stage}.done in the synthesized spec`);
+  }
+  const terminalEntry = actionMap[terminalAction] as Record<string, unknown>;
+  const terminalArgSchema = isRecord(terminalEntry.arg_schema) ? terminalEntry.arg_schema : {};
+  if (Object.prototype.hasOwnProperty.call(terminalArgSchema, field)) {
+    throw new Error(`keyed live drive: ${terminalAction} still declares the keyed record_array arg ${field} — the #825 batch shape leaked back onto the terminal action`);
+  }
+
+  return {
+    collectionPath: declaration.collection,
+    key: declaration.key,
+    field,
+    appendAction,
+    terminalAction,
+    stage,
+  };
 }
 
 export function deriveConfirmationScript(
@@ -1068,6 +1243,257 @@ export function assessExportEngagement(
   };
 }
 
+/**
+ * pgas#993 keyed-collection engagement verdict — FAIL-CLOSED.
+ *
+ * "The program completed" is deliberately NOT sufficient. A keyed/merge MAppend
+ * that silently no-ops still lets the author advance, so this verdict proves the
+ * keyed semantics themselves fired:
+ *
+ *   1. the element-append action fired MORE THAN ONCE, each call carrying a
+ *      single ELEMENT (object) — not one batch array;
+ *   2. a key was genuinely RE-APPENDED (otherwise upsert-by-key was never
+ *      exercised and the run proves nothing — reported as UNTESTED, not passed);
+ *   3. the re-appended key collapsed to ONE element carrying the LAST payload —
+ *      replaced, not duplicated (K-2 in the engine falsifier) and not
+ *      first-write-wins;
+ *   4. the one-shot completion action carried NO record_array batch arg;
+ *   5. the collection is non-empty and every element carries the declared key.
+ *
+ * The engine ground truth for (1)-(3) is pinned hermetically in
+ * tests/integration/keyed-collection-engine-falsifier.test.ts.
+ */
+export function assessKeyedCollectionEngagement(
+  input: GeneratedLiveDriveKeyedCollectionAssessmentInput,
+): GeneratedLiveDriveKeyedCollectionVerdict {
+  const notes: string[] = [];
+  const expectedFinalMode = input.expectedFinalMode ?? DEFAULT_FINAL_STAGE;
+  const report = input.report;
+  if (!report) {
+    notes.push('keyed_collection_report_absent');
+  }
+
+  const appendCalls = report?.append_calls ?? [];
+  const appendCallCount = appendCalls.length;
+
+  // (1) repeatable element-append, one record per call.
+  const appendActionRepeated = appendCallCount >= 2;
+  if (!appendActionRepeated) {
+    notes.push(`append_action_not_repeated:${String(appendCallCount)}`);
+  }
+  let oneRecordPerCall = appendCallCount > 0;
+  for (const call of appendCalls) {
+    if (call.arg_kind !== 'object') {
+      oneRecordPerCall = false;
+      notes.push(`batch_arg_on_append:round=${String(call.round)}:kind=${call.arg_kind}`);
+    }
+  }
+
+  let everyAppendKeyed = appendCallCount > 0;
+  for (const call of appendCalls) {
+    if (typeof call.key !== 'string' || call.key.length === 0) {
+      everyAppendKeyed = false;
+      notes.push(`append_missing_key:round=${String(call.round)}`);
+    }
+  }
+
+  // (2) was upsert-by-key exercised at all?
+  const keyedCalls = appendCalls.filter(
+    (call): call is GeneratedLiveDriveKeyedAppendCall & { key: string } =>
+      typeof call.key === 'string' && call.key.length > 0,
+  );
+  const callsByKey = new Map<string, Array<GeneratedLiveDriveKeyedAppendCall & { key: string }>>();
+  for (const call of keyedCalls) {
+    const bucket = callsByKey.get(call.key);
+    if (bucket) {
+      bucket.push(call);
+    } else {
+      callsByKey.set(call.key, [call]);
+    }
+  }
+  const distinctKeyCount = callsByKey.size;
+  const repeatedKeys = [...callsByKey.entries()].filter(([, calls]) => calls.length >= 2);
+  const duplicateKeyReappended = repeatedKeys.length >= 1;
+  if (!duplicateKeyReappended) {
+    notes.push(`dedupe_property_untested:calls=${String(appendCallCount)}:distinct=${String(distinctKeyCount)}`);
+  }
+
+  // (3)+(5) what actually landed in the collection.
+  const collection = report?.collection ?? [];
+  const collectionSize = report?.collection_size ?? collection.length;
+  const collectionNonEmpty = collectionSize >= 1 && collection.length >= 1;
+  if (!collectionNonEmpty) {
+    notes.push('collection_empty');
+  }
+  let everyElementKeyed = collection.length >= 1;
+  collection.forEach((element, index) => {
+    const value = element[report?.key_field ?? ''];
+    if (typeof value !== 'string' || value.length === 0) {
+      everyElementKeyed = false;
+      notes.push(`element_missing_key:index=${String(index)}`);
+    }
+  });
+
+  const upsertDeduped = everyAppendKeyed && collectionNonEmpty && collectionSize === distinctKeyCount;
+  if (!upsertDeduped && collectionNonEmpty && everyAppendKeyed) {
+    notes.push(`upsert_not_deduped:collection=${String(collectionSize)}:distinct_keys=${String(distinctKeyCount)}`);
+  }
+
+  // The discriminating check: for a key re-appended with a CHANGED payload, the
+  // landed element must carry the LAST payload. A store that dropped the
+  // re-append (first-write-wins) or ignored it entirely also yields one element,
+  // so only this comparison separates a real upsert from those.
+  let upsertReplacedLatest = false;
+  if (duplicateKeyReappended) {
+    let observedReplacement = false;
+    let staleReplacement = false;
+    for (const [key, calls] of repeatedKeys) {
+      const first = calls[0]?.record ?? null;
+      const last = calls[calls.length - 1]?.record ?? null;
+      if (!last) {
+        continue;
+      }
+      const changedField = first ? differingRecordField(first, last) : Object.keys(last)[0];
+      if (changedField === undefined) {
+        notes.push(`replacement_not_observable:${key}`);
+        continue;
+      }
+      const element = collection.find((candidate) => candidate[report?.key_field ?? ''] === key);
+      if (!element) {
+        staleReplacement = true;
+        notes.push(`replacement_element_absent:key=${key}`);
+        continue;
+      }
+      const mismatch = firstRecordMismatch(last, element);
+      if (mismatch) {
+        staleReplacement = true;
+        notes.push(`replacement_stale:key=${key}:field=${mismatch}`);
+        continue;
+      }
+      observedReplacement = true;
+    }
+    upsertReplacedLatest = observedReplacement && !staleReplacement;
+  }
+
+  // (4) the record_array must be OFF the one-shot terminal completion action.
+  const terminalCalls = report?.terminal_calls ?? [];
+  let terminalBatchArgAbsent = terminalCalls.length >= 1;
+  if (terminalCalls.length === 0) {
+    notes.push('terminal_action_never_fired');
+  }
+  for (const call of terminalCalls) {
+    if (call.arg_kind !== 'absent') {
+      terminalBatchArgAbsent = false;
+      notes.push(`terminal_carried_record_array_arg:round=${String(call.round)}:kind=${call.arg_kind}`);
+    }
+  }
+
+  const parentComplete = input.finalMode === expectedFinalMode;
+  if (!parentComplete) {
+    notes.push(`parent_not_complete:expected=${expectedFinalMode}:actual=${String(input.finalMode)}`);
+  }
+
+  // Each append is its own round (I-1 Terminal Singularity), and every round is a
+  // provider decision, so N appends + the completion round is the floor. Fewer
+  // hits than that means the appends did not each come from a live decision.
+  const providerHitMinimum = appendCallCount + 1;
+  const providerHitsOk = input.providerHits >= providerHitMinimum;
+  if (!providerHitsOk) {
+    notes.push(`provider_hits_below_append_rounds:min=${String(providerHitMinimum)}:actual=${String(input.providerHits)}`);
+  }
+
+  // Same host-stage carve-out as the delegation/upload/extraction verdicts: the
+  // keyed stage's items_json is legitimately empty because the records ride the
+  // keyed collection, not the items mirror. Every OTHER stub still counts.
+  const hostItemsPrefix = input.hostStage ? `${input.hostStage}.items_json` : null;
+  const stubFindings = (input.stubFindings ?? []).filter(
+    (finding) => hostItemsPrefix === null || !finding.startsWith(hostItemsPrefix),
+  );
+  const noStubMarkers = stubFindings.length === 0;
+  if (!noStubMarkers) {
+    notes.unshift(`stub_markers_present:${stubFindings.slice(0, 3).join(';')}`);
+  }
+
+  const keyedCollectionEngaged = report !== null &&
+    appendActionRepeated &&
+    oneRecordPerCall &&
+    everyAppendKeyed &&
+    duplicateKeyReappended &&
+    upsertDeduped &&
+    upsertReplacedLatest &&
+    collectionNonEmpty &&
+    everyElementKeyed &&
+    terminalBatchArgAbsent &&
+    parentComplete &&
+    providerHitsOk &&
+    noStubMarkers;
+
+  return {
+    keyed_collection_engaged: keyedCollectionEngaged,
+    append_action_repeated: appendActionRepeated,
+    one_record_per_call: oneRecordPerCall,
+    every_append_keyed: everyAppendKeyed,
+    duplicate_key_reappended: duplicateKeyReappended,
+    upsert_deduped: upsertDeduped,
+    upsert_replaced_latest: upsertReplacedLatest,
+    collection_non_empty: collectionNonEmpty,
+    every_element_keyed: everyElementKeyed,
+    terminal_batch_arg_absent: terminalBatchArgAbsent,
+    parent_complete: parentComplete,
+    provider_hits_ok: providerHitsOk,
+    no_stub_markers: noStubMarkers,
+    append_call_count: appendCallCount,
+    distinct_key_count: distinctKeyCount,
+    collection_size: collectionSize,
+    reason: keyedCollectionEngaged ? null : notes[0] ?? 'keyed_collection_engagement_failed',
+    notes,
+  };
+}
+
+/** First field whose value differs between two appended records, if any. */
+function differingRecordField(
+  first: Record<string, unknown>,
+  last: Record<string, unknown>,
+): string | undefined {
+  for (const [field, value] of Object.entries(last)) {
+    if (!sameJsonValue(first[field], value)) {
+      return field;
+    }
+  }
+  for (const field of Object.keys(first)) {
+    if (!Object.prototype.hasOwnProperty.call(last, field)) {
+      return field;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * First field of `expected` the landed `element` fails to carry. Field-wise
+ * (not deep-equal) so an engine-added or model-added extra field on the element
+ * never masquerades as a stale replacement.
+ */
+function firstRecordMismatch(
+  expected: Record<string, unknown>,
+  element: Record<string, unknown>,
+): string | undefined {
+  for (const [field, value] of Object.entries(expected)) {
+    if (!sameJsonValue(element[field], value)) {
+      return field;
+    }
+  }
+  return undefined;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
 export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptions): Promise<GeneratedLiveDriveResult> {
   const workDir = join(options.targetDir, '.pgas-new-live-drive');
   rmSync(workDir, { recursive: true, force: true });
@@ -1091,6 +1517,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       options.exportScript,
       options.extractionScript,
       runnerLayout,
+      options.keyedCollectionScript,
     ));
 
     const runner = await runNodeScript(runnerPath, {
@@ -1136,6 +1563,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
               PGAS_LIVE_DRIVE_UPLOADS_DIR: join(workDir, 'uploads'),
             }
           : {}),
+        ...(options.keyedCollectionScript
+          ? { PGAS_LIVE_DRIVE_KEYED_SCRIPT: JSON.stringify(options.keyedCollectionScript) }
+          : {}),
       },
     });
 
@@ -1155,6 +1585,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     const upload = parseUploadReport(report?.upload);
     const exportReport = parseExportReport(report?.export);
     const extraction = parseExtractionReport(report?.extraction);
+    const keyedCollection = parseKeyedCollectionReport(report?.keyed_collection);
     const delegationVerdict = options.delegationScript
       ? assessDelegationEngagement({
           report: delegation,
@@ -1197,6 +1628,16 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
           hostStage: options.extractionScript.stage,
         })
       : noExtractionScriptVerdict(providerHits);
+    const keyedCollectionVerdict = options.keyedCollectionScript
+      ? assessKeyedCollectionEngagement({
+          report: keyedCollection,
+          finalMode,
+          expectedFinalMode: options.finalStage ?? DEFAULT_FINAL_STAGE,
+          providerHits,
+          stubFindings: generatedStageOutputStubFindings(world),
+          hostStage: options.keyedCollectionScript.stage,
+        })
+      : noKeyedCollectionScriptVerdict();
     return {
       final_mode: finalMode,
       terminal: report?.terminal === true,
@@ -1225,6 +1666,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       extraction,
       extraction_verdict: extractionVerdict,
       extraction_engaged: extractionVerdict.extraction_engaged,
+      keyed_collection: keyedCollection,
+      keyed_collection_verdict: keyedCollectionVerdict,
+      keyed_collection_engaged: keyedCollectionVerdict.keyed_collection_engaged,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runnerOutputExcerpt,
       ...(runnerError ? { runner_error: runnerError } : {}),
@@ -1252,6 +1696,7 @@ export function renderLiveDriveRunnerSource(
   exportScript?: GeneratedLiveDriveExportScript,
   extractionScript?: GeneratedLiveDriveExtractionScript,
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+  keyedCollectionScript?: GeneratedLiveDriveKeyedCollectionScript,
 ): string {
   const selectedScripts = [
     confirmationScript,
@@ -1259,7 +1704,17 @@ export function renderLiveDriveRunnerSource(
     uploadScript,
     exportScript,
     extractionScript,
+    keyedCollectionScript,
   ].filter(Boolean).length;
+  // The composite runner has no keyed-collection harvest, so refuse LOUDLY
+  // rather than silently dropping the keyed evidence and emitting a report the
+  // verdict would then read as "report absent".
+  if (keyedCollectionScript && selectedScripts > 1) {
+    throw new Error('keyed-collection live drive cannot be combined with another drive script');
+  }
+  if (keyedCollectionScript) {
+    return renderKeyedCollectionLiveDriveRunnerSource(slug, runnerLayout);
+  }
   if (selectedScripts > 1) {
     return renderCompositeLiveDriveRunnerSource(
       slug,
@@ -4294,6 +4749,369 @@ main().catch((error: unknown) => {
 `;
 }
 
+/**
+ * pgas#993 keyed-collection live-drive runner. Identical drive loop to the other
+ * runners; the difference is the report: it harvests, per ROUND, every call of
+ * the repeatable element-append action (its arg shape, the declared key's value,
+ * and the appended record) plus every call of the one-shot completion action,
+ * and the final landed collection. That is exactly the evidence
+ * `assessKeyedCollectionEngagement` needs to prove upsert-by-key actually fired
+ * rather than silently no-opping.
+ *
+ * Round harvesting is sound because the engine allows exactly ONE EffectAction
+ * per round (I-1 Terminal Singularity), so each append IS its own round's
+ * `result.terminal`.
+ */
+export function renderKeyedCollectionLiveDriveRunnerSource(
+  slug: string,
+  runnerLayout: GeneratedLiveDriveRunnerLayout = {},
+): string {
+  const pascal = toPascalCase(slug);
+  const entryPrelude = renderLiveDriveProgramEntryPrelude([{ slug }], runnerLayout);
+  return `import { writeFileSync } from 'node:fs';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+${entryPrelude}
+
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const keyedScript = parseKeyedScript(process.env.PGAS_LIVE_DRIVE_KEYED_SCRIPT ?? '');
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+  rounds: unknown[];
+}
+
+interface KeyedScript {
+  collectionPath: string;
+  key: string;
+  field: string;
+  appendAction: string;
+  terminalAction: string;
+  stage: string;
+}
+
+async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [{ name: '${slug}', entry: create${pascal}ProgramEntry() }],
+    devMode: true,
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    initial_trigger: {
+      channel: 'seed',
+      payload: { 'inputs.domain_context.query': INITIAL_TEXT },
+    },
+  });
+  const sessionId = created.sessionId;
+
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let state = await readState(client, sessionId);
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      // Any non-terminal failure (an in-flight timeout, or a downstream stage
+      // refusing the state a degraded keyed upsert left behind) still gets a
+      // FULL report: the harvested append calls and collection are the evidence
+      // the operator needs to triage, and a bare {error} report would read as
+      // "no keyed evidence at all" in the verdict.
+      const latest = await safeReadState(client, sessionId, state);
+      writeDriveReport({
+        session_id: sessionId,
+        state: latest,
+        triggers,
+        drivers,
+        keyedReport: keyedReportFromState(latest, keyedScript),
+        ...(isTriggerInFlightTimeout(error) ? { timeout_kind: 'trigger_in_flight' } : {}),
+        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      });
+      process.exit(1);
+    }
+    triggers += 1;
+    // Keep the continuation neutral: it must NOT tell the model how many records
+    // to append or that anything was superseded. The listing in INITIAL_TEXT is
+    // the only source of that; a steering hint here would manufacture the result.
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+  }
+
+  state = await readState(client, sessionId);
+  writeDriveReport({
+    session_id: sessionId,
+    state,
+    triggers,
+    drivers,
+    keyedReport: keyedReportFromState(state, keyedScript),
+  });
+  process.exit(0);
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+    rounds,
+  };
+}
+
+function parseKeyedScript(raw: string): KeyedScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_KEYED_SCRIPT is required for the keyed-collection live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_KEYED_SCRIPT must be an object');
+  }
+  const script = {
+    collectionPath: stringField(parsed, 'collectionPath'),
+    key: stringField(parsed, 'key'),
+    field: stringField(parsed, 'field'),
+    appendAction: stringField(parsed, 'appendAction'),
+    terminalAction: stringField(parsed, 'terminalAction'),
+    stage: stringField(parsed, 'stage'),
+  };
+  for (const [name, value] of Object.entries(script)) {
+    if (value.length === 0) {
+      throw new Error('PGAS_LIVE_DRIVE_KEYED_SCRIPT is missing required field ' + name);
+    }
+  }
+  return script;
+}
+
+/**
+ * Per-round harvest of the keyed evidence. One EffectAction per round means the
+ * append calls are exactly the rounds whose terminal action is the append action.
+ */
+function keyedReportFromState(state: DriveState, script: KeyedScript): Record<string, unknown> {
+  const appendCalls: Array<Record<string, unknown>> = [];
+  const terminalCalls: Array<Record<string, unknown>> = [];
+  state.rounds.forEach((round, index) => {
+    const terminal = rawTerminalOf(round);
+    if (!terminal) return;
+    const roundNumber = index + 1;
+    const payload = isRecord(terminal.payload) ? terminal.payload : {};
+    if (terminal.name === script.appendAction) {
+      const arg = payload[script.field];
+      appendCalls.push({
+        round: roundNumber,
+        arg_kind: argKind(arg, Object.prototype.hasOwnProperty.call(payload, script.field)),
+        key: isRecord(arg) && typeof arg[script.key] === 'string' && (arg[script.key] as string).length > 0
+          ? arg[script.key]
+          : null,
+        record: isRecord(arg) ? arg : null,
+      });
+      return;
+    }
+    if (terminal.name === script.terminalAction) {
+      terminalCalls.push({
+        round: roundNumber,
+        arg_kind: Object.prototype.hasOwnProperty.call(payload, script.field)
+          ? argKind(payload[script.field], true)
+          : 'absent',
+      });
+    }
+  });
+
+  const raw = valueAtWorldPath(state.world, script.collectionPath);
+  const collection = Array.isArray(raw) ? raw.filter(isRecord) : [];
+  return {
+    collection_path: script.collectionPath,
+    key_field: script.key,
+    append_action: script.appendAction,
+    terminal_action: script.terminalAction,
+    field: script.field,
+    append_calls: appendCalls,
+    terminal_calls: terminalCalls,
+    collection,
+    collection_size: collection.length,
+  };
+}
+
+function argKind(value: unknown, present: boolean): string {
+  if (!present || value === undefined || value === null) return 'missing';
+  if (Array.isArray(value)) return 'array';
+  if (isRecord(value)) return 'object';
+  return 'other';
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  keyedReport?: Record<string, unknown>;
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  const report = {
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    keyed_collection: input.keyedReport ?? null,
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  };
+  writeReport(report);
+  process.stdout.write(JSON.stringify({ keyed_collection: report.keyed_collection }) + '\\n');
+}
+
+function rawTerminalOf(round: unknown): { name: string; payload: unknown } | null {
+  if (!isRecord(round)) return null;
+  const result = round.result;
+  if (!isRecord(result)) return null;
+  const terminal = result.terminal;
+  if (!isRecord(terminal)) return null;
+  const name = terminal.name;
+  if (typeof name !== 'string' || name.length === 0) return null;
+  return { name, payload: terminal.payload ?? null };
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  const terminal = rawTerminalOf(round);
+  return terminal ? [{ name: terminal.name, payload_excerpt: JSON.stringify(terminal.payload ?? null).slice(0, 4_000) }] : [];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
+main().catch((error: unknown) => {
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
+  process.exit(1);
+});
+`;
+}
+
 function renderConfirmationLiveDriveRunnerSource(
   slug: string,
   runnerLayout: GeneratedLiveDriveRunnerLayout = {},
@@ -4689,6 +5507,7 @@ interface DriveReport {
   upload?: unknown;
   export?: unknown;
   extraction?: unknown;
+  keyed_collection?: unknown;
   timeout_kind?: unknown;
   error?: unknown;
 }
@@ -4792,6 +5611,50 @@ function parseExtractionReport(value: unknown): GeneratedLiveDriveExtractionRepo
   };
 }
 
+function parseKeyedCollectionReport(value: unknown): GeneratedLiveDriveKeyedCollectionReport | null {
+  if (!isRecord(value)) return null;
+  const collection = Array.isArray(value.collection) ? value.collection.filter(isRecord) : [];
+  return {
+    collection_path: stringOrEmpty(value.collection_path),
+    key_field: stringOrEmpty(value.key_field),
+    append_action: stringOrEmpty(value.append_action),
+    terminal_action: stringOrEmpty(value.terminal_action),
+    field: stringOrEmpty(value.field),
+    append_calls: parseKeyedAppendCalls(value.append_calls),
+    terminal_calls: parseKeyedTerminalCalls(value.terminal_calls),
+    collection,
+    collection_size: typeof value.collection_size === 'number' ? value.collection_size : collection.length,
+  };
+}
+
+function parseKeyedAppendCalls(value: unknown): GeneratedLiveDriveKeyedAppendCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    return [{
+      round: numberOrZero(entry.round),
+      arg_kind: parseKeyedArgKind(entry.arg_kind),
+      key: nullableString(entry.key),
+      record: isRecord(entry.record) ? entry.record : null,
+    }];
+  });
+}
+
+function parseKeyedTerminalCalls(value: unknown): GeneratedLiveDriveKeyedTerminalCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    return [{
+      round: numberOrZero(entry.round),
+      arg_kind: entry.arg_kind === 'absent' ? 'absent' : parseKeyedArgKind(entry.arg_kind),
+    }];
+  });
+}
+
+function parseKeyedArgKind(value: unknown): GeneratedLiveDriveKeyedArgKind {
+  return value === 'object' || value === 'array' || value === 'missing' ? value : 'other';
+}
+
 function parseExportReport(value: unknown): GeneratedLiveDriveExportReport | null {
   if (!isRecord(value)) return null;
   const artifactRecords = parseExportArtifactRecords(value.artifact_records);
@@ -4890,6 +5753,29 @@ function noExtractionScriptVerdict(providerHits: number): GeneratedLiveDriveExtr
     sentinel_not_in_raw_upload: false,
     reason: 'extraction_script_absent',
     notes: providerHits >= 1 ? ['extraction_script_absent'] : ['extraction_script_absent', 'provider_hits_below_minimum'],
+  };
+}
+
+function noKeyedCollectionScriptVerdict(): GeneratedLiveDriveKeyedCollectionVerdict {
+  return {
+    keyed_collection_engaged: false,
+    append_action_repeated: false,
+    one_record_per_call: false,
+    every_append_keyed: false,
+    duplicate_key_reappended: false,
+    upsert_deduped: false,
+    upsert_replaced_latest: false,
+    collection_non_empty: false,
+    every_element_keyed: false,
+    terminal_batch_arg_absent: false,
+    parent_complete: false,
+    provider_hits_ok: false,
+    no_stub_markers: true,
+    append_call_count: 0,
+    distinct_key_count: 0,
+    collection_size: 0,
+    reason: 'keyed_collection_script_absent',
+    notes: ['keyed_collection_script_absent'],
   };
 }
 

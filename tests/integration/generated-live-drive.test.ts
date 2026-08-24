@@ -23,15 +23,27 @@ import type { ReasoningField } from '../../src/foundry-program/reasoning-contrac
 import {
   buildUploadLiveDriveFixtureText,
   deriveConfirmationScript,
+  deriveKeyedCollectionScript,
   driveGeneratedProgramLive,
   type GeneratedLiveDriveConfirmationScript,
   type GeneratedLiveDriveDelegationScript,
   type GeneratedLiveDriveExtractionScript,
   type GeneratedLiveDriveExportScript,
+  type GeneratedLiveDriveKeyedCollectionScript,
   type GeneratedLiveDriveUploadScript,
 } from '../../src/pgas-new/generated-live-drive.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
 import { assertNoExecutedPathStubs } from '../../src/pgas-new/verify.js';
+import {
+  KEYED_COLLECTION_DISTINCT_IDS,
+  KEYED_COLLECTION_INITIAL_TEXT,
+  KEYED_COLLECTION_KEY,
+  KEYED_COLLECTION_NAME,
+  KEYED_COLLECTION_SLUG,
+  KEYED_COLLECTION_STAGE,
+  KEYED_COLLECTION_SUPERSEDED_ID,
+  keyedCollectionDomain,
+} from '../fixtures/keyed-collection-live-scenario.js';
 
 const LIVE_DRIVE_ENABLED = process.env.PGAS_LIVE_GRADUATION === '1';
 const liveIt = LIVE_DRIVE_ENABLED ? it : it.skip;
@@ -772,6 +784,68 @@ describe('generated program live drive gate', () => {
     expect(String(drive.delegation?.degrade_reason ?? '').length).toBeGreaterThan(0);
     expect(drive.delegation_verdict.notes).toContain('delegation_result_not_complete:failed');
   });
+
+  /**
+   * pgas#993 KEYED-EXTRACTION rung. Everything below the model is proven
+   * hermetically in tests/integration/keyed-collection-live-scenario.test.ts
+   * (same domain, same script derivation, same runner, same verdict, scripted
+   * provider) and the engine's upsert semantics are pinned in
+   * tests/integration/keyed-collection-engine-falsifier.test.ts. What ONLY the
+   * live run can show is that a REAL model, given a catalogue listing that
+   * re-states one entry, calls the element-append action once per stated record
+   * — including the re-stated one — instead of batching.
+   */
+  liveIt('drives a generated keyed record_array extraction and proves upsert-by-key fired', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, keyedCollectionScript } = await liveSynthesizeAndRenderKeyedCollection(env);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: KEYED_COLLECTION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: KEYED_COLLECTION_INITIAL_TEXT,
+      finalStage: 'complete',
+      maxTriggers: 20,
+      driveTimeoutMs: 900_000,
+      keyedCollectionScript,
+    });
+
+    // Machine-readable verdict line + the full harvest, for operator triage.
+    process.stdout.write(`[live-drive][keyed-collection] VERDICT ${JSON.stringify(drive.keyed_collection_verdict)}\n`);
+    process.stdout.write(`[live-drive][keyed-collection] REPORT ${JSON.stringify(drive.keyed_collection)}\n`);
+    process.stdout.write(
+      `[live-drive][keyed-collection] final_mode=${String(drive.final_mode)} rounds=${String(drive.rounds)} provider_hits=${String(drive.provider_hits)} actions=${drive.actions.join(' -> ')}\n`,
+    );
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.final_mode).toBe('complete');
+
+    // The fail-closed verdict IS the gate: it refuses a completed run whose
+    // keyed semantics never fired.
+    expect(drive.keyed_collection_verdict.notes).toEqual([]);
+    expect(drive.keyed_collection_engaged).toBe(true);
+
+    // Scenario-specific domain truth, on top of the generic verdict.
+    const report = drive.keyed_collection;
+    expect(report, 'keyed-collection report').toBeTruthy();
+    const supersededAppends = (report?.append_calls ?? []).filter(
+      (call) => call.key === KEYED_COLLECTION_SUPERSEDED_ID,
+    );
+    expect(
+      supersededAppends.length,
+      `the model must re-append ${KEYED_COLLECTION_SUPERSEDED_ID} for the correction, otherwise upsert-by-key is untested`,
+    ).toBeGreaterThanOrEqual(2);
+    expect(new Set((report?.collection ?? []).map((element) => element[KEYED_COLLECTION_KEY])))
+      .toEqual(new Set(KEYED_COLLECTION_DISTINCT_IDS));
+
+    // Anti-stub scan on the produced state, as on every other live rung.
+    for (const [key, value] of Object.entries(drive.world)) {
+      if (/\.(result_json|items_json)$/u.test(key) && !key.startsWith(`${KEYED_COLLECTION_STAGE}.items_json`)) {
+        assertNoExecutedPathStubs(value);
+      }
+    }
+  });
 });
 
 const LIVE_DRIVE_INITIAL_TEXT = [
@@ -958,6 +1032,54 @@ async function liveSynthesizeAndRenderExtraction(env: LiveDriveEnv): Promise<{
       sentinel: `PGAS-EXTRACTION-NONCE-${randomUUID()}`,
     },
   };
+}
+
+/**
+ * pgas#993 keyed-extraction live synthesis. The reasoning contract MUST come
+ * from the real meta-LLM (no deterministic fallback), and
+ * `deriveKeyedCollectionScript` then refuses the drive unless that contract
+ * actually produced a keyed `record_array` with an element-typed repeatable
+ * append and no batch arg left on the terminal action — so a non-keyed spec can
+ * never be driven to a green keyed verdict.
+ */
+async function liveSynthesizeAndRenderKeyedCollection(env: LiveDriveEnv): Promise<{
+  targetDir: string;
+  keyedCollectionScript: GeneratedLiveDriveKeyedCollectionScript;
+}> {
+  const cacheDir = trackedTempRoot('pgas-new-live-drive-keyed-cache-');
+  const targetDir = trackedTempRoot('pgas-new-live-drive-keyed-render-');
+  const artifact = await withRequiredLlmContract(() =>
+    synthesizeDomainLogic(artifactFromDomain(keyedCollectionDomain), {
+      cacheDir,
+      providerUrl: env.baseUrl,
+      model: env.model,
+    }));
+
+  const reasoningAudit = artifact.domain_synthesis_audit?.find(
+    (entry) => isRecord(entry) && entry.stage === KEYED_COLLECTION_STAGE,
+  ) as Record<string, unknown> | undefined;
+  expect(reasoningAudit?.contract_source, 'keyed reasoning contract came from the meta-LLM').toBe('meta_llm');
+
+  // Fail BEFORE spending a drive if the emission is not keyed.
+  const keyedCollectionScript = deriveKeyedCollectionScript(artifact.spec_yaml);
+
+  renderStandaloneScaffold({
+    slug: KEYED_COLLECTION_SLUG,
+    name: KEYED_COLLECTION_NAME,
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedRegistrationTs: artifact.registration_ts,
+    synthesizedCapabilityGaps: artifact.capability_gaps,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+  });
+  linkRootNodeModules(targetDir);
+
+  return { targetDir, keyedCollectionScript };
 }
 
 function liveSynthesizeAndRenderConfirmationLoop(): { targetDir: string; confirmationScript: GeneratedLiveDriveConfirmationScript } {
