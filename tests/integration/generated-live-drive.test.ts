@@ -809,6 +809,16 @@ describe('generated program live drive gate', () => {
       maxTriggers: 20,
       driveTimeoutMs: 900_000,
       keyedCollectionScript,
+      // pgas#993 is a NATIVE-TOOLS property: a keyed/merge MAppend makes
+      // `buildUnifiedTools` present the append action's `from_arg` as the ELEMENT
+      // (object) type. That contract only exists on the unified native-tools driver.
+      // On the DEFAULT (legacy JSON-envelope) path the model authors the mutation
+      // directly as `{kind: MutationAction, op: MAppend, path, value: {...}}`, so no
+      // named arg is ever produced and `from_arg` never resolves — proven by a live
+      // drive whose captured provider responses contained exactly that envelope, with
+      // zero `tools` on every request and every append observed as `arg_kind: missing`.
+      // Driving the legacy path therefore cannot test what this case exists to test.
+      env: { PGAS_AUTHOR_DRIVER: 'unified' },
     });
 
     // Machine-readable verdict line + the full harvest, for operator triage.
