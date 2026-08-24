@@ -288,13 +288,20 @@ describe('engine-primitive-registry', () => {
       status: 'available_unused',
     });
     expect(awarenessByConstruct.get('EngineCapability.surrogate_target_response')?.note).toContain('#999');
-    // #992 render capability + engine-native ArtifactStore: PARTIAL, drive-gated,
-    // registered only (not wired) in this PR.
+    // #992 render capability + engine-native ArtifactStore: still adopt_backlog.
+    // pgas#1045 (RenderSectionList) SHIPPED in 5.7.1 and closed the GRAMMAR gap —
+    // proven by tests/integration/render-section-list-falsifier.test.ts — but
+    // emission stays blocked on the author-less DISPATCH gap. The note must keep
+    // BOTH curator-request references so it cannot rot back to the old story.
     expect(awarenessByConstruct.get('EngineCapability.render')).toMatchObject({
       status: 'adopt_backlog',
     });
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('#992');
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('render-section-list-primitive');
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain(
+      '2026-08-24-declarative-render-dispatch-author-less-stage.md',
+    );
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('GRAMMAR GAP CLOSED');
 
     // v5.6.0 alignment facts carried on already-emitted constructs. #993 changed
     // the keyed record_array emission (element-typed repeatable append); #976/#1014
