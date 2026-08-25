@@ -243,10 +243,9 @@ function keyedSpecYaml(keyField: string | null): string {
 `;
   const features = keyField === null ? '  - base\n' : '  - base\n  - keyed_collection\n';
   return `name: "${PROGRAM}"
+
 features:
 ${features}pure: true
-termination: BoundedSession
-topology: CyclicTopology
 
 schema:
   inputs.user_text: string
@@ -263,8 +262,6 @@ schema:
   ${STAGE}.output: object
 
 ${keyedBlock}
-initial: ${STAGE}
-terminal: [complete]
 
 modes:
   ${STAGE}:
@@ -276,6 +273,14 @@ modes:
   complete:
     vocabulary: []
     channels: [stage_output]
+
+initial: ${STAGE}
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
 
 proceeds_to:
   ${TERMINAL_ACTION}: complete

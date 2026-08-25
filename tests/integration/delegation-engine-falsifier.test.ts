@@ -459,32 +459,44 @@ const childHandlers: Record<string, ToolHandler> = {
 
 function parentSpecYaml(options: ParentOptions): string {
   return `name: "${PARENT_PROGRAM}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level delegation falsifier parent.
-
-initial: bootstrap
-terminal: [complete]
 
 features:
   - base
   - delegation
   - reactions
 
-channels:
-  user_text: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
-  child_call:
-    direction: Out
-    sync: Sync
-    target_spec: "${options.targetSpec}"
-    result_path: "${options.channelResultPath}"
-    max_delegated_rounds: ${options.maxDelegatedRounds}
-    round_timeout_ms: 5000
-    optional: ${String(options.optional)}
+pure: true
+
+schema:
+  inputs.user_text: string
+  parent.ready: boolean
+  parent.topic: string
+  parent.requested: boolean
+  parent.complete_ready: boolean
+  settled: boolean
+  degraded: boolean
+  settle.observed_status: string
+  ${ACTION_RESULT_PATH}: object
+  ${ACTION_RESULT_PATH}.status: string
+  ${ACTION_RESULT_PATH}.reason: string
+  ${ACTION_RESULT_PATH}.optional: boolean
+  ${ACTION_RESULT_PATH}.mode: string
+  ${ACTION_RESULT_PATH}.rounds: number
+  ${ACTION_RESULT_PATH}.sessionId: string
+  ${ACTION_RESULT_PATH}.result: string
+  ${CHANNEL_DECOY_PATH}: object
+  ${CHANNEL_DECOY_PATH}.status: string
+  ${CHANNEL_DECOY_PATH}.reason: string
+  ${CHANNEL_DECOY_PATH}.optional: boolean
+  ${CHANNEL_DECOY_PATH}.mode: string
+  ${CHANNEL_DECOY_PATH}.rounds: number
+  ${CHANNEL_DECOY_PATH}.sessionId: string
+
+reactions:
+  settle:
+    event: AfterRound
+    watch: []
+    write_scope: [settled, degraded, settle.observed_status]
 
 modes:
   bootstrap:
@@ -503,9 +515,66 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   enter_dispatch: dispatch
   complete_parent: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+  child_call:
+    direction: Out
+    sync: Sync
+    target_spec: "${options.targetSpec}"
+    result_path: "${options.channelResultPath}"
+    max_delegated_rounds: ${options.maxDelegatedRounds}
+    round_timeout_ms: 5000
+    optional: ${String(options.optional)}
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  enter_dispatch:
+    description: "Enter dispatch and set a parent-domain enrichment value."
+    mutations:
+      - { op: MSet, path: parent.ready, value: true }
+      - { op: MSet, path: parent.topic, from_arg: topic }
+    channel: widget_output
+  request_child:
+    description: "Synchronously delegate to the child program."
+    mutations:
+      - { op: MSet, path: parent.requested, value: true }
+    channel: child_call
+    result_path: "${ACTION_RESULT_PATH}"
+  complete_parent:
+    description: "Complete after the settle reaction observes the delegation result."
+    mutations:
+      - { op: MSet, path: parent.complete_ready, value: true }
+    channel: widget_output
+
+preamble: |
+  Route-level delegation falsifier parent.
+
+prompts:
+  bootstrap: "Move from bootstrap to dispatch."
+  dispatch: "Call request_child once, then complete_parent after settled is true."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   bootstrap:
@@ -544,92 +613,32 @@ projection:
       - ${ACTION_RESULT_PATH}.mode
       - ${ACTION_RESULT_PATH}.result
     exclude: []
-
-prompts:
-  bootstrap: "Move from bootstrap to dispatch."
-  dispatch: "Call request_child once, then complete_parent after settled is true."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-
-action_map:
-  enter_dispatch:
-    description: "Enter dispatch and set a parent-domain enrichment value."
-    mutations:
-      - { op: MSet, path: parent.ready, value: true }
-      - { op: MSet, path: parent.topic, from_arg: topic }
-    channel: widget_output
-  request_child:
-    description: "Synchronously delegate to the child program."
-    mutations:
-      - { op: MSet, path: parent.requested, value: true }
-    channel: child_call
-    result_path: "${ACTION_RESULT_PATH}"
-  complete_parent:
-    description: "Complete after the settle reaction observes the delegation result."
-    mutations:
-      - { op: MSet, path: parent.complete_ready, value: true }
-    channel: widget_output
-
-schema:
-  inputs.user_text: string
-  parent.ready: boolean
-  parent.topic: string
-  parent.requested: boolean
-  parent.complete_ready: boolean
-  settled: boolean
-  degraded: boolean
-  settle.observed_status: string
-  ${ACTION_RESULT_PATH}: object
-  ${ACTION_RESULT_PATH}.status: string
-  ${ACTION_RESULT_PATH}.reason: string
-  ${ACTION_RESULT_PATH}.optional: boolean
-  ${ACTION_RESULT_PATH}.mode: string
-  ${ACTION_RESULT_PATH}.rounds: number
-  ${ACTION_RESULT_PATH}.sessionId: string
-  ${ACTION_RESULT_PATH}.result: string
-  ${CHANNEL_DECOY_PATH}: object
-  ${CHANNEL_DECOY_PATH}.status: string
-  ${CHANNEL_DECOY_PATH}.reason: string
-  ${CHANNEL_DECOY_PATH}.optional: boolean
-  ${CHANNEL_DECOY_PATH}.mode: string
-  ${CHANNEL_DECOY_PATH}.rounds: number
-  ${CHANNEL_DECOY_PATH}.sessionId: string
-
-reactions:
-  settle:
-    event: AfterRound
-    watch: []
-    write_scope: [settled, degraded, settle.observed_status]
-
-repair_bound: 2
-
-fallback:
-  channel: widget_output
-  payload: { ok: false }
 `;
 }
 
 function childSpecYaml(): string {
   return `name: "${CHILD_PROGRAM}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level delegation falsifier child.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.request.intent: string
+  inputs.request.payload_marker: string
+  inputs.request.topic: string
+  inputs.domain_context: object
+  inputs.domain_context.source_program: string
+  inputs.domain_context.source_session_id: string
+  inputs.domain_context.owner_session_id: string
+  inputs.domain_context.target_program: string
+  child.received: boolean
+  work.done: boolean
+  work.result: string
+  work.keepalive: string
 
 modes:
   receive:
@@ -648,9 +657,57 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: child_output
+  payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  accept_request:
+    description: "Record that the delegated request was received."
+    mutations:
+      - { op: MSet, path: child.received, value: true }
+    channel: child_output
+  finish_work:
+    description: "Complete child work and export work.result."
+    mutations:
+      - { op: MSet, path: work.done, value: true }
+      - { op: MSet, path: work.result, from_arg: result }
+    channel: child_output
+  keep_working:
+    description: "Stay non-terminal for optional-delegation degrade proof."
+    mutations:
+      - { op: MSet, path: work.keepalive, from_arg: note }
+    channel: child_output
+
+preamble: |
+  Route-level delegation falsifier child.
+
+prompts:
+  receive: "Accept the delegated request."
+  work: "Finish the delegated work when instructed."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   receive:
@@ -685,55 +742,6 @@ projection:
       - work.done
       - work.result
     exclude: []
-
-prompts:
-  receive: "Accept the delegated request."
-  work: "Finish the delegated work when instructed."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-
-action_map:
-  accept_request:
-    description: "Record that the delegated request was received."
-    mutations:
-      - { op: MSet, path: child.received, value: true }
-    channel: child_output
-  finish_work:
-    description: "Complete child work and export work.result."
-    mutations:
-      - { op: MSet, path: work.done, value: true }
-      - { op: MSet, path: work.result, from_arg: result }
-    channel: child_output
-  keep_working:
-    description: "Stay non-terminal for optional-delegation degrade proof."
-    mutations:
-      - { op: MSet, path: work.keepalive, from_arg: note }
-    channel: child_output
-
-schema:
-  inputs.user_text: string
-  inputs.request: object
-  inputs.request.intent: string
-  inputs.request.payload_marker: string
-  inputs.request.topic: string
-  inputs.domain_context: object
-  inputs.domain_context.source_program: string
-  inputs.domain_context.source_session_id: string
-  inputs.domain_context.owner_session_id: string
-  inputs.domain_context.target_program: string
-  child.received: boolean
-  work.done: boolean
-  work.result: string
-  work.keepalive: string
-
-repair_bound: 2
-
-fallback:
-  channel: child_output
-  payload: { ok: false }
 `;
 }
 

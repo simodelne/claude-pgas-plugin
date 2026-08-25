@@ -436,11 +436,11 @@ function renderSpecYaml(listFrom: string): string {
   // → view → render → policy) so the fixture is strict-clean and demonstrates the
   // canonical `render:` slot: AFTER `projection`/`view`, BEFORE any policy block.
   return `name: "${PROGRAM}"
+
 features:
   - base
+
 pure: true
-termination: BoundedSession
-topology: CyclicTopology
 
 schema:
   inputs.user_text: string
@@ -490,9 +490,6 @@ derived_paths:
         field: status
         value: rejected
 
-initial: bootstrap
-terminal: [complete]
-
 modes:
   bootstrap:
     vocabulary: [seed_section, finish_seeding]
@@ -509,6 +506,14 @@ modes:
   complete:
     vocabulary: []
     channels: [stage_output]
+
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
 
 proceeds_to:
   finish_seeding: render_export
@@ -593,13 +598,13 @@ render:
  */
 function hookDispatchSpecYaml(): string {
   return `name: "${HOOK_PROGRAM}"
+
 features:
   - base
   - decision_only
   - integrations
+
 pure: false
-termination: BoundedSession
-topology: CyclicTopology
 
 schema:
   inputs.user_text: string
@@ -614,9 +619,6 @@ schema:
   work.seeding.done: boolean
   export: object
   export.artifact: object
-
-initial: bootstrap
-terminal: [complete]
 
 modes:
   bootstrap:
@@ -634,6 +636,14 @@ modes:
   complete:
     vocabulary: []
     channels: [stage_output]
+
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
 
 proceeds_to:
   finish_seeding: ${HOOK_EXPORT_MODE}

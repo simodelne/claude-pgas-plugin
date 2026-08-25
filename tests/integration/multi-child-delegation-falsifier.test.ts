@@ -340,40 +340,50 @@ const childHandlers: Record<string, ToolHandler> = {
 
 function parentSpecYaml(): string {
   return `name: "${PARENT_PROGRAM}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level multi-child delegation falsifier parent (two distinct static children).
-
-initial: bootstrap
-terminal: [complete]
 
 features:
   - base
   - delegation
   - reactions
 
-channels:
-  user_text: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
-  ingest_call:
-    direction: Out
-    sync: Sync
-    target_spec: "${INGEST_PROGRAM}"
-    result_path: "${INGEST_RESULT_PATH}"
-    max_delegated_rounds: 5
-    round_timeout_ms: 5000
-    optional: true
-  review_call:
-    direction: Out
-    sync: Sync
-    target_spec: "${REVIEW_PROGRAM}"
-    result_path: "${REVIEW_RESULT_PATH}"
-    max_delegated_rounds: 5
-    round_timeout_ms: 5000
-    optional: true
+pure: true
+
+schema:
+  inputs.user_text: string
+  parent.ready: boolean
+  parent.topic: string
+  parent.ingest_done: boolean
+  parent.complete_ready: boolean
+  ${INGEST_BASE}.requested: boolean
+  ${INGEST_BASE}.settled: boolean
+  ${INGEST_BASE}.degraded: boolean
+  ${INGEST_RESULT_PATH}: object
+  ${INGEST_RESULT_PATH}.status: string
+  ${INGEST_RESULT_PATH}.optional: boolean
+  ${INGEST_RESULT_PATH}.mode: string
+  ${INGEST_RESULT_PATH}.rounds: number
+  ${INGEST_RESULT_PATH}.sessionId: string
+  ${INGEST_RESULT_PATH}.result: string
+  ${REVIEW_BASE}.requested: boolean
+  ${REVIEW_BASE}.settled: boolean
+  ${REVIEW_BASE}.degraded: boolean
+  ${REVIEW_RESULT_PATH}: object
+  ${REVIEW_RESULT_PATH}.status: string
+  ${REVIEW_RESULT_PATH}.optional: boolean
+  ${REVIEW_RESULT_PATH}.mode: string
+  ${REVIEW_RESULT_PATH}.rounds: number
+  ${REVIEW_RESULT_PATH}.sessionId: string
+  ${REVIEW_RESULT_PATH}.result: string
+
+reactions:
+  settle_ingest:
+    event: AfterRound
+    watch: []
+    write_scope: [${INGEST_BASE}.settled, ${INGEST_BASE}.degraded]
+  settle_review:
+    event: AfterRound
+    watch: []
+    write_scope: [${REVIEW_BASE}.settled, ${REVIEW_BASE}.degraded]
 
 modes:
   bootstrap:
@@ -398,10 +408,87 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   enter_dispatch: ingest_stage
   advance_ingest: review_stage
   complete_parent: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+  ingest_call:
+    direction: Out
+    sync: Sync
+    target_spec: "${INGEST_PROGRAM}"
+    result_path: "${INGEST_RESULT_PATH}"
+    max_delegated_rounds: 5
+    round_timeout_ms: 5000
+    optional: true
+  review_call:
+    direction: Out
+    sync: Sync
+    target_spec: "${REVIEW_PROGRAM}"
+    result_path: "${REVIEW_RESULT_PATH}"
+    max_delegated_rounds: 5
+    round_timeout_ms: 5000
+    optional: true
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  enter_dispatch:
+    description: "Enter dispatch and set a parent-domain enrichment value."
+    mutations:
+      - { op: MSet, path: parent.ready, value: true }
+      - { op: MSet, path: parent.topic, from_arg: topic }
+    channel: widget_output
+  request_ingest:
+    description: "Synchronously delegate to the ingest child program."
+    mutations:
+      - { op: MSet, path: ${INGEST_BASE}.requested, value: true }
+    channel: ingest_call
+    result_path: "${INGEST_RESULT_PATH}"
+  advance_ingest:
+    description: "Advance to the review stage after the ingest child settles."
+    mutations:
+      - { op: MSet, path: parent.ingest_done, value: true }
+    channel: widget_output
+  request_review:
+    description: "Synchronously delegate to the review child program."
+    mutations:
+      - { op: MSet, path: ${REVIEW_BASE}.requested, value: true }
+    channel: review_call
+    result_path: "${REVIEW_RESULT_PATH}"
+  complete_parent:
+    description: "Complete after the review child settles."
+    mutations:
+      - { op: MSet, path: parent.complete_ready, value: true }
+    channel: widget_output
+
+preamble: |
+  Route-level multi-child delegation falsifier parent (two distinct static children).
+
+prompts:
+  bootstrap: "Move from bootstrap to ingest_stage."
+  ingest_stage: "Call request_ingest once, then advance_ingest after the ingest child settles."
+  review_stage: "Call request_review once, then complete_parent after the review child settles."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   bootstrap:
@@ -456,111 +543,28 @@ projection:
       - ${REVIEW_RESULT_PATH}.rounds
       - ${REVIEW_RESULT_PATH}.mode
     exclude: []
-
-prompts:
-  bootstrap: "Move from bootstrap to ingest_stage."
-  ingest_stage: "Call request_ingest once, then advance_ingest after the ingest child settles."
-  review_stage: "Call request_review once, then complete_parent after the review child settles."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-
-action_map:
-  enter_dispatch:
-    description: "Enter dispatch and set a parent-domain enrichment value."
-    mutations:
-      - { op: MSet, path: parent.ready, value: true }
-      - { op: MSet, path: parent.topic, from_arg: topic }
-    channel: widget_output
-  request_ingest:
-    description: "Synchronously delegate to the ingest child program."
-    mutations:
-      - { op: MSet, path: ${INGEST_BASE}.requested, value: true }
-    channel: ingest_call
-    result_path: "${INGEST_RESULT_PATH}"
-  advance_ingest:
-    description: "Advance to the review stage after the ingest child settles."
-    mutations:
-      - { op: MSet, path: parent.ingest_done, value: true }
-    channel: widget_output
-  request_review:
-    description: "Synchronously delegate to the review child program."
-    mutations:
-      - { op: MSet, path: ${REVIEW_BASE}.requested, value: true }
-    channel: review_call
-    result_path: "${REVIEW_RESULT_PATH}"
-  complete_parent:
-    description: "Complete after the review child settles."
-    mutations:
-      - { op: MSet, path: parent.complete_ready, value: true }
-    channel: widget_output
-
-schema:
-  inputs.user_text: string
-  parent.ready: boolean
-  parent.topic: string
-  parent.ingest_done: boolean
-  parent.complete_ready: boolean
-  ${INGEST_BASE}.requested: boolean
-  ${INGEST_BASE}.settled: boolean
-  ${INGEST_BASE}.degraded: boolean
-  ${INGEST_RESULT_PATH}: object
-  ${INGEST_RESULT_PATH}.status: string
-  ${INGEST_RESULT_PATH}.optional: boolean
-  ${INGEST_RESULT_PATH}.mode: string
-  ${INGEST_RESULT_PATH}.rounds: number
-  ${INGEST_RESULT_PATH}.sessionId: string
-  ${INGEST_RESULT_PATH}.result: string
-  ${REVIEW_BASE}.requested: boolean
-  ${REVIEW_BASE}.settled: boolean
-  ${REVIEW_BASE}.degraded: boolean
-  ${REVIEW_RESULT_PATH}: object
-  ${REVIEW_RESULT_PATH}.status: string
-  ${REVIEW_RESULT_PATH}.optional: boolean
-  ${REVIEW_RESULT_PATH}.mode: string
-  ${REVIEW_RESULT_PATH}.rounds: number
-  ${REVIEW_RESULT_PATH}.sessionId: string
-  ${REVIEW_RESULT_PATH}.result: string
-
-reactions:
-  settle_ingest:
-    event: AfterRound
-    watch: []
-    write_scope: [${INGEST_BASE}.settled, ${INGEST_BASE}.degraded]
-  settle_review:
-    event: AfterRound
-    watch: []
-    write_scope: [${REVIEW_BASE}.settled, ${REVIEW_BASE}.degraded]
-
-repair_bound: 2
-
-fallback:
-  channel: widget_output
-  payload: { ok: false }
 `;
 }
 
 function childSpecYaml(tag: string): string {
   const specName = tag === 'ingest' ? INGEST_PROGRAM : REVIEW_PROGRAM;
   return `name: "${specName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level multi-child delegation falsifier ${tag} child.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.request.intent: string
+  inputs.request.topic: string
+  inputs.domain_context: object
+  inputs.domain_context.source_program: string
+  child.received: boolean
+  work.done: boolean
+  work.result: string
 
 modes:
   receive:
@@ -579,25 +583,25 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
 
-projection:
-  receive:
-    include: [inputs.user_text, inputs.request, inputs.request.intent, inputs.domain_context, inputs.domain_context.source_program]
-    exclude: []
-  work:
-    include: [inputs.user_text, inputs.request, child.received, work.result]
-    exclude: []
-  complete:
-    include: [inputs.request, child.received, work.done, work.result]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
 
-prompts:
-  receive: "Accept the delegated request."
-  work: "Finish the delegated work when instructed."
-  complete: "Terminal."
+fallback:
+  channel: child_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -616,22 +620,26 @@ action_map:
       - { op: MSet, path: work.result, from_arg: result }
     channel: child_output
 
-schema:
-  inputs.user_text: string
-  inputs.request: object
-  inputs.request.intent: string
-  inputs.request.topic: string
-  inputs.domain_context: object
-  inputs.domain_context.source_program: string
-  child.received: boolean
-  work.done: boolean
-  work.result: string
+preamble: |
+  Route-level multi-child delegation falsifier ${tag} child.
+
+prompts:
+  receive: "Accept the delegated request."
+  work: "Finish the delegated work when instructed."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: child_output
-  payload: { ok: false }
+projection:
+  receive:
+    include: [inputs.user_text, inputs.request, inputs.request.intent, inputs.domain_context, inputs.domain_context.source_program]
+    exclude: []
+  work:
+    include: [inputs.user_text, inputs.request, child.received, work.result]
+    exclude: []
+  complete:
+    include: [inputs.request, child.received, work.done, work.result]
+    exclude: []
 `;
 }
 

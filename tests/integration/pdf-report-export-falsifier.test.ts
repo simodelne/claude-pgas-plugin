@@ -335,22 +335,24 @@ function createPdfReportHandlers(state: { sawArgTitle: boolean }): Record<string
 
 function pdfReportSpecYaml(): string {
   return `name: "${PDF_PROGRAM}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level PDF report artifact harvest falsifier.
-
-initial: bootstrap
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  config: object
+  config.title: string
+  config.purpose: string
+  ${OUTPUT_PATH}: object
+  ${OUTPUT_PATH}.status: string
+  ${OUTPUT_PATH}.result_json: string
+  ${OUTPUT_PATH}.pdf_base64: string
+  ${OUTPUT_PATH}.pdf_bytes: number
+  ${OUTPUT_PATH}.sha256: string
+  ${OUTPUT_PATH}.section_count: number
 
 modes:
   bootstrap:
@@ -369,9 +371,51 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   seed_config: render_report
   render_report: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  seed_config:
+    description: "Seed report configuration into domain state."
+    mutations: []
+    channel: widget_output
+    result_path: config
+  render_report:
+    description: "Render the accumulated report state into PDF report bytes."
+    mutations: []
+    channel: widget_output
+    result_path: ${OUTPUT_PATH}
+
+preamble: |
+  Route-level PDF report artifact harvest falsifier.
+
+prompts:
+  bootstrap: "Call seed_config with the report configuration."
+  render_report: "Call render_report with no arguments."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   bootstrap:
@@ -393,46 +437,6 @@ projection:
       - ${OUTPUT_PATH}.sha256
       - ${OUTPUT_PATH}.section_count
     exclude: []
-
-prompts:
-  bootstrap: "Call seed_config with the report configuration."
-  render_report: "Call render_report with no arguments."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-
-action_map:
-  seed_config:
-    description: "Seed report configuration into domain state."
-    mutations: []
-    channel: widget_output
-    result_path: config
-  render_report:
-    description: "Render the accumulated report state into PDF report bytes."
-    mutations: []
-    channel: widget_output
-    result_path: ${OUTPUT_PATH}
-
-schema:
-  inputs.user_text: string
-  config: object
-  config.title: string
-  config.purpose: string
-  ${OUTPUT_PATH}: object
-  ${OUTPUT_PATH}.status: string
-  ${OUTPUT_PATH}.result_json: string
-  ${OUTPUT_PATH}.pdf_base64: string
-  ${OUTPUT_PATH}.pdf_bytes: number
-  ${OUTPUT_PATH}.sha256: string
-  ${OUTPUT_PATH}.section_count: number
-
-repair_bound: 2
-
-fallback:
-  channel: widget_output
-  payload: { ok: false }
 `;
 }
 

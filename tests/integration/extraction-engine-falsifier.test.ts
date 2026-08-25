@@ -516,22 +516,27 @@ function pdfNonceFromDocumentName(document: Record<string, unknown>): string | u
 
 function extractionSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level DOCX/PDF extraction falsifier.
-
-initial: await_upload
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  document_upload: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  ${DOCUMENT_ROOT_PATH}: object
+  ${DOCUMENT_REFS_PATH}: array
+  ${DOCUMENT_REFS_PATH}.*: object
+  ${DOCUMENT_REFS_PATH}.*.fileId: string
+  ${DOCUMENT_REFS_PATH}.*.name: string
+  ${SOURCE_PATH}: object
+  ${SOURCE_PATH}.status: string
+  ${SOURCE_PATH}.full_text: string
+  ${SOURCE_PATH}.char_count: number
+  ${SOURCE_PATH}.file_count: number
+  ${SOURCE_PATH}.files_json: string
+  ${SOURCE_PATH}.reason: string
+  ${SOURCE_PATH}.extraction_kind: string
+  ${SOURCE_PATH}.capability_gaps_json: string
 
 modes:
   await_upload:
@@ -544,8 +549,44 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
+initial: await_upload
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   ingest_documents: complete
+
+channels:
+  document_upload: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+ingestion:
+  document_upload:
+    - ${DOCUMENT_ROOT_PATH}
+
+action_map:
+  ingest_documents:
+    description: "Read injected request.documents and extract text fail-closed."
+    mutations: []
+    channel: widget_output
+    result_path: ${SOURCE_PATH}
+
+preamble: |
+  Route-level DOCX/PDF extraction falsifier.
+
+prompts:
+  await_upload: "After document_upload arrives, call ingest_documents with no arguments."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   await_upload:
@@ -578,43 +619,6 @@ projection:
       - ${SOURCE_PATH}.extraction_kind
       - ${SOURCE_PATH}.capability_gaps_json
     exclude: []
-
-prompts:
-  await_upload: "After document_upload arrives, call ingest_documents with no arguments."
-  complete: "Terminal."
-
-ingestion:
-  document_upload:
-    - ${DOCUMENT_ROOT_PATH}
-
-action_map:
-  ingest_documents:
-    description: "Read injected request.documents and extract text fail-closed."
-    mutations: []
-    channel: widget_output
-    result_path: ${SOURCE_PATH}
-
-schema:
-  ${DOCUMENT_ROOT_PATH}: object
-  ${DOCUMENT_REFS_PATH}: array
-  ${DOCUMENT_REFS_PATH}.*: object
-  ${DOCUMENT_REFS_PATH}.*.fileId: string
-  ${DOCUMENT_REFS_PATH}.*.name: string
-  ${SOURCE_PATH}: object
-  ${SOURCE_PATH}.status: string
-  ${SOURCE_PATH}.full_text: string
-  ${SOURCE_PATH}.char_count: number
-  ${SOURCE_PATH}.file_count: number
-  ${SOURCE_PATH}.files_json: string
-  ${SOURCE_PATH}.reason: string
-  ${SOURCE_PATH}.extraction_kind: string
-  ${SOURCE_PATH}.capability_gaps_json: string
-
-repair_bound: 2
-
-fallback:
-  channel: widget_output
-  payload: { ok: false }
 `;
 }
 
