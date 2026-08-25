@@ -255,23 +255,19 @@ function createConventionEntry(programsRoot: string): ProgramEntry {
 
 function renderSpecYaml(bodyFrom: string): string {
   return `name: "${PROGRAM}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Hermetic #992 render-capability docx falsifier.
-
-initial: bootstrap
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  stage_output: { direction: Out, sync: Sync }
-  render_out: { direction: Out, sync: Sync, capability: render }
+pure: true
+
+schema:
+  inputs.user_text: string
+  memo: object
+  memo.heading: string
+  memo.body: string
+  export: object
+  export.artifact: object
 
 modes:
   bootstrap:
@@ -290,25 +286,26 @@ modes:
     vocabulary: []
     channels: [stage_output]
 
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   author_memo: render_export
   render_document: complete
 
-projection:
-  bootstrap:
-    include: [inputs.user_text]
-    exclude: []
-  render_export:
-    include: [memo.heading, memo.body]
-    exclude: []
-  complete:
-    include: [memo.heading, memo.body, export.artifact]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  stage_output: { direction: Out, sync: Sync }
+  render_out: { direction: Out, sync: Sync, capability: render }
 
-prompts:
-  bootstrap: "Call author_memo with the memo heading and body."
-  render_export: "Call render_document to render the declarative docx."
-  complete: "Terminal."
+fallback:
+  channel: stage_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -326,13 +323,26 @@ action_map:
     channel: render_out
     result_path: export
 
-schema:
-  inputs.user_text: string
-  memo: object
-  memo.heading: string
-  memo.body: string
-  export: object
-  export.artifact: object
+preamble: |
+  Hermetic #992 render-capability docx falsifier.
+
+prompts:
+  bootstrap: "Call author_memo with the memo heading and body."
+  render_export: "Call render_document to render the declarative docx."
+  complete: "Terminal."
+
+repair_bound: 2
+
+projection:
+  bootstrap:
+    include: [inputs.user_text]
+    exclude: []
+  render_export:
+    include: [memo.heading, memo.body]
+    exclude: []
+  complete:
+    include: [memo.heading, memo.body, export.artifact]
+    exclude: []
 
 render:
   artifacts:
@@ -344,12 +354,6 @@ render:
           heading: { from: memo.heading }
           nodes:
             - { kind: paragraph, text: { from: ${bodyFrom} } }
-
-repair_bound: 2
-
-fallback:
-  channel: stage_output
-  payload: { ok: false }
 `;
 }
 

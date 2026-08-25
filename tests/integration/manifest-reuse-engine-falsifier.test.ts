@@ -481,22 +481,23 @@ const childHandlers: Record<string, ToolHandler> = {
 
 function childSpecYaml(specName: string): string {
   return `name: "${specName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Hand-authored delegation stub used by the manifest reuse falsifier.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.request.topic: string
+  inputs.domain_context: object
+  inputs.domain_context.source_program: string
+  inputs.domain_context.source_session_id: string
+  inputs.domain_context.target_program: string
+  child.received: boolean
+  work.done: boolean
+  work.summary: string
 
 modes:
   receive:
@@ -515,25 +516,25 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
 
-projection:
-  receive:
-    include: [inputs.user_text, inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]
-    exclude: []
-  work:
-    include: [inputs.request, inputs.request.topic, child.received, work.summary]
-    exclude: []
-  complete:
-    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
 
-prompts:
-  receive: "Accept the delegated legal research request."
-  work: "Finish the delegated legal research request."
-  complete: "Terminal."
+fallback:
+  channel: child_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -552,23 +553,26 @@ action_map:
       - { op: MSet, path: work.summary, from_arg: summary }
     channel: child_output
 
-schema:
-  inputs.user_text: string
-  inputs.request: object
-  inputs.request.topic: string
-  inputs.domain_context: object
-  inputs.domain_context.source_program: string
-  inputs.domain_context.source_session_id: string
-  inputs.domain_context.target_program: string
-  child.received: boolean
-  work.done: boolean
-  work.summary: string
+preamble: |
+  Hand-authored delegation stub used by the manifest reuse falsifier.
+
+prompts:
+  receive: "Accept the delegated legal research request."
+  work: "Finish the delegated legal research request."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: child_output
-  payload: { ok: false }
+projection:
+  receive:
+    include: [inputs.user_text, inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]
+    exclude: []
+  work:
+    include: [inputs.request, inputs.request.topic, child.received, work.summary]
+    exclude: []
+  complete:
+    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary]
+    exclude: []
 `;
 }
 
@@ -587,22 +591,19 @@ function createDocumentIntakeEchoChildEntry(tempDir: string, specName: string): 
 
 function documentIntakeEchoChildSpecYaml(specName: string): string {
   return `name: "${specName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Hand-authored review child that proves document_intake enrichment reached state.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.document_intake: object
+  inputs.document_intake.work_product: object
+  inputs.document_intake.work_product.summary: string
+  child.received: boolean
+  work.done: boolean
 
 modes:
   receive:
@@ -621,25 +622,25 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
 
-projection:
-  receive:
-    include: [inputs.document_intake, inputs.document_intake.work_product, inputs.document_intake.work_product.summary]
-    exclude: []
-  work:
-    include: [inputs.document_intake.work_product.summary, child.received]
-    exclude: []
-  complete:
-    include: [inputs.document_intake.work_product.summary, child.received, work.done]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
 
-prompts:
-  receive: "Accept the delegated review request."
-  work: "Finish the delegated review request."
-  complete: "Terminal."
+fallback:
+  channel: child_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -657,19 +658,26 @@ action_map:
       - { op: MSet, path: work.done, value: true }
     channel: child_output
 
-schema:
-  inputs.user_text: string
-  inputs.document_intake: object
-  inputs.document_intake.work_product: object
-  inputs.document_intake.work_product.summary: string
-  child.received: boolean
-  work.done: boolean
+preamble: |
+  Hand-authored review child that proves document_intake enrichment reached state.
+
+prompts:
+  receive: "Accept the delegated review request."
+  work: "Finish the delegated review request."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: child_output
-  payload: { ok: false }
+projection:
+  receive:
+    include: [inputs.document_intake, inputs.document_intake.work_product, inputs.document_intake.work_product.summary]
+    exclude: []
+  work:
+    include: [inputs.document_intake.work_product.summary, child.received]
+    exclude: []
+  complete:
+    include: [inputs.document_intake.work_product.summary, child.received, work.done]
+    exclude: []
 `;
 }
 

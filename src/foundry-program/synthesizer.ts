@@ -9462,22 +9462,21 @@ function renderDocumentUploadReuseDelegationSmokeTestSource(
   const base = delegationStateBase(child);
   const delegationResultPath = child.result_path;
   const childSpecYaml = `name: ${JSON.stringify(childTargetSpec)}
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Inline document-ingest manifest-reuse smoke child for ${name}.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.domain_context: object
+  child.received: boolean
+  work.done: boolean
+  work.summary: string
+  work.structured_data: object
+  work.seeded_topic: string
 
 modes:
   receive:
@@ -9496,25 +9495,25 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
 
-projection:
-  receive:
-    include: [inputs.request, inputs.domain_context]
-    exclude: []
-  work:
-    include: [inputs.request, child.received, work.summary, work.structured_data]
-    exclude: []
-  complete:
-    include: [inputs.request, child.received, work.done, work.summary, work.structured_data]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
 
-prompts:
-  receive: "Accept the delegated document-ingest request."
-  work: "Finish document ingest and return summary plus sections."
-  complete: "Terminal."
+fallback:
+  channel: child_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -9535,21 +9534,26 @@ action_map:
       - { op: MSet, path: work.seeded_topic, from_arg: seeded_topic }
     channel: child_output
 
-schema:
-  inputs.user_text: string
-  inputs.request: object
-  inputs.domain_context: object
-  child.received: boolean
-  work.done: boolean
-  work.summary: string
-  work.structured_data: object
-  work.seeded_topic: string
+preamble: |
+  Inline document-ingest manifest-reuse smoke child for ${name}.
+
+prompts:
+  receive: "Accept the delegated document-ingest request."
+  work: "Finish document ingest and return summary plus sections."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: child_output
-  payload: { ok: false }
+projection:
+  receive:
+    include: [inputs.request, inputs.domain_context]
+    exclude: []
+  work:
+    include: [inputs.request, child.received, work.summary, work.structured_data]
+    exclude: []
+  complete:
+    include: [inputs.request, child.received, work.done, work.summary, work.structured_data]
+    exclude: []
 `;
   return `import { File } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
@@ -11379,22 +11383,24 @@ function renderReuseDelegationSmokeTestSource(
     ? `{ request: { topic: 'force-degrade' } }`
     : `{ request: { intent: 'force-degrade' } }`;
   const childSpecYaml = `name: ${JSON.stringify(childTargetSpec)}
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Inline manifest-reuse smoke child for ${name}.
-
-initial: receive
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  child_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.request.topic: string
+  inputs.domain_context: object
+  inputs.domain_context.source_program: string
+  inputs.domain_context.source_session_id: string
+  inputs.domain_context.target_program: string
+  child.received: boolean
+  work.done: boolean
+  work.summary: string
+  work.seeded_topic: string
 
 modes:
   receive:
@@ -11413,25 +11419,25 @@ modes:
     vocabulary: []
     channels: [child_output]
 
+initial: receive
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   accept_request: work
   finish_work: complete
 
-projection:
-  receive:
-    include: [inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]
-    exclude: []
-  work:
-    include: [inputs.request, inputs.request.topic, child.received, work.summary, work.seeded_topic]
-    exclude: []
-  complete:
-    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary, work.seeded_topic]
-    exclude: []
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
 
-prompts:
-  receive: "Accept the delegated manifest-reuse request."
-  work: "Finish the delegated manifest-reuse request and echo the seeded topic."
-  complete: "Terminal."
+fallback:
+  channel: child_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -11451,24 +11457,26 @@ action_map:
       - { op: MSet, path: work.seeded_topic, from_arg: seeded_topic }
     channel: child_output
 
-schema:
-  inputs.user_text: string
-  inputs.request: object
-  inputs.request.topic: string
-  inputs.domain_context: object
-  inputs.domain_context.source_program: string
-  inputs.domain_context.source_session_id: string
-  inputs.domain_context.target_program: string
-  child.received: boolean
-  work.done: boolean
-  work.summary: string
-  work.seeded_topic: string
+preamble: |
+  Inline manifest-reuse smoke child for ${name}.
+
+prompts:
+  receive: "Accept the delegated manifest-reuse request."
+  work: "Finish the delegated manifest-reuse request and echo the seeded topic."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: child_output
-  payload: { ok: false }
+projection:
+  receive:
+    include: [inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]
+    exclude: []
+  work:
+    include: [inputs.request, inputs.request.topic, child.received, work.summary, work.seeded_topic]
+    exclude: []
+  complete:
+    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary, work.seeded_topic]
+    exclude: []
 `;
   return `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

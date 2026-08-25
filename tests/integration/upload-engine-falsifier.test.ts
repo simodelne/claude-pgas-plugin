@@ -627,24 +627,35 @@ function sourceStatusFromSnapshot(snapshot: Parameters<ReactionHandler>[0]): str
 
 function requiredSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Route-level document upload falsifier.
-
-initial: bootstrap
-terminal: [complete]
 
 features:
   - base
   - reactions
 
-channels:
-  user_text: { direction: In, sync: Async }
-  document_upload: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  ${DOCUMENT_ROOT_PATH}: object
+  ${DOCUMENT_REFS_PATH}: array
+  ${DOCUMENT_REFS_PATH}.*: object
+  ${DOCUMENT_REFS_PATH}.*.fileId: string
+  ${DOCUMENT_REFS_PATH}.*.name: string
+  upload.ready: boolean
+  ${SOURCE_PATH}: object
+  ${SOURCE_PATH}.status: string
+  ${SOURCE_PATH}.full_text: string
+  ${SOURCE_PATH}.char_count: number
+  ${SOURCE_PATH}.file_count: number
+  ${SOURCE_PATH}.files_json: string
+  work.source.observed_status: string
+  ${SOURCE_READY_PATH}: boolean
+
+reactions:
+  settle_source:
+    event: AfterRound
+    watch: []
+    write_scope: [${SOURCE_READY_PATH}, work.source.observed_status]
 
 modes:
   bootstrap:
@@ -663,9 +674,55 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
+initial: bootstrap
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
 proceeds_to:
   enter_upload: await_upload
   ingest_documents: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  document_upload: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+  document_upload:
+    - ${DOCUMENT_ROOT_PATH}
+    - ${DOCUMENT_REFS_PATH}
+
+action_map:
+  enter_upload:
+    description: "Enter the upload intake mode."
+    mutations:
+      - { op: MSet, path: upload.ready, value: true }
+    channel: widget_output
+  ingest_documents:
+    description: "Read injected request.documents and write extracted text."
+    mutations: []
+    channel: widget_output
+    result_path: ${SOURCE_PATH}
+
+preamble: |
+  Route-level document upload falsifier.
+
+prompts:
+  bootstrap: "Enter upload intake."
+  await_upload: "After document_upload arrives, call ingest_documents with no arguments."
+  complete: "Terminal."
+
+repair_bound: 2
 
 projection:
   bootstrap:
@@ -698,79 +755,20 @@ projection:
       - ${SOURCE_PATH}.file_count
       - ${SOURCE_READY_PATH}
     exclude: []
-
-prompts:
-  bootstrap: "Enter upload intake."
-  await_upload: "After document_upload arrives, call ingest_documents with no arguments."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-  document_upload:
-    - ${DOCUMENT_ROOT_PATH}
-    - ${DOCUMENT_REFS_PATH}
-
-action_map:
-  enter_upload:
-    description: "Enter the upload intake mode."
-    mutations:
-      - { op: MSet, path: upload.ready, value: true }
-    channel: widget_output
-  ingest_documents:
-    description: "Read injected request.documents and write extracted text."
-    mutations: []
-    channel: widget_output
-    result_path: ${SOURCE_PATH}
-schema:
-  inputs.user_text: string
-  ${DOCUMENT_ROOT_PATH}: object
-  ${DOCUMENT_REFS_PATH}: array
-  ${DOCUMENT_REFS_PATH}.*: object
-  ${DOCUMENT_REFS_PATH}.*.fileId: string
-  ${DOCUMENT_REFS_PATH}.*.name: string
-  upload.ready: boolean
-  ${SOURCE_PATH}: object
-  ${SOURCE_PATH}.status: string
-  ${SOURCE_PATH}.full_text: string
-  ${SOURCE_PATH}.char_count: number
-  ${SOURCE_PATH}.file_count: number
-  ${SOURCE_PATH}.files_json: string
-  work.source.observed_status: string
-  ${SOURCE_READY_PATH}: boolean
-
-reactions:
-  settle_source:
-    event: AfterRound
-    watch: []
-    write_scope: [${SOURCE_READY_PATH}, work.source.observed_status]
-
-repair_bound: 2
-
-fallback:
-  channel: widget_output
-  payload: { ok: false }
 `;
 }
 
 function noChannelSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Program that intentionally does not declare document_upload.
-
-initial: idle
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  user_text: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  inputs.user_text: string
+  noop.done: boolean
 
 modes:
   idle:
@@ -783,17 +781,21 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
-projection:
-  idle:
-    include: [inputs.user_text]
-    exclude: []
-  complete:
-    include: []
-    exclude: []
+initial: idle
 
-prompts:
-  idle: "Idle."
-  complete: "Terminal."
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
 
 ingestion:
   user_text:
@@ -806,94 +808,33 @@ action_map:
       - { op: MSet, path: noop.done, value: true }
     channel: widget_output
 
-schema:
-  inputs.user_text: string
-  noop.done: boolean
+preamble: |
+  Program that intentionally does not declare document_upload.
+
+prompts:
+  idle: "Idle."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: widget_output
-  payload: { ok: false }
+projection:
+  idle:
+    include: [inputs.user_text]
+    exclude: []
+  complete:
+    include: []
+    exclude: []
 `;
 }
 
 function optionalSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Optional document-upload skip path falsifier.
-
-initial: await_upload
-terminal: [complete]
 
 features:
   - base
   - reactions
 
-channels:
-  document_upload: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
-
-modes:
-  await_upload:
-    vocabulary: [complete_skip]
-    channels: [document_upload, widget_output]
-    transitions:
-      - target: complete
-  complete:
-    vocabulary: []
-    channels: [widget_output]
-
-projection:
-  await_upload:
-    include:
-      - ${DOCUMENT_ROOT_PATH}
-      - ${DOCUMENT_STATUS_PATH}
-      - inputs.document_intake.completed
-      - inputs.document_intake.documents_requested
-      - inputs.document_intake.source
-      - inputs.document_intake.normalized_message
-      - ${SOURCE_PATH}
-      - ${SOURCE_PATH}.status
-      - ${SOURCE_READY_PATH}
-    exclude: []
-  complete:
-    include:
-      - ${DOCUMENT_ROOT_PATH}
-      - ${DOCUMENT_STATUS_PATH}
-      - inputs.document_intake.completed
-      - inputs.document_intake.documents_requested
-      - inputs.document_intake.source
-      - inputs.document_intake.normalized_message
-      - ${SOURCE_PATH}
-      - ${SOURCE_PATH}.status
-      - ${SOURCE_READY_PATH}
-    exclude: []
-
-prompts:
-  await_upload: "If the user skipped documents, acknowledge the skip."
-  complete: "Terminal."
-
-ingestion:
-  document_upload:
-    - ${DOCUMENT_STATUS_PATH}
-    - inputs.document_intake.completed
-    - inputs.document_intake.documents_requested
-    - inputs.document_intake.source
-    - inputs.document_intake.normalized_message
-
-action_map:
-  complete_skip:
-    description: "Acknowledge the optional no-documents path."
-    mutations: []
-    channel: widget_output
-
-proceeds_to:
-  complete_skip: complete
+pure: true
 
 schema:
   ${DOCUMENT_ROOT_PATH}: object
@@ -912,95 +853,94 @@ reactions:
     watch: [${DOCUMENT_STATUS_PATH}]
     write_scope: [${SOURCE_PATH}.status, ${SOURCE_READY_PATH}]
 
-repair_bound: 2
+modes:
+  await_upload:
+    vocabulary: [complete_skip]
+    channels: [document_upload, widget_output]
+    transitions:
+      - target: complete
+  complete:
+    vocabulary: []
+    channels: [widget_output]
+
+initial: await_upload
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
+proceeds_to:
+  complete_skip: complete
+
+channels:
+  document_upload: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
 
 fallback:
   channel: widget_output
   payload: { ok: false }
+
+ingestion:
+  document_upload:
+    - ${DOCUMENT_STATUS_PATH}
+    - inputs.document_intake.completed
+    - inputs.document_intake.documents_requested
+    - inputs.document_intake.source
+    - inputs.document_intake.normalized_message
+
+action_map:
+  complete_skip:
+    description: "Acknowledge the optional no-documents path."
+    mutations: []
+    channel: widget_output
+
+preamble: |
+  Optional document-upload skip path falsifier.
+
+prompts:
+  await_upload: "If the user skipped documents, acknowledge the skip."
+  complete: "Terminal."
+
+repair_bound: 2
+
+projection:
+  await_upload:
+    include:
+      - ${DOCUMENT_ROOT_PATH}
+      - ${DOCUMENT_STATUS_PATH}
+      - inputs.document_intake.completed
+      - inputs.document_intake.documents_requested
+      - inputs.document_intake.source
+      - inputs.document_intake.normalized_message
+      - ${SOURCE_PATH}
+      - ${SOURCE_PATH}.status
+      - ${SOURCE_READY_PATH}
+    exclude: []
+  complete:
+    include:
+      - ${DOCUMENT_ROOT_PATH}
+      - ${DOCUMENT_STATUS_PATH}
+      - inputs.document_intake.completed
+      - inputs.document_intake.documents_requested
+      - inputs.document_intake.source
+      - inputs.document_intake.normalized_message
+      - ${SOURCE_PATH}
+      - ${SOURCE_PATH}.status
+      - ${SOURCE_READY_PATH}
+    exclude: []
 `;
 }
 
 function parkSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Document-upload await-user-decision falsifier.
-
-initial: request
-terminal: [complete]
 
 features:
   - base
   - reactions
 
-channels:
-  user_text: { direction: In, sync: Async }
-  document_upload: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
-
-modes:
-  request:
-    vocabulary: [request_documents, ingest_documents]
-    channels: [user_text, document_upload, widget_output]
-    transitions:
-      - target: complete
-        when: { kind: FieldTruthy, path: ${SOURCE_PATH} }
-  complete:
-    vocabulary: []
-    channels: [widget_output]
-
-projection:
-  request:
-    include:
-      - inputs.user_text
-      - request.issued
-      - ${DOCUMENT_ROOT_PATH}
-      - ${DOCUMENT_REFS_PATH}
-      - ${SOURCE_PATH}
-      - ${SOURCE_PATH}.status
-      - ${SOURCE_PATH}.full_text
-      - ${SOURCE_READY_PATH}
-    exclude: []
-  complete:
-    include:
-      - request.issued
-      - ${DOCUMENT_ROOT_PATH}
-      - ${DOCUMENT_REFS_PATH}
-      - ${SOURCE_PATH}
-      - ${SOURCE_PATH}.status
-      - ${SOURCE_PATH}.full_text
-      - ${SOURCE_READY_PATH}
-    exclude: []
-
-prompts:
-  request: "First request documents. After document_upload arrives, call ingest_documents."
-  complete: "Terminal."
-
-ingestion:
-  user_text:
-    - inputs.user_text
-  document_upload:
-    - ${DOCUMENT_ROOT_PATH}
-    - ${DOCUMENT_REFS_PATH}
-
-action_map:
-  request_documents:
-    description: "Ask the user to upload a document and park until document_upload."
-    mutations:
-      - { op: MSet, path: request.issued, value: true }
-    channel: widget_output
-    awaits_user_decision: { channel: document_upload, intent: request_file_upload }
-  ingest_documents:
-    description: "Read injected request.documents and write extracted text."
-    mutations: []
-    channel: widget_output
-    result_path: ${SOURCE_PATH}
-
-proceeds_to:
-  ingest_documents: complete
+pure: true
 
 schema:
   inputs.user_text: string
@@ -1025,32 +965,112 @@ reactions:
     watch: []
     write_scope: [${SOURCE_READY_PATH}, work.source.observed_status]
 
-repair_bound: 2
+modes:
+  request:
+    vocabulary: [request_documents, ingest_documents]
+    channels: [user_text, document_upload, widget_output]
+    transitions:
+      - target: complete
+        when: { kind: FieldTruthy, path: ${SOURCE_PATH} }
+  complete:
+    vocabulary: []
+    channels: [widget_output]
+
+initial: request
+
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
+proceeds_to:
+  ingest_documents: complete
+
+channels:
+  user_text: { direction: In, sync: Async }
+  document_upload: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
 
 fallback:
   channel: widget_output
   payload: { ok: false }
+
+ingestion:
+  user_text:
+    - inputs.user_text
+  document_upload:
+    - ${DOCUMENT_ROOT_PATH}
+    - ${DOCUMENT_REFS_PATH}
+
+action_map:
+  request_documents:
+    description: "Ask the user to upload a document and park until document_upload."
+    mutations:
+      - { op: MSet, path: request.issued, value: true }
+    channel: widget_output
+    awaits_user_decision: { channel: document_upload, intent: request_file_upload }
+  ingest_documents:
+    description: "Read injected request.documents and write extracted text."
+    mutations: []
+    channel: widget_output
+    result_path: ${SOURCE_PATH}
+
+preamble: |
+  Document-upload await-user-decision falsifier.
+
+prompts:
+  request: "First request documents. After document_upload arrives, call ingest_documents."
+  complete: "Terminal."
+
+repair_bound: 2
+
+projection:
+  request:
+    include:
+      - inputs.user_text
+      - request.issued
+      - ${DOCUMENT_ROOT_PATH}
+      - ${DOCUMENT_REFS_PATH}
+      - ${SOURCE_PATH}
+      - ${SOURCE_PATH}.status
+      - ${SOURCE_PATH}.full_text
+      - ${SOURCE_READY_PATH}
+    exclude: []
+  complete:
+    include:
+      - request.issued
+      - ${DOCUMENT_ROOT_PATH}
+      - ${DOCUMENT_REFS_PATH}
+      - ${SOURCE_PATH}
+      - ${SOURCE_PATH}.status
+      - ${SOURCE_PATH}.full_text
+      - ${SOURCE_READY_PATH}
+    exclude: []
 `;
 }
 
 function reuploadSpecYaml(programName: string): string {
   return `name: "${programName}"
-termination: BoundedSession
-topology: CyclicTopology
-pure: true
-
-preamble: |
-  Informative document re-upload falsifier.
-
-initial: collect
-terminal: [complete]
 
 features:
   - base
 
-channels:
-  document_upload: { direction: In, sync: Async }
-  widget_output: { direction: Out, sync: Sync }
+pure: true
+
+schema:
+  ${DOCUMENT_ROOT_PATH}: object
+  ${DOCUMENT_REFS_PATH}: array
+  ${DOCUMENT_REFS_PATH}.*: object
+  ${DOCUMENT_REFS_PATH}.*.fileId: string
+  ${DOCUMENT_REFS_PATH}.*.name: string
+  ${SOURCE_PATH}: object
+  ${SOURCE_PATH}.status: string
+  ${SOURCE_PATH}.full_text: string
+  ${SOURCE_PATH}.char_count: number
+  ${SOURCE_PATH}.file_count: number
+  ${SOURCE_PATH}.files_json: string
+  reupload.done: boolean
 
 modes:
   collect:
@@ -1063,26 +1083,21 @@ modes:
     vocabulary: []
     channels: [widget_output]
 
-projection:
-  collect:
-    include:
-      - ${DOCUMENT_ROOT_PATH}
-      - ${DOCUMENT_REFS_PATH}
-      - ${DOCUMENT_REFS_PATH}.0
-      - ${DOCUMENT_REFS_PATH}.0.fileId
-      - ${SOURCE_PATH}
-      - ${SOURCE_PATH}.status
-      - ${SOURCE_PATH}.full_text
-      - ${SOURCE_PATH}.char_count
-      - ${SOURCE_PATH}.file_count
-    exclude: []
-  complete:
-    include: []
-    exclude: []
+initial: collect
 
-prompts:
-  collect: "On every document_upload trigger, call ingest_documents with no arguments."
-  complete: "Terminal."
+terminal: [complete]
+
+topology: CyclicTopology
+
+termination: BoundedSession
+
+channels:
+  document_upload: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Sync }
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
 
 ingestion:
   document_upload:
@@ -1101,25 +1116,31 @@ action_map:
       - { op: MSet, path: reupload.done, value: true }
     channel: widget_output
 
-schema:
-  ${DOCUMENT_ROOT_PATH}: object
-  ${DOCUMENT_REFS_PATH}: array
-  ${DOCUMENT_REFS_PATH}.*: object
-  ${DOCUMENT_REFS_PATH}.*.fileId: string
-  ${DOCUMENT_REFS_PATH}.*.name: string
-  ${SOURCE_PATH}: object
-  ${SOURCE_PATH}.status: string
-  ${SOURCE_PATH}.full_text: string
-  ${SOURCE_PATH}.char_count: number
-  ${SOURCE_PATH}.file_count: number
-  ${SOURCE_PATH}.files_json: string
-  reupload.done: boolean
+preamble: |
+  Informative document re-upload falsifier.
+
+prompts:
+  collect: "On every document_upload trigger, call ingest_documents with no arguments."
+  complete: "Terminal."
 
 repair_bound: 2
 
-fallback:
-  channel: widget_output
-  payload: { ok: false }
+projection:
+  collect:
+    include:
+      - ${DOCUMENT_ROOT_PATH}
+      - ${DOCUMENT_REFS_PATH}
+      - ${DOCUMENT_REFS_PATH}.0
+      - ${DOCUMENT_REFS_PATH}.0.fileId
+      - ${SOURCE_PATH}
+      - ${SOURCE_PATH}.status
+      - ${SOURCE_PATH}.full_text
+      - ${SOURCE_PATH}.char_count
+      - ${SOURCE_PATH}.file_count
+    exclude: []
+  complete:
+    include: []
+    exclude: []
 `;
 }
 

@@ -19,7 +19,7 @@
     "pgas-new": "./bin/pgas-new"
   },
   "dependencies": {
-    "@simodelne/pgas-server": "^5.7.1"
+    "@simodelne/pgas-server": "^6.0.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
