@@ -289,10 +289,17 @@ describe('engine-primitive-registry', () => {
     });
     expect(awarenessByConstruct.get('EngineCapability.surrogate_target_response')?.note).toContain('#999');
     // #992 render capability + engine-native ArtifactStore: still adopt_backlog.
-    // pgas#1045 (RenderSectionList) SHIPPED in 5.7.1 and closed the GRAMMAR gap —
-    // proven by tests/integration/render-section-list-falsifier.test.ts — but
-    // emission stays blocked on the author-less DISPATCH gap. The note must keep
-    // BOTH curator-request references so it cannot rot back to the old story.
+    // pgas#1045 (RenderSectionList) SHIPPED in 5.7.1 and closed the GRAMMAR gap;
+    // pgas#1054 (IntegrationHook.payload) SHIPPED in 6.0.0 and closed the
+    // author-less DISPATCH gap; pgas#1086 (hook dispatch SCOPE) was CLOSED with
+    // NO engine change after an audit found the behaviour expressible with
+    // shipped grammar. All three are proven by
+    // tests/integration/render-section-list-falsifier.test.ts (S-1/K-1/K-2, P-1,
+    // E-1/E-2, G-2/G-2a/G-2b) and, for the real synthesized artifact, by
+    // tests/integration/export-decision-only-autoadvance-falsifier.test.ts.
+    // The entry stays adopt_backlog because the remaining work is FOUNDRY-side
+    // (deleting the docx shape-mapping TS), not an engine dependency. The note
+    // must keep ALL THREE curator-request references so it cannot rot.
     expect(awarenessByConstruct.get('EngineCapability.render')).toMatchObject({
       status: 'adopt_backlog',
     });
@@ -301,7 +308,20 @@ describe('engine-primitive-registry', () => {
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain(
       '2026-08-24-declarative-render-dispatch-author-less-stage.md',
     );
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain(
+      '2026-08-25-integration-hook-transition-scoping.md',
+    );
     expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('GRAMMAR GAP CLOSED');
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('#1054');
+    // #1086 was CLOSED without an engine change: the dispatch-scope gap is
+    // expressible with shipped grammar (AfterMutation on the one-shot
+    // <stage>.render_pending write). The note must say so and must NOT rot back
+    // to claiming an engine blocker remains.
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('NO ENGINE BLOCKER REMAINS');
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain(
+      'RESOLVED WITH EXISTING GRAMMAR',
+    );
+    expect(awarenessByConstruct.get('EngineCapability.render')?.note).toContain('#1086');
 
     // v5.6.0 alignment facts carried on already-emitted constructs. #993 changed
     // the keyed record_array emission (element-typed repeatable append); #976/#1014

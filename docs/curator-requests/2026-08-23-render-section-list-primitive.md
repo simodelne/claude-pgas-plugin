@@ -36,14 +36,22 @@ one throws *"nested section_list is not representable in the generic provider
 request"*); `from` must resolve to an authored array of objects; refs inside
 `template` are item-relative.
 
-**The emission migration did NOT unblock with this.** A second, narrower gap remains:
-the foundry's export stage is an author-less `decision_only` mode, and there is no way
+**The emission migration did NOT unblock with this.** A second, narrower gap remained:
+the foundry's export stage is an author-less `decision_only` mode, and there was no way
 for such a stage to dispatch the `capability: render` `{artifact_id}` selector. Filed
 separately as
-`docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md`
-(guard: `G-1` in the same falsifier). Until that ships the foundry keeps emitting
-`renderDocxExportStageBody` / `approvedContentSectionsFromDomain`, and
-`EngineCapability.render` stays `adopt_backlog`.
+`docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md`.
+
+**Update (2026-08-25, engine 6.0.0):** that second gap is now HALF-closed — pgas#1054
+shipped a static `IntegrationHook.payload`, and an author-less `decision_only` stage
+DOES now mint a first-class `artifactType:"render"` docx (`G-1` was honestly inverted
+into the positive `P-1`). Emission is still blocked, on a THIRD and narrower gap: a
+hook can declare WHAT to dispatch but not WHEN, so an unscoped `OnTransition` hook
+mints one artifact per transition (`G-2`). Filed as
+`docs/curator-requests/2026-08-25-integration-hook-transition-scoping.md`. Until that
+ships the foundry keeps emitting `renderDocxExportStageBody` /
+`approvedContentSectionsFromDomain`, and `EngineCapability.render` stays
+`adopt_backlog`.
 
 ---
 
@@ -139,12 +147,15 @@ body for this class, and `EngineCapability.render` (`#992`) stays **ADOPT-BACKLO
 (PARTIAL)** — the PDF-report `RenderProfile` is emitted but the per-clause class
 cannot migrate to declarative `render:`.
 
-> **Post-resolution note (2026-08-24):** the primitive shipped, and the falsifier
-> above was built and is green — but the foundry still emits
-> `approvedContentSectionsFromDomain`, because the author-less DISPATCH gap
+> **Post-resolution note (2026-08-24, updated 2026-08-25):** the primitive shipped, and
+> the falsifier above was built and is green — but the foundry still emits
+> `approvedContentSectionsFromDomain`. The author-less DISPATCH gap
 > (`docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md`)
-> now blocks emission. `EngineCapability.render` therefore remains `adopt_backlog`
-> for a DIFFERENT, narrower reason than the one described above.
+> is now HALF-closed by pgas#1054 in 6.0.0; what blocks emission today is the residual
+> hook-SCOPE gap
+> (`docs/curator-requests/2026-08-25-integration-hook-transition-scoping.md`).
+> `EngineCapability.render` therefore remains `adopt_backlog` for a DIFFERENT, narrower
+> reason than the one described above.
 
 Cross-linked from the `EngineCapability.render` awareness entry in
 `src/foundry-program/engine-primitive-registry.ts` and the

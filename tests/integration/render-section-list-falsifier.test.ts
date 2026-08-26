@@ -40,24 +40,41 @@ import { createDeclarativeRenderProvider } from './fixtures/render-provider.gold
 //   K-2  an EMPTY approved bucket ⇒ ZERO sections and NO fabricated
 //        scaffold/placeholder content in the bytes.
 //
-// G-1 pins the REMAINING BLOCKER. The foundry's export stage is an AUTHOR-LESS
-// `decision_only` mode (pgas-new #253) that fires an `OnTransition` integration
-// hook — deliberately no LLM round. But `capability: render`'s declarative
-// projection only fires for an EffectAction payload whose OWN keys are exactly
-// the `{artifact_id}` selector, and the engine's hook envelope is
-// `{action, event, domain}` — so the projection is skipped and the RAW envelope
-// reaches the RenderProvider. G-1 pins that observed failure. See
-// docs/curator-requests/2026-08-24-declarative-render-dispatch-author-less-stage.md.
-// When the engine ships a declared hook payload G-1 FAILS — that is the signal to
-// complete the emission migration and delete the shape-mapping TS.
+// AUTHOR-LESS DISPATCH, engine 6.0.0 — half the blocker is GONE, half remains.
+//
+// P-1 (was G-1, now INVERTED into a positive assertion). pgas#1054 shipped
+// `IntegrationHook.payload` in 6.0.0, so an AUTHOR-LESS `decision_only` stage
+// (pgas-new #253 — the author is never called for the export stage) CAN now
+// dispatch `capability: render`: the engine's `dispatchHook` builds
+// `{action, event, domain, payload}` and `createServerOutputAdapter.dispatch`
+// forwards ONLY `envelope.payload` for a non-EffectAction that carries one, so
+// the exact `{artifact_id}` selector reaches `renderCapability` and a first-class
+// `artifactType:"render"` docx IS minted with the approved prose in its bytes.
+// P-1 asserts that, so the old failure story cannot rot back in.
+//
+// G-2 pins the REMAINING BLOCKER: an `IntegrationHook` has no transition/mode
+// scope, and `runOnTransitionHooks` fires the whole hook batch on EVERY mode
+// change. The SAME declaration therefore mints ONE ARTIFACT PER TRANSITION,
+// including content-INCOMPLETE ones rendered before the deliverable collection
+// exists — so "exactly one deliverable at export time" is still not expressible.
+// The two candidate `AfterMutation` scopings are also dead (a derived-path target
+// never fires; the collection append path fires per item, not per deliverable).
+// See docs/curator-requests/2026-08-25-integration-hook-transition-scoping.md.
+// When the engine ships hook scoping G-2 FAILS — that is the signal to complete
+// the emission migration and delete the shape-mapping TS.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PROGRAM = 'render-section-list-falsifier';
 const ARTIFACT_ID = 'opinion_docx';
 const APPROVED_BUCKET = 'summary.approve.status_buckets.accepted';
 const REJECTED_BUCKET = 'summary.approve.status_buckets.rejected';
-const HOOK_PROGRAM = 'render-section-list-hook-gap';
+const HOOK_PROGRAM = 'render-section-list-hook-dispatch';
 const HOOK_EXPORT_MODE = 'render_export';
+/** Same engine-derived approved bucket as S-1/K-1/K-2 — only the DISPATCH differs. */
+const HOOK_APPROVED_BUCKET = APPROVED_BUCKET;
+/** bootstrap→gather, gather→review, review→render_export, render_export→complete. */
+const HOOK_TRANSITION_COUNT = 4;
+const HOOK_SEEDED_ITEMS = 2;
 
 interface StoredArtifact {
   artifactId: string;
@@ -250,24 +267,126 @@ describe('pgas#1045 RenderSectionList per-approved-item hermetic falsifier', () 
   });
 });
 
-describe('pgas#1045 author-less dispatch gap guard', () => {
-  it('G-1 (GAP): a decision_only stage CANNOT dispatch capability: render — the OnTransition hook envelope is not the {artifact_id} selector', async () => {
-    const outcome = await runHookDispatchDrive();
+describe('pgas#1054 author-less dispatch — the unlock, and the scope gap that remains', () => {
+  it('P-1 (positive): a static IntegrationHook payload lets an AUTHOR-LESS decision_only stage mint a render artifact', async () => {
+    const outcome = await runHookDispatchDrive(ON_TRANSITION_HOOK);
 
-    // OBSERVED (engine 5.7.1): the capability binding DOES route the hook to the
-    // render capability handler, but `{action, event, domain}` fails the exact
-    // `{artifact_id}` selector test, so `buildProviderRenderRequest` never runs
-    // and the raw hook envelope is handed to the generic RenderProvider, which
-    // correctly refuses it. No artifact is written and the session fails.
-    expect(outcome.puts, 'no artifact minted from an author-less decision-only stage').toBe(0);
-    expect(outcome.error, 'the generic provider refused the raw hook envelope').toContain(
-      'request.format must be "docx"',
-    );
+    // OBSERVED (engine 6.0.0): the hook envelope now carries the declared static
+    // payload, `createServerOutputAdapter.dispatch` forwards ONLY that payload for
+    // a non-EffectAction that owns one, so `renderCapability`'s exact
+    // `{artifact_id}` selector matches, `buildProviderRenderRequest` runs, and the
+    // generic RenderProvider is handed a real DeclarativeRenderRequest.
+    expect(outcome.error, 'author-less dispatch no longer fails the session').toBe('');
+    expect(outcome.finalMode, 'the session still reaches terminal').toBe('complete');
+    expect(outcome.puts, 'the author-less decision-only stage DID mint artifacts').toBeGreaterThan(0);
+    expect(outcome.seededItems, 'the collection the render reads was populated').toBe(HOOK_SEEDED_ITEMS);
 
-    // The world was fully ready: the render would have had real content to emit
-    // had the selector reached it. The blocker is DISPATCH, not the grammar
-    // (S-1/K-1/K-2 above prove the grammar).
-    expect(outcome.seededItems, 'the collection the render would have read was populated').toBe(1);
+    // the minted bytes are a real docx carrying the APPROVED item's authored prose
+    // — the same chain S-1 proves, now driven with no author round at all.
+    const withProse = outcome.documents.filter((docXml) => docXml.includes(outcome.approvedProse));
+    expect(withProse.length, 'at least one minted docx carries the approved prose').toBeGreaterThan(0);
+    for (const docXml of outcome.documents) {
+      expect(docXml, 'the rejected item never reaches any minted deliverable')
+        .not.toContain(outcome.rejectedProse);
+    }
+    expect(outcome.renderRecordCount, 'first-class artifactType:"render" records').toBeGreaterThan(0);
+  });
+
+  it('G-2 (GAP): an OnTransition hook has no transition scope, so it mints ONE ARTIFACT PER TRANSITION', async () => {
+    const outcome = await runHookDispatchDrive(ON_TRANSITION_HOOK);
+
+    // OBSERVED (engine 6.0.0): `runOnTransitionHooks` pushes every declared hook
+    // into the batch on EVERY `session.mode !== previousMode`, with no mode /
+    // target-mode / predicate filter anywhere in `IntegrationHook`. The export
+    // deliverable is therefore re-minted on each hop instead of exactly once at
+    // export time.
+    expect(outcome.puts, 'one artifact minted per mode transition').toBe(HOOK_TRANSITION_COUNT);
+
+    // and the extras are NOT harmless duplicates: the hops that happen before the
+    // deliverable collection exists mint content-INCOMPLETE docx files.
+    const withoutProse = outcome.documents.filter((docXml) => !docXml.includes(outcome.approvedProse));
+    expect(withoutProse.length, 'at least one minted docx is content-incomplete').toBeGreaterThan(0);
+
+    // Today the foundry suppresses exactly these extra fires with a consumer-side
+    // `<stage>.render_pending` gate inside `createExportHookAdapter`. On a
+    // `capability: render` channel the engine owns the handler, so that gate cannot
+    // exist — and re-adding a dispatch filter on the render path would be the
+    // forbidden consumer stopgap.
+  });
+
+  it('G-2a (GAP): AfterMutation scoped to a DERIVED bucket path never fires', async () => {
+    const outcome = await runHookDispatchDrive(`      - action: render_document
+        event: AfterMutation
+        path: ${HOOK_APPROVED_BUCKET}
+        payload: { artifact_id: "${ARTIFACT_ID}" }
+        result_path: export`);
+
+    // OBSERVED: `runAfterMutationHooks` matches only `instructionSet.mutations`.
+    // Derived-path writes are not instruction-set mutations, so the completion
+    // guard the foundry's confirmation-loop class actually uses
+    // (`derived_paths[all_items_field_eq]`) cannot drive a hook at all.
+    expect(outcome.puts, 'a derived-path write does not trigger an AfterMutation hook').toBe(0);
+    expect(outcome.error, 'and the session still completes').toBe('');
+  });
+
+  it('G-2b (GAP): AfterMutation scoped to the collection path fires PER ITEM, not per deliverable', async () => {
+    const outcome = await runHookDispatchDrive(`      - action: render_document
+        event: AfterMutation
+        path: work.sections.items
+        payload: { artifact_id: "${ARTIFACT_ID}" }
+        result_path: export`);
+
+    // OBSERVED: one dispatch per MAppend. A deliverable is not per-item, so this
+    // scoping mints N partial documents instead of one complete one.
+    expect(outcome.puts, 'one artifact minted per appended item').toBe(HOOK_SEEDED_ITEMS);
+    expect(outcome.error, 'and the session still completes').toBe('');
+  });
+
+  // ── EXISTING-GRAMMAR ROUTE AUDIT ────────────────────────────────────────
+  // Before asking for new grammar, prove the behaviour cannot be expressed with
+  // what already ships. The candidate G-2a/G-2b missed: AfterMutation scoped to
+  // the ONE-SHOT SCALAR GUARD whose flip is what causes entry into the export
+  // mode. That guard is not extra bookkeeping — the transition already declares
+  // it (`review -> render_export when FieldTruthy work.review.done`), so hooking
+  // it reuses an existing declaration rather than inventing one.
+  it('E-1 (EXISTING ROUTE): AfterMutation on the one-shot export-entry guard mints EXACTLY ONE complete deliverable', async () => {
+    const outcome = await runHookDispatchDrive(`      - action: render_document
+        event: AfterMutation
+        path: work.review.done
+        payload: { artifact_id: "${ARTIFACT_ID}" }
+        result_path: export`);
+
+    expect(outcome.error, 'the session still completes cleanly').toBe('');
+    expect(outcome.finalMode, 'and reaches terminal').toBe('complete');
+
+    // exactly-once: the guard is MSet by a single action, in a single round.
+    expect(outcome.puts, 'EXACTLY ONE artifact minted').toBe(1);
+
+    // and it is CONTENT-COMPLETE: `execute()` applies every instruction-set
+    // mutation BEFORE runAfterMutationHooks, and the collection was populated in
+    // earlier rounds, so the approved prose is present and the rejected item is
+    // absent — the same content property S-1 and P-1 assert.
+    expect(outcome.documents).toHaveLength(1);
+    expect(outcome.documents[0], 'the single deliverable carries the approved prose')
+      .toContain(outcome.approvedProse);
+    expect(outcome.documents[0], 'and never the rejected item')
+      .not.toContain(outcome.rejectedProse);
+    expect(outcome.renderRecordCount, 'first-class artifactType:"render" record').toBe(1);
+  });
+
+  it('E-2 (EXISTING ROUTE, REJECTED): AfterRound is the only other dispatching event and has no filter at all', async () => {
+    const outcome = await runHookDispatchDrive(`      - action: render_document
+        event: AfterRound
+        payload: { artifact_id: "${ARTIFACT_ID}" }
+        result_path: export`);
+
+    // OBSERVED: `runAfterRoundHooks` batches every AfterRound hook with no mode,
+    // path, or predicate filter — strictly worse than OnTransition. Recorded so
+    // the audit covers the WHOLE dispatch surface: integration hooks dispatch on
+    // exactly three events (AfterMutation / AfterRound / OnTransition).
+    // `AfterIngestion` is a REACTION-only event — the engine has no
+    // `runAfterIngestionHooks`, so it cannot drive a hook at all.
+    expect(outcome.puts, 'AfterRound mints one artifact per ROUND').toBeGreaterThan(1);
   });
 });
 
@@ -334,28 +453,52 @@ async function runRenderDrive(input: { listFrom: string; items: SeedItem[] }): P
 interface HookDispatchOutcome {
   puts: number;
   error: string;
+  finalMode: string | null;
   seededItems: number;
+  documents: string[];
+  renderRecordCount: number;
+  approvedProse: string;
+  rejectedProse: string;
 }
 
+/** The declaration P-1/G-2 exercise: the pgas#1054 static payload on OnTransition. */
+const ON_TRANSITION_HOOK = `      - action: render_document
+        event: OnTransition
+        payload: { artifact_id: "${ARTIFACT_ID}" }
+        result_path: export`;
+
 /**
- * Drive the SAME declarative render artifact, but dispatched the way the foundry
- * actually exports today: an AUTHOR-LESS `decision_only` stage firing an
- * `OnTransition` integration hook on the `capability: render` channel.
+ * Drive the SAME declarative render artifact, dispatched the way the foundry
+ * actually exports: an AUTHOR-LESS `decision_only` stage on a `capability: render`
+ * channel, with no EffectAction anywhere. The hook declaration is the variable —
+ * everything else (world, collection, render: block) is held fixed.
+ *
+ * The program makes FOUR mode transitions and seeds the deliverable collection
+ * only in the SECOND mode, so a dispatch that is not transition-scoped is
+ * observable both by COUNT and by CONTENT.
  */
-async function runHookDispatchDrive(): Promise<HookDispatchOutcome> {
+async function runHookDispatchDrive(hookDeclaration: string): Promise<HookDispatchOutcome> {
+  const approvedProse = `APPROVED-HOOK-${randomUUID()}`;
+  const rejectedProse = `REJECTED-HOOK-${randomUUID()}`;
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-section-list-hook-'));
   const programDir = path.join(tempDir, 'programs', HOOK_PROGRAM);
   mkdirSync(programDir, { recursive: true });
-  writeFileSync(path.join(programDir, 'specs.yml'), hookDispatchSpecYaml(), 'utf8');
+  writeFileSync(path.join(programDir, 'specs.yml'), hookDispatchSpecYaml(hookDeclaration), 'utf8');
 
   const store = new InMemoryArtifactStore();
   const loaded = loadProgramByConvention(HOOK_PROGRAM, {
     programsRoot: tempDir,
     additionalHandlers: {
+      async begin_gathering() {
+        return { started: true };
+      },
       async seed_section() {
         return { seeded: true };
       },
-      async finish_seeding() {
+      async finish_gathering() {
+        return { done: true };
+      },
+      async finish_review() {
         return { done: true };
       },
     },
@@ -378,8 +521,11 @@ async function runHookDispatchDrive(): Promise<HookDispatchOutcome> {
   }
 
   const author = scriptedAuthor([
-    effect('seed_section', { item: { id: 'sec-1', title: 'T1', proposed_text: 'BODY-1', status: 'accepted' } }, 'stage_output'),
-    effect('finish_seeding', {}, 'stage_output'),
+    effect('begin_gathering', {}, 'stage_output'),
+    effect('seed_section', { item: { id: 'sec-1', title: 'Approved Heading', proposed_text: approvedProse, status: 'accepted' } }, 'stage_output'),
+    effect('seed_section', { item: { id: 'sec-2', title: 'Rejected Heading', proposed_text: rejectedProse, status: 'rejected' } }, 'stage_output'),
+    effect('finish_gathering', {}, 'stage_output'),
+    effect('finish_review', {}, 'stage_output'),
   ]);
 
   const { client, close } = await startRouteHarness({
@@ -393,18 +539,37 @@ async function runHookDispatchDrive(): Promise<HookDispatchOutcome> {
 
   try {
     const created = await client.sessions.create({ program: HOOK_PROGRAM });
-    await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: 'seed' });
     let error = '';
-    try {
-      await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: 'finish' });
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
+    for (const text of ['begin', 'seed one', 'seed two', 'finish gathering', 'finish review']) {
+      try {
+        await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: text });
+      } catch (caught) {
+        error = caught instanceof Error ? caught.message : String(caught);
+        break;
+      }
     }
     const session = await client.sessions.get(created.sessionId);
+    let renderRecordCount = 0;
+    try {
+      const raw = await client.sessions.systemArtifacts({ program: HOOK_PROGRAM });
+      renderRecordCount = extractArtifactRecords(raw).filter((r) => r.artifactType === 'render').length;
+    } catch {
+      renderRecordCount = 0;
+    }
+    const documents: string[] = [];
+    for (const stored of store.puts) {
+      const bytes = await store.get(stored.payloadRef);
+      documents.push(bytes ? extractEntryText(bytes, 'word/document.xml') : '');
+    }
     return {
       puts: store.puts.length,
       error,
+      finalMode: modeOf(session),
       seededItems: bucketOf(session, 'work.sections.items').length,
+      documents,
+      renderRecordCount,
+      approvedProse,
+      rejectedProse,
     };
   } finally {
     await close();
@@ -592,11 +757,14 @@ render:
 }
 
 /**
- * The SAME render artifact, dispatched the way the foundry exports today: an
- * author-less `decision_only` mode + an `OnTransition` integration hook bound to
- * the `capability: render` channel.
+ * The SAME render artifact, dispatched the way the foundry exports: an
+ * author-less `decision_only` mode on a `capability: render` channel. The hook
+ * declaration is injected so P-1/G-2/G-2a/G-2b vary ONLY the dispatch scoping.
+ *
+ * Four mode transitions; the deliverable collection is seeded only in `gather`,
+ * so an unscoped dispatch is observable by BOTH count and content.
  */
-function hookDispatchSpecYaml(): string {
+function hookDispatchSpecYaml(hookDeclaration: string): string {
   return `name: "${HOOK_PROGRAM}"
 
 features:
@@ -615,18 +783,53 @@ schema:
   work.sections.items.*.title: string
   work.sections.items.*.proposed_text: string
   work.sections.items.*.status: string
-  work.seeding: object
-  work.seeding.done: boolean
+  work.gathering: object
+  work.gathering.started: boolean
+  work.gathering.done: boolean
+  work.review: object
+  work.review.done: boolean
+  summary.approve: object
+  summary.approve.status_buckets: object
+  ${HOOK_APPROVED_BUCKET}: array
+  ${HOOK_APPROVED_BUCKET}.*: object
+  ${HOOK_APPROVED_BUCKET}.*.id: string
+  ${HOOK_APPROVED_BUCKET}.*.title: string
+  ${HOOK_APPROVED_BUCKET}.*.proposed_text: string
+  ${HOOK_APPROVED_BUCKET}.*.status: string
   export: object
   export.artifact: object
 
+# PROGRAM-OWNED approval, engine-derived and always live — so a render that fires
+# on the WRONG transition is incomplete for a content reason, not a timing race.
+derived_paths:
+  - target: ${HOOK_APPROVED_BUCKET}
+    when: { kind: Always }
+    set:
+      kind: items_where_field_eq
+      params:
+        collection_path: work.sections.items
+        field: status
+        value: accepted
+
 modes:
   bootstrap:
-    vocabulary: [seed_section, finish_seeding]
+    vocabulary: [begin_gathering]
+    channels: [user_text, stage_output]
+    transitions:
+      - target: gather
+        when: { kind: FieldTruthy, path: work.gathering.started }
+  gather:
+    vocabulary: [seed_section, finish_gathering]
+    channels: [user_text, stage_output]
+    transitions:
+      - target: review
+        when: { kind: FieldTruthy, path: work.gathering.done }
+  review:
+    vocabulary: [finish_review]
     channels: [user_text, stage_output]
     transitions:
       - target: ${HOOK_EXPORT_MODE}
-        when: { kind: FieldTruthy, path: work.seeding.done }
+        when: { kind: FieldTruthy, path: work.review.done }
   ${HOOK_EXPORT_MODE}:
     decision_only: true
     vocabulary: []
@@ -646,7 +849,9 @@ topology: CyclicTopology
 termination: BoundedSession
 
 proceeds_to:
-  finish_seeding: ${HOOK_EXPORT_MODE}
+  begin_gathering: gather
+  finish_gathering: review
+  finish_review: ${HOOK_EXPORT_MODE}
 
 channels:
   user_text: { direction: In, sync: Async }
@@ -661,18 +866,26 @@ ingestion:
   user_text:
     - inputs.user_text
 
-# The ONLY outbound seam an author-less decision_only mode has. The engine builds
-# this hook payload as {action, event, domain} -- there is no IntegrationHook
-# payload field -- so the {artifact_id} selector can never be supplied here.
+# The ONLY outbound seam an author-less decision_only mode has. Since pgas#1054
+# (engine 6.0.0) an IntegrationHook MAY declare a static \`payload\`, and the
+# adapter forwards ONLY that payload for a non-EffectAction — so the exact
+# \`{artifact_id}\` selector DOES reach capability: render (P-1). What the hook
+# still cannot declare is WHEN: there is no mode / target-mode / predicate scope,
+# and OnTransition hooks fire on every mode change (G-2).
 integrations:
   render_hooks:
     channel: render_out
     hooks:
-      - action: render_document
-        event: OnTransition
-        result_path: export
+${hookDeclaration}
 
 action_map:
+  begin_gathering:
+    description: "Start gathering."
+    mutations:
+      - op: MSet
+        path: work.gathering.started
+        value: true
+    channel: stage_output
   seed_section:
     description: "Append one authored section record to the collection."
     mutations:
@@ -680,11 +893,20 @@ action_map:
         path: work.sections.items
         from_arg: item
     channel: stage_output
-  finish_seeding:
-    description: "Mark seeding complete."
-    mutations: []
+  finish_gathering:
+    description: "Mark gathering complete."
+    mutations:
+      - op: MSet
+        path: work.gathering.done
+        value: true
     channel: stage_output
-    result_path: work.seeding
+  finish_review:
+    description: "Mark review complete."
+    mutations:
+      - op: MSet
+        path: work.review.done
+        value: true
+    channel: stage_output
   render_document:
     description: "Dispatch the declarative docx render."
     mutations: []
@@ -692,10 +914,12 @@ action_map:
     result_path: export
 
 preamble: |
-  Author-less decision-only render dispatch gap guard.
+  Author-less decision-only render dispatch guard.
 
 prompts:
-  bootstrap: "Call seed_section for each item, then finish_seeding."
+  bootstrap: "Call begin_gathering."
+  gather: "Call seed_section for each item, then finish_gathering."
+  review: "Call finish_review."
   complete: "Terminal."
 
 repair_bound: 2
@@ -707,7 +931,7 @@ render:
       provider_request: true
       sections:
         - kind: section_list
-          from: { from: work.sections.items }
+          from: { from: ${HOOK_APPROVED_BUCKET} }
           template:
             kind: section
             heading: { from: title }

@@ -29,6 +29,14 @@ export async function loadRenderedGeneratedProgramEntry(
   options: {
     entryOverrides?: RegisterProgramByConventionOptions['entryOverrides'];
     inferDelegationResultPolicy?: boolean;
+    /**
+     * Wrap the generated adapter overrides before registration. Tests use this to
+     * COUNT hook dispatches on the real generated artifact — the engine does not
+     * log hook fires, so dispatch cardinality is otherwise unobservable.
+     */
+    wrapAdapterOverrides?: (
+      overrides: Record<string, ProgramAdapterOverride>,
+    ) => Record<string, ProgramAdapterOverride>;
   } = {},
 ): Promise<ProgramEntry> {
   const programDir = join(rootDir, 'src/programs', slug);
@@ -52,10 +60,10 @@ export async function loadRenderedGeneratedProgramEntry(
     },
     reactionHandlers: handlersModule.reactionHandlers,
     adapterOptions: {
-      overrides: {
+      overrides: (options.wrapAdapterOverrides ?? ((o) => o))({
         ...(handlersModule.createHandlerAdapterOverrides?.() ?? {}),
         ...toolAdapterOverrides(toolRegistry, registeredToolNames),
-      },
+      }),
     },
     ...(entryOverrides ? { entryOverrides } : {}),
   });

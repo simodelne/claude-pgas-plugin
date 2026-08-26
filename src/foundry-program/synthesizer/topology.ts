@@ -147,9 +147,6 @@ export function exportRenderHookActionName(stage: string): string {
   return `render_${safeIdentifier(stage)}_export`;
 }
 
-export function exportRenderPendingReactionName(stage: string): string {
-  return `mark_${safeIdentifier(stage)}_export_render_pending`;
-}
 
 export function exportRenderPendingPath(stage: string): string {
   return `${stage}.render_pending`;

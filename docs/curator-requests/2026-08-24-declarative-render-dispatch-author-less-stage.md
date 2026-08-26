@@ -1,8 +1,21 @@
 # Declarative render dispatch from an AUTHOR-LESS stage (`decision_only` / integration hook)
 
+**Status:** **HALF-SHIPPED in 6.0.0 — pgas#1054 landed the `IntegrationHook.payload`
+field asked for below, and it WORKS (reproduced hermetically: an author-less
+`decision_only` stage now mints a first-class `artifactType:"render"` docx — `P-1` in
+`tests/integration/render-section-list-falsifier.test.ts`). The `render:`-tier
+`on_transition:` ALTERNATIVE named at the end of the Ask did NOT ship, and without some
+form of hook SCOPE the payload alone is not sufficient: an `OnTransition` hook fires on
+EVERY mode change, so the same declaration mints one artifact per transition, including
+content-incomplete ones. The residual half is refiled as
+`docs/curator-requests/2026-08-25-integration-hook-transition-scoping.md`, which carries
+the current reproduction. Emission stays blocked; `EngineCapability.render` stays
+`adopt_backlog`.**
+
 **Type:** engine grammar ask (additive)
 **Filed by:** pgas-new foundry, 2026-08-24
-**Engine version confirmed against:** `@simodelne/pgas-server@5.7.1`
+**Engine version confirmed against:** `@simodelne/pgas-server@5.7.1` (observations below
+are pre-6.0.0 and are retained as the historical record)
 **Related:** pgas#992 (`capability: render` + engine-native ArtifactStore), pgas#1045
 (`RenderSectionList`, **shipped in 5.7.1** — see
 `docs/curator-requests/2026-08-23-render-section-list-primitive.md`)
@@ -125,8 +138,13 @@ during the decision-only drain.
 
 ## Falsifier for pgas-new adoption
 
-`G-1` in `tests/integration/render-section-list-falsifier.test.ts` currently asserts the
-FAILURE above. When this ask ships, `G-1` FAILS — which is the trigger to:
+> **RESOLVED (2026-08-25).** `G-1` did flip on 6.0.0 and has been honestly INVERTED into
+> `P-1`, a positive assertion that the static-payload dispatch works. The four steps
+> below are unchanged as the adoption plan, but they are now gated on the residual
+> scope ask (`2026-08-25-integration-hook-transition-scoping.md`), pinned by `G-2`.
+
+`G-1` in `tests/integration/render-section-list-falsifier.test.ts` asserted the FAILURE
+above. When this ask ships, `G-1` FAILS — which is the trigger to:
 
 1. emit `render:` + `capability: render` + the hook payload from
    `src/foundry-program/synthesizer.ts`;

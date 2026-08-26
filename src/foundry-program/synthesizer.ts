@@ -78,7 +78,6 @@ import {
   decorateTransitionActions,
   exportRenderHookActionName,
   exportRenderPendingPath,
-  exportRenderPendingReactionName,
   exportTransitionActions,
   guardFieldsBySourceMode,
   isConversationalHubTransitionAction,
@@ -686,7 +685,6 @@ export function synthesizeProgramSpecFromDomain(
   applyDocumentsReactions(recordField(spec, 'reactions'), documents);
   applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren, documents);
   applyLeadResearchHostOutputMirrorReactions(recordField(spec, 'reactions'), delegationChildren);
-  applyExportDecisionOnlyReactions(recordField(spec, 'reactions'), exportActions);
   applyConversationalHubGuardResetReactions(recordField(spec, 'reactions'), transitionActions);
 
   spec.channels = {
@@ -817,6 +815,7 @@ export function synthesizeProgramSpecFromDomain(
   for (const action of exportActions) {
     schema[exportRenderPendingPath(action.source)] = 'boolean';
   }
+  applyExportRenderPendingEntryMutations(actionMap, transitionActions, exportActions);
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
@@ -1550,13 +1549,34 @@ function removeExportDecisionOnlyStageEntries(record: MutableRecord, exportActio
   }
 }
 
-function applyExportDecisionOnlyReactions(reactions: MutableRecord, exportActions: TransitionAction[]): void {
-  for (const action of exportActions) {
-    const reactionName = exportRenderPendingReactionName(action.source);
-    reactions[reactionName] = {
-      event: 'OnTransition',
-      write_scope: [exportRenderPendingPath(action.source)],
-    };
+// The export stage is `decision_only`: no author round, so no EffectAction and no
+// LLM-authored dispatch. Its only outbound seam is an integration hook, and a hook
+// can declare WHAT to dispatch but not WHEN — except through `AfterMutation`, which
+// is scoped by mutation path. So the transition INTO the export stage carries a
+// single declared `MSet <stage>.render_pending = true`, and the hook binds to that
+// exact path. The field already exists in the emitted schema; this reuses it as the
+// dispatch trigger instead of as a consumer-read suppression flag.
+function applyExportRenderPendingEntryMutations(
+  actionMap: MutableRecord,
+  transitionActions: TransitionAction[],
+  exportActions: TransitionAction[],
+): void {
+  const exportStages = new Set(exportActions.map((action) => action.source));
+  for (const action of transitionActions) {
+    if (!exportStages.has(action.target)) {
+      continue;
+    }
+    const semantics = actionMap[action.name];
+    if (!isRecord(semantics)) {
+      continue;
+    }
+    const path = exportRenderPendingPath(action.target);
+    const mutations = Array.isArray(semantics.mutations) ? [...semantics.mutations] : [];
+    if (mutations.some((mutation) => isRecord(mutation) && mutation.path === path)) {
+      continue;
+    }
+    mutations.push({ op: 'MSet', path, value: true });
+    (semantics as MutableRecord).mutations = mutations;
   }
 }
 
@@ -1591,9 +1611,19 @@ function applyExportDecisionOnlyIntegrations(spec: MutableRecord, exportActions:
     ...recordOrEmpty(spec.integrations),
     export_stage_hooks: {
       channel: EXPORT_HOOK_CHANNEL,
+      // Scoped to the ONE-SHOT `<stage>.render_pending` write emitted onto the
+      // action that transitions INTO this export stage (see
+      // `applyExportRenderPendingEntryMutations`). `OnTransition` carries no
+      // mode/target-mode/predicate scope — the engine batches every declared
+      // OnTransition hook on EVERY mode change — so it dispatches once per
+      // transition, minting one deliverable per hop. `AfterMutation` is the only
+      // hook event with any scoping (`runAfterMutationHooks` matches
+      // `instructionSet.mutations` against `path`), which makes the dispatch
+      // exactly-once WITHOUT a consumer-side filter.
       hooks: unique(exportActions.map((action) => action.source)).map((stage) => ({
         action: exportRenderHookActionName(stage),
-        event: 'OnTransition',
+        event: 'AfterMutation',
+        path: exportRenderPendingPath(stage),
         result_path: `${stage}.output`,
       })),
     },
@@ -6064,9 +6094,6 @@ ${fieldResolvers}
   const documentActionHandlers = options.documents
     ? renderDocumentActionHandlers(options.documents)
     : '';
-  const exportRenderPendingReactionEntries = options.includeReactionHandlers
-    ? renderExportRenderPendingReactionEntries(exportActions)
-    : '';
   const conversationalHubResetReactionEntries = options.includeReactionHandlers
     ? renderConversationalHubGuardResetReactionEntries(transitionActions)
     : '';
@@ -6104,7 +6131,6 @@ ${fieldResolvers}
     stageResultFieldMirrorReactionEntries ||
     leadResearchHostOutputMirrorReactionEntries ||
     reasoningFieldMirrorReactionEntries ||
-    exportRenderPendingReactionEntries ||
     conversationalHubResetReactionEntries ||
     usesConfirmationLoopHandlers ||
     usesDelegationHandlers ||
@@ -6154,7 +6180,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageResultFieldMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${exportRenderPendingReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageResultFieldMirrorReactionEntries ? stageResultFieldMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageResultFieldMirrorReactionEntries}${leadResearchHostOutputMirrorReactionEntries}${reasoningFieldMirrorReactionEntries}${conversationalHubResetReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageResultFieldMirrorReactionEntries ? stageResultFieldMirrorReactionHelper() : ''}${leadResearchHostOutputMirrorReactionEntries ? leadResearchHostOutputMirrorReactionHelper() : ''}${reasoningFieldMirrorReactionEntries ? reasoningFieldMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const handlerAdapterOverrides = exportActions.length > 0
     ? `\n\nexport function createHandlerAdapterOverrides() {\n  return {\n    ${tsString(EXPORT_HOOK_CHANNEL)}: createExportHookAdapter(),\n  };\n}`
@@ -6343,19 +6369,6 @@ function renderHandlersIndexBarrelSource(): string {
   return "export { handlers, reactionHandlers } from '../handlers.js';\n";
 }
 
-function renderExportRenderPendingReactionEntries(exportActions: TransitionAction[]): string {
-  return unique(exportActions.map((action) => action.source)).map((stage) => `,
-  [${tsString(exportRenderPendingReactionName(stage))}, (_snapshot, trigger, mode) => {
-    if (mode === ${tsString(stage)}) {
-      return { mutations: [{ op: 'MSet' as const, path: ${tsString(exportRenderPendingPath(stage))}, value: true }] };
-    }
-    if (trigger.startsWith(${tsString(`${stage}->`)})) {
-      return { mutations: [{ op: 'MSet' as const, path: ${tsString(exportRenderPendingPath(stage))}, value: false }] };
-    }
-    return undefined;
-  }]`).join('');
-}
-
 function renderConversationalHubGuardResetReactionEntries(
   transitionActions: TransitionAction[],
 ): string {
@@ -6408,10 +6421,12 @@ export function createExportHookAdapter() {
       if (!stage) {
         return undefined;
       }
+      // No dispatch filter here. The hook is declared \`AfterMutation\` on the
+      // one-shot \`<stage>.render_pending\` write emitted onto the transition INTO
+      // this export stage, so the engine dispatches it exactly once, at export
+      // time, with the full world already applied. A consumer-side gate would be
+      // program logic on a governed path.
       const domain = hookDomainRecord(record.domain);
-      if (domain[\`\${stage}.render_pending\`] !== true) {
-        return undefined;
-      }
       return renderExportStage(stage, domain);
     },
   };
