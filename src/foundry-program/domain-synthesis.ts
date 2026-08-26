@@ -8,6 +8,7 @@ import { load } from 'js-yaml';
 import ts from 'typescript';
 import { createProviderHandles } from '@simodelne/pgas-server/plugin.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
+import { shouldDisableThinking } from '../pgas-new/disable-thinking.js';
 import type { ExportStageDescriptor, SynthesizedArtifact } from './synthesizer-store.js';
 import { resynthesizeWithReasoningContracts } from './synthesizer.js';
 import { isRepeatedRecordSchema } from './schema-shapes.js';
@@ -1100,6 +1101,11 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
           model: config.model,
           temperature: 0,
           max_tokens: domainSynthesisProviderMaxTokens(),
+          // Same canonical policy as every other author payload the foundry builds
+          // (src/pgas-new/disable-thinking.ts). Omitting it here left a silent
+          // semantic asymmetry: this synthesis call would resume emitting thinking
+          // tokens even with PGAS_DISABLE_THINKING=1 set for the run.
+          ...(shouldDisableThinking(config.model) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
           messages: [
             {
               role: 'system',
