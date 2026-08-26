@@ -126,22 +126,91 @@ describe('export decision-only auto-advance falsifier', () => {
     const exportHooks = Object.values(spec.integrations ?? {})
       .flatMap((integration) => integration.hooks ?? [])
       .filter((hook) => hook.result_path === EXPORT_OUTPUT);
+    // The hook is scoped by MUTATION PATH, not left unscoped on OnTransition.
+    // `runOnTransitionHooks` applies no mode/target-mode/predicate filter, so an
+    // OnTransition hook dispatches once per mode change — measured at FOUR on this
+    // very artifact (see the exactly-once assertion in the live drive below).
+    // `AfterMutation` is the only hook event the engine scopes, and it binds to the
+    // one-shot `<stage>.render_pending` write carried by the transition INTO the
+    // export stage.
     expect(exportHooks).toEqual([
       expect.objectContaining({
         action: `render_${EXPORT_STAGE}_export`,
-        event: 'OnTransition',
+        event: 'AfterMutation',
+        path: `${EXPORT_STAGE}.render_pending`,
         result_path: EXPORT_OUTPUT,
       }),
     ]);
-    expect(Object.values(spec.reactions ?? {})).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        event: 'OnTransition',
-        write_scope: [`${EXPORT_STAGE}.render_pending`],
-      }),
-    ]));
+    const entryActions = Object.entries(spec.action_map)
+      .filter(([, a]) => ((a as { mutations?: Array<{ path?: string }> }).mutations ?? [])
+        .some((m) => m.path === `${EXPORT_STAGE}.render_pending`))
+      .map(([name]) => name);
+    expect(entryActions, 'exactly one action arms the export render').toEqual(['complete_approve']);
+
+    // and the OnTransition reaction that used to maintain `render_pending` as a
+    // consumer-read suppression flag is GONE — no reaction writes that path.
+    expect(Object.values(spec.reactions ?? {}).filter(
+      (r) => (r.write_scope ?? []).includes(`${EXPORT_STAGE}.render_pending`),
+    )).toEqual([]);
     expect(artifact.handlers_ts).toContain(`run${toPascalCase(EXPORT_STAGE)}`);
     expect(artifact.handlers_ts).toContain(`render_${EXPORT_STAGE}_export`);
     expect(artifact.handlers_ts).not.toContain(`async complete_${EXPORT_STAGE}`);
+  });
+
+  // ── EXISTING-GRAMMAR ROUTE AUDIT (owner directive: no new grammar until the
+  //    behaviour is proven inexpressible with what already ships) ──────────────
+  //
+  // Integration hooks dispatch on exactly THREE events: AfterMutation (filtered
+  // by `path` against `instructionSet.mutations` only), AfterRound (no filter),
+  // and OnTransition (no filter). `AfterIngestion` is REACTION-only — the engine
+  // has no `runAfterIngestionHooks`.
+  //
+  // `AfterMutation` is therefore the only event with ANY scoping, and
+  // tests/integration/render-section-list-falsifier.test.ts `E-1` proves it DOES
+  // yield exactly-once + content-complete when the hooked path is a ONE-SHOT
+  // SCALAR that some action MSets at export-entry time.
+  //
+  // The real class had no such mutation to hook: its export-entry guard is an
+  // engine-DERIVED aggregate (which `G-2a` observed can never trigger a hook), and
+  // `complete_approve` shipped with `mutations: []`. The resolution keeps the
+  // derived guard exactly as-is and adds ONE declared scalar for the hook to bind
+  // to — so no new engine grammar was needed.
+  it('E-3 (RESOLUTION): the aggregate guard stays engine-derived; a separate one-shot scalar arms the render', async () => {
+    const artifact = await artifactFromDomain();
+    const spec = load(artifact.spec_yaml) as {
+      modes: Record<string, { vocabulary?: string[]; transitions?: Array<{ target: string; when?: Record<string, unknown> }> }>;
+      action_map: Record<string, { mutations?: Array<{ op: string; path: string }> }>;
+      derived_paths?: Array<{ target?: string; set?: { kind?: string } }>;
+    };
+
+    // (a) entry into the export stage is guarded by a COLLECTION-AGGREGATE
+    //     predicate, not by a scalar flag any action flips.
+    const toExport = (spec.modes.approve.transitions ?? []).find((t) => t.target === EXPORT_STAGE);
+    expect(toExport?.when, 'export entry is an aggregate predicate over the collection').toMatchObject({
+      kind: 'AllItemsStatus',
+    });
+
+    // (b) the aggregate guard field is a DERIVED path — and `G-2a` in the render
+    //     falsifier OBSERVED that derived-path writes never trigger a hook,
+    //     because runAfterMutationHooks matches instructionSet.mutations only.
+    const derivedGuard = (spec.derived_paths ?? []).find((d) => d.target === ALL_TERMINAL);
+    expect(derivedGuard?.set?.kind, 'the guard is engine-derived, not action-written').toBe('all_items_field_eq');
+
+    // (c) NO action_map mutation anywhere writes the guard path.
+    const guardWriters = Object.entries(spec.action_map)
+      .filter(([, a]) => (a.mutations ?? []).some((m) => m.path === ALL_TERMINAL))
+      .map(([name]) => name);
+    expect(guardWriters, 'no action writes the export-entry guard').toEqual([]);
+
+    // (d) the loop-exit action therefore cannot hook the guard itself — but it CAN
+    //     carry its own one-shot scalar. That is the whole fix: `complete_approve`
+    //     (which previously had `mutations: []`) now arms exactly one path, and the
+    //     capability hook binds to THAT via AfterMutation. The aggregate guard above
+    //     is untouched and stays engine-derived, so approval is still never
+    //     re-derived outside the engine.
+    expect(spec.modes.approve.vocabulary, 'the loop-exit action exists').toContain('complete_approve');
+    expect(spec.action_map.complete_approve?.mutations ?? [], 'the loop-exit action arms the render exactly once')
+      .toEqual([{ op: 'MSet', path: `${EXPORT_STAGE}.render_pending`, value: true }]);
   });
 
   it('auto-advances through export after approval without an export-stage author round', { timeout: 120_000 }, async () => {
@@ -214,6 +283,12 @@ describe('export decision-only auto-advance falsifier', () => {
         expect(result.docx_base64.length).toBeGreaterThan(0);
         expect(result.docx_bytes).toBeGreaterThan(0);
         expect(result.section_count).toBe(3);
+
+        // EXACTLY-ONCE, measured on the real confirmation-loop artifact with NO
+        // consumer-side dispatch filter and NO OnTransition reaction: the hook is
+        // declared `AfterMutation` on the one-shot `<stage>.render_pending` write
+        // carried by the transition INTO the export stage.
+        expect(exportDispatches.count, 'the export hook dispatched exactly once').toBe(1);
         expect(author.calls()).toEqual([
           'begin_work',
           'complete_draft_sections',
@@ -361,8 +436,35 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 `;
 }
 
+// Dispatch cardinality on the REAL generated artifact is otherwise unobservable:
+// the engine does not log hook fires, and a second dispatch would simply overwrite
+// the same `result_path`. So the generated export adapter is wrapped and counted.
+const exportDispatches = { count: 0 };
+
 async function importProgramEntry(targetDir: string): Promise<ProgramEntry> {
-  return loadRenderedGeneratedProgramEntry(targetDir, PROGRAM_SLUG);
+  exportDispatches.count = 0;
+  return loadRenderedGeneratedProgramEntry(targetDir, PROGRAM_SLUG, {
+    wrapAdapterOverrides: (overrides) => {
+      const wrapped: typeof overrides = { ...overrides };
+      for (const [channel, override] of Object.entries(overrides)) {
+        if (!channel.includes('export')) continue;
+        const inner = override as { dispatch?: (p: unknown) => Promise<unknown> };
+        if (typeof inner.dispatch !== 'function') continue;
+        const original = inner.dispatch.bind(inner);
+        wrapped[channel] = {
+          ...override,
+          async dispatch(payload: unknown) {
+            const result = await original(payload);
+            // count only dispatches this adapter actually SERVICED — an unrelated
+            // hook action returns undefined without rendering.
+            if (result !== undefined) exportDispatches.count += 1;
+            return result;
+          },
+        } as typeof override;
+      }
+      return wrapped;
+    },
+  });
 }
 
 async function readSnapshot(client: PgasClient, sessionId: string): Promise<RouteSnapshot> {

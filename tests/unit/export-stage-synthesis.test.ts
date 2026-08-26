@@ -21,7 +21,7 @@ describe('PR-E2 export stage synthesis', () => {
       pure: boolean;
       modes: Record<string, Record<string, unknown>>;
       channels: Record<string, Record<string, unknown>>;
-      reactions: Record<string, Record<string, unknown>>;
+      reactions: Record<string, { event?: string; write_scope?: string[] }>;
       integrations: Record<string, { channel: string; hooks: Array<Record<string, unknown>> }>;
       policies: {
         artifactPolicy: {
@@ -33,7 +33,10 @@ describe('PR-E2 export stage synthesis', () => {
         };
       };
       proceeds_to: Record<string, string>;
-      action_map: Record<string, Record<string, unknown>>;
+      action_map: Record<string, {
+        description?: string;
+        mutations?: Array<{ op?: string; path?: string; value?: unknown }>;
+      }>;
       prompts: Record<string, string>;
       guidance: Record<string, string[]>;
     };
@@ -58,16 +61,32 @@ describe('PR-E2 export stage synthesis', () => {
     expect(spec.prompts.export_document).toBeUndefined();
     expect(spec.guidance.export_document).toBeUndefined();
     expect(spec.channels.export_stage_hook).toEqual({ direction: 'Out', sync: 'Sync' });
-    expect(spec.reactions.mark_export_document_export_render_pending).toEqual({
-      event: 'OnTransition',
-      write_scope: ['export_document.render_pending'],
-    });
+    // `render_pending` is no longer maintained by an OnTransition reaction as a
+    // consumer-read suppression flag. It is written ONCE, by the action that
+    // transitions INTO the export stage, and the hook binds to that mutation.
+    expect(spec.reactions.mark_export_document_export_render_pending).toBeUndefined();
+    expect(
+      Object.values(spec.reactions).filter((r) => (r.write_scope ?? []).includes('export_document.render_pending')),
+      'no reaction writes the render trigger path',
+    ).toEqual([]);
+    expect(
+      Object.entries(spec.action_map)
+        .filter(([, a]) => (a.mutations ?? []).some((m) => m.path === 'export_document.render_pending'))
+        .map(([name]) => name),
+      'exactly one action arms the export render',
+    ).toEqual(['complete_compose_memo']);
+
+    // The hook is SCOPED by mutation path. `OnTransition` carries no scope — the
+    // engine batches every OnTransition hook on every mode change, which mints one
+    // deliverable per hop (measured at 4 on the real confirmation-loop artifact in
+    // tests/integration/export-decision-only-autoadvance-falsifier.test.ts).
     expect(spec.integrations.export_stage_hooks).toEqual({
       channel: 'export_stage_hook',
       hooks: [
         {
           action: 'render_export_document_export',
-          event: 'OnTransition',
+          event: 'AfterMutation',
+          path: 'export_document.render_pending',
           result_path: 'export_document.output',
         },
       ],
@@ -227,7 +246,13 @@ describe('PR-E2 export stage synthesis', () => {
 
     expect(spec.action_map.complete_export_document).toBeUndefined();
     expect(spec.modes.export_document?.vocabulary).toEqual([]);
-    expect(artifact.handlers_ts).toContain("domain[`${stage}.render_pending`] !== true");
+    // The generated adapter carries NO dispatch filter: the hook's AfterMutation
+    // scope makes it fire exactly once, so a consumer-side gate would be redundant
+    // program logic on a governed path. Asserting its ABSENCE is the point.
+    expect(artifact.handlers_ts, 'no consumer-side dispatch conditional survives')
+      .not.toMatch(/if\s*\(.*render_pending/);
+    expect(artifact.handlers_ts, 'the adapter dispatches unconditionally')
+      .not.toContain('return undefined;\n      }\n      return renderExportStage');
     expect(artifact.handlers_ts).toContain('return renderExportStage(stage, domain)');
   });
 
@@ -669,3 +694,4 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 }
 `;
 }
+
