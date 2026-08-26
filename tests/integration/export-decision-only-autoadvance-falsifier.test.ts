@@ -282,7 +282,40 @@ describe('export decision-only auto-advance falsifier', () => {
         const result = JSON.parse(String(output.result_json)) as { docx_base64: string; docx_bytes: number; section_count: number };
         expect(result.docx_base64.length).toBeGreaterThan(0);
         expect(result.docx_bytes).toBeGreaterThan(0);
-        expect(result.section_count).toBe(3);
+        // ⚠ D-1 (DEFECT PINNED, simodelne/pgas#1087) — this count is WRONG, and it is
+        // asserted here deliberately so the defect is recorded rather than invisible.
+        //
+        // The drive approves one section carrying APPROVED-OPINION-BODY, so the
+        // deliverable should contain exactly ONE section with that prose. Instead
+        // `section_count` is 3 and the bytes carry three identical copies of a raw
+        // stage-metadata dump, with the approved prose ABSENT entirely.
+        //
+        // Cause: the confirmation loop declares `storage.representation: indexed_array`,
+        // so `items_where_field_eq` over it hits
+        // `if (!Array.isArray(collection)) return []` (create-server.mjs:17369-17385)
+        // and EVERY `summary.confirmation_loop.status_buckets.*` is empty even though
+        // `work.opinion_sections.items.0.status === 'accepted'`. With no approved items,
+        // the emitted TS falls through to its domain-scan fallback and dumps stage
+        // metadata as "content".
+        //
+        // WHEN #1087 SHIPS THIS FAILS. That is the intended trigger for the render
+        // 0-TS migration: at that point bind `render: section_list` to the (now
+        // correctly populated) accepted bucket, delete the shape-mapping TS, and
+        // replace these assertions with the content assertions below.
+        expect(result.section_count, 'DEFECT: metadata dump, not the deliverable — see #1087').toBe(3);
+        expect(acceptedBucketOf(completed.domain), 'DEFECT: accepted bucket empty despite an accepted item')
+          .toEqual([]);
+        expect(String(completed.domain['work.opinion_sections.items.0.status']), 'the item really is accepted')
+          .toBe('accepted');
+
+        // The strongest form of the pin: assert against the BYTES, not a count.
+        // The export writes STORE (uncompressed) OOXML, so authored text appears
+        // verbatim in the payload.
+        const docxText = Buffer.from(result.docx_base64, 'base64').toString('latin1');
+        expect(docxText, 'DEFECT: the approved prose is MISSING from the deliverable (#1087)')
+          .not.toContain('APPROVED-OPINION-BODY');
+        expect(docxText, 'DEFECT: internal stage metadata is emitted as deliverable content (#1087)')
+          .toContain('drafting_status');
 
         // EXACTLY-ONCE, measured on the real confirmation-loop artifact with NO
         // consumer-side dispatch filter and NO OnTransition reaction: the hook is
@@ -478,6 +511,11 @@ async function readSnapshot(client: PgasClient, sessionId: string): Promise<Rout
     running: Boolean(state?.running ?? envelope.running),
     domain: world.domain as Record<string, unknown>,
   };
+}
+
+function acceptedBucketOf(domain: Record<string, unknown>): unknown[] {
+  const bucket = domain['summary.confirmation_loop.status_buckets.accepted'];
+  return Array.isArray(bucket) ? bucket : [];
 }
 
 function outputAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
