@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -139,6 +139,41 @@ describe('thinking-disable policy (pgas v6 canonical-first precedence)', () => {
     });
   });
 
+  // Sites 3 and 4 are the foundry's two DIRECT provider calls (domain-synthesis
+  // and reasoning-contract). They build their request bodies inline rather than
+  // through a shared payload builder, which is exactly how they ended up as the
+  // one place in the foundry that carried NO thinking control at all — silently,
+  // since nothing errors when a model resumes emitting thinking tokens.
+  //
+  // This block does not hardcode a list of files. It DERIVES every OpenAI-compatible
+  // call site from source and requires each to route through the shared policy, so a
+  // newly added provider call cannot reintroduce the asymmetry unnoticed.
+  describe('completeness — every OpenAI-compatible call site carries the policy', () => {
+    const callSites = openAiCallSites();
+
+    it('finds the known call sites (guards against the scan silently matching nothing)', () => {
+      expect(callSites.length).toBeGreaterThanOrEqual(3);
+      expect(callSites.map((site) => site.file)).toEqual(
+        expect.arrayContaining([
+          'src/foundry-server.ts',
+          'src/foundry-program/domain-synthesis.ts',
+          'src/foundry-program/reasoning-contract.ts',
+        ]),
+      );
+    });
+
+    for (const site of openAiCallSites()) {
+      it(`${site.file} routes through shouldDisableThinking`, () => {
+        expect(site.source, `${site.file} calls an OpenAI-compatible endpoint but never consults the shared policy`)
+          .toContain('shouldDisableThinking(');
+        expect(site.source, `${site.file} must not re-infer the model family locally`)
+          .not.toContain(LEGACY_PREFIX_INFERENCE);
+        expect(site.source, `${site.file} must set chat_template_kwargs from the policy`)
+          .toMatch(/shouldDisableThinking\([^)]*\)\s*\?\s*\{\s*chat_template_kwargs:\s*\{\s*enable_thinking:\s*false\s*\}\s*\}\s*:\s*\{\}/);
+      });
+    }
+  });
+
   describe('deploy/env surface', () => {
     it('strips the canonical thinking variable from generated-scaffold verification subprocesses', () => {
       expect(VERIFICATION_ENV_DENYLIST).toContain('PGAS_DISABLE_THINKING');
@@ -256,4 +291,29 @@ function policyBlock(source: string): string {
     throw new Error('source is missing the parity-locked thinking policy markers');
   }
   return source.slice(start, end + POLICY_END.length);
+}
+
+/**
+ * Every foundry source file that POSTs to an OpenAI-compatible `/chat/completions`
+ * endpoint. Derived from source rather than hardcoded so a new provider call is
+ * covered the moment it is written.
+ */
+function openAiCallSites(): Array<{ file: string; source: string }> {
+  const roots = ['src/foundry-server.ts', 'src/foundry-program', 'src/pgas-new'];
+  const files: string[] = [];
+  const walk = (rel: string): void => {
+    const abs = join(ROOT, rel);
+    if (!existsSync(abs)) return;
+    if (statSync(abs).isDirectory()) {
+      for (const entry of readdirSync(abs)) walk(`${rel}/${entry}`);
+      return;
+    }
+    if (rel.endsWith('.ts')) files.push(rel);
+  };
+  for (const root of roots) walk(root);
+  return files
+    .map((file) => ({ file, source: readFileSync(join(ROOT, file), 'utf8') }))
+    // the generated repo-integration POST targets a HOST API, not a model, so it
+    // is correctly excluded by keying on the chat-completions path.
+    .filter((entry) => entry.source.includes('/chat/completions'));
 }

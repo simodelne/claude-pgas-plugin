@@ -1,4 +1,6 @@
 import { isRecord } from '../util/guards.js';
+
+import { shouldDisableThinking } from '../pgas-new/disable-thinking.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -544,6 +546,11 @@ export function createOpenAiCompatibleReasoningContractGenerator(
           model: config.model,
           temperature: 0,
           max_tokens: positiveIntegerEnv('PGAS_REASONING_CONTRACT_MAX_TOKENS', 1_600),
+          // Same canonical policy as every other author payload the foundry builds
+          // (src/pgas-new/disable-thinking.ts). Omitting it here left a silent
+          // semantic asymmetry: this synthesis call would resume emitting thinking
+          // tokens even with PGAS_DISABLE_THINKING=1 set for the run.
+          ...(shouldDisableThinking(config.model) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
           messages: [
             {
               role: 'system',
