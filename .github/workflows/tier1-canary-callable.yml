@@ -1,0 +1,174 @@
+# pgas-new tier-1 canary (callable) — CONSUMER-CANARY-CONTRACT.md § 1, § 5.2.
+#
+# Invoked cross-repo by pgas's publish workflow on every `v*-rc` tag. Its
+# `verdict` output gates promotion of the release candidate: pgas publishes only
+# if every opted-in consumer returns `pass`.
+#
+# pgas-new is a CANONICAL consumer (it depends on @simodelne/pgas-server) but a
+# POD-LESS one — no backend, no container, no deploy target. So, unlike the
+# simoneos reference (§ 8), there is no image build and no pod SSH here, and the
+# only secret declared is the pgas-mandated `CROSS_CANARY_PAT`. Precedent for a
+# pod-less consumer: `pgas-sysadmin` and `pgas-coder` in § 9.
+#
+# Why pgas-new is worth a release gate at all: it is the only consumer that
+# SYNTHESIZES PGAS programs against the engine's declarative surface, so it
+# catches breaking changes to the authoring grammar and to the published `.d.ts`
+# that a running application would never notice.
+name: pgas-new tier-1 canary (callable)
+
+on:
+  workflow_call:
+    inputs:
+      # NOTE for the pgas-side caller: the § 5.4 template lists only the first
+      # three. The simoneos reference and `qc/verify-candidate-manifest.mjs`
+      # both require `pgas-rc-sha` and `candidate-manifest-sha256` as well —
+      # they are what make the rc tarballs IMMUTABLE rather than merely named.
+      # All five are required here.
+      pgas-rc-tag:
+        description: 'pgas release-candidate tag (e.g. v6.1.2-rc)'
+        required: true
+        type: string
+      pgas-rc-run-id:
+        description: 'pgas release-candidate workflow run ID (artifact source)'
+        required: true
+        type: string
+      pgas-rc-repo:
+        description: 'pgas repo in owner/repo form'
+        required: true
+        type: string
+      pgas-rc-sha:
+        description: 'Exact pgas release-candidate commit SHA'
+        required: true
+        type: string
+      candidate-manifest-sha256:
+        description: 'Exact candidate manifest SHA-256'
+        required: true
+        type: string
+    outputs:
+      verdict:
+        description: 'pass | fail | skip'
+        value: ${{ jobs.canary.outputs.verdict }}
+      evidence-artifact:
+        description: 'name of the uploaded evidence artifact'
+        value: ${{ jobs.canary.outputs.evidence-artifact }}
+    secrets:
+      # Pgas-mandated (§ 1.3). This is the ONLY secret pgas-new needs: no pod to
+      # reach, no registry to push to.
+      CROSS_CANARY_PAT:
+        required: true
+
+jobs:
+  canary:
+    # htpc pool. pgas-new needs no GPU, but `gpu-pod` is the label every
+    # htpc self-hosted runner carries under the fleet's htpc-only CI policy.
+    runs-on: [self-hosted, gpu-pod]
+    # § 3 asks new consumers to target <15 minutes. pgas-new's canary is a
+    # typecheck plus five hermetic integration files, so this ceiling is
+    # generous; it exists to bound a hang, not to budget the work.
+    timeout-minutes: 20
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      evidence-artifact: ${{ steps.evidence-name.outputs.name }}
+
+    steps:
+      - name: Checkout pgas-new
+        uses: actions/checkout@v4
+        with:
+          path: pgas-new
+
+      - name: Checkout pgas (for the htpc artifact action + manifest verifier)
+        # In a cross-repo workflow_call the default token cannot read the pgas
+        # repo, so the pgas-mandated PAT is used here as well as for the
+        # artifact download itself.
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pgas-rc-repo }}
+          ref: ${{ inputs.pgas-rc-sha }}
+          token: ${{ secrets.CROSS_CANARY_PAT }}
+          path: pgas
+
+      - name: Download pgas rc tarballs (from htpc — pgas#442)
+        # pgas#442 migrated rc tarballs off GitHub's artifact store onto htpc.
+        # Reading the GitHub store here would silently find nothing.
+        uses: ./pgas/.github/actions/download-artifact-htpc
+        with:
+          name: pgas-release-candidate-${{ inputs.pgas-rc-tag }}
+          path: pgas-new/pgas-rc/
+          run-id: ${{ inputs.pgas-rc-run-id }}
+          source-repository: ${{ inputs.pgas-rc-repo }}
+
+      - name: Verify exact candidate manifest and packages
+        # IMMUTABILITY GATE. Proves the tarballs are byte-for-byte the ones the
+        # rc run produced, bound to that exact commit SHA and manifest digest —
+        # so a `pass` certifies a specific artifact, not merely a tag name.
+        run: |
+          node pgas/qc/verify-candidate-manifest.mjs \
+            --directory pgas-new/pgas-rc \
+            --repository "${{ inputs.pgas-rc-repo }}" \
+            --rc-tag "${{ inputs.pgas-rc-tag }}" \
+            --run-id "${{ inputs.pgas-rc-run-id }}" \
+            --rc-sha "${{ inputs.pgas-rc-sha }}" \
+            --manifest-sha256 "${{ inputs.candidate-manifest-sha256 }}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Must satisfy pgas-new's own `engines` (^20.19.0 || >=22.12.0). A bare
+          # '20' can resolve below 20.19 and a bare '22' below 22.12, either of
+          # which trips EBADENGINE on rolldown/vite and muddies the signal.
+          node-version: '22.12.0'
+
+      - name: Run canary script
+        id: canary
+        working-directory: pgas-new
+        env:
+          CANARY_RUN_ID: ${{ github.run_id }}
+        run: |
+          bash qc/scripts/run-canary.sh \
+            --pgas-tarball-dir pgas-rc/ \
+            --run-id "${{ github.run_id }}"
+
+      - name: Resolve verdict
+        id: verdict
+        if: always()
+        # § 2.4 always-emit discipline + § 2.2 defensive mapping. If the script
+        # died before writing a verdict (runner OOM, cancellation, an exit code
+        # outside 0/1/2), the verdict defaults to `skip` — never `pass`. An
+        # unexplained crash is by definition not evidence that the rc is good.
+        run: |
+          v='${{ steps.canary.outputs.verdict }}'
+          case "$v" in
+            pass|fail|skip) ;;
+            *) echo "no/unrecognized verdict from the canary script ('$v') — defaulting to skip"; v=skip ;;
+          esac
+          echo "verdict=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Evidence artifact name
+        id: evidence-name
+        if: always()
+        run: echo "name=pgas-new-tier1-canary-${{ inputs.pgas-rc-tag }}-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload evidence
+        # § 4.4: `always()`, so a fail/skip can be post-mortemed.
+        if: always()
+        uses: ./pgas/.github/actions/upload-artifact-htpc
+        with:
+          name: ${{ steps.evidence-name.outputs.name }}
+          path: pgas-new/qc/evidence/${{ github.run_id }}/
+          retention-days: 14
+
+      - name: Annotate verdict
+        if: always()
+        run: |
+          {
+            echo "## pgas-new tier-1 canary verdict"
+            echo ""
+            echo "- **Verdict:** ${{ steps.verdict.outputs.verdict }}"
+            echo "- **rc tag:** \`${{ inputs.pgas-rc-tag }}\`"
+            echo "- **rc sha:** \`${{ inputs.pgas-rc-sha }}\`"
+            echo "- **Evidence:** \`${{ steps.evidence-name.outputs.name }}\`"
+            echo ""
+            echo "Archetype: install the rc tarball → prove the rc is genuinely loaded"
+            echo "(RC-identity gate) → typecheck against the rc's published types →"
+            echo "drive the render / decision-only engine-coupled paths."
+          } >> "$GITHUB_STEP_SUMMARY"

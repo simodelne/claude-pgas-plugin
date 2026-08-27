@@ -1,0 +1,40 @@
+# .pgas-canary-enabled — Layer 1.5 canary consumer marker (CONSUMER-CANARY-CONTRACT.md § 5.1)
+
+This file's PRESENCE signals: this repo is a registered consumer of
+@simodelne/pgas-* and is gated in pgas's pre-publish canary chain.
+
+This file's CONTENT bootstraps any agent (sub-agent or freshly-started
+Claude session) into the cross-repo coordination protocol:
+
+- HANDOVER Rule 6 (https://github.com/simodelne/pgas/blob/main/HANDOVER.md)
+- CONSUMER-CANARY-CONTRACT.md § 11 (canonical spec)
+- This repo's CLAUDE.md embeds CONSUMER_CLAUDE_MD_SNIPPET.md per § 5 Step 1a
+
+When you need something from pgas:
+  bash scripts/pgas-ask.sh        (if vendored)
+  OR: file an issue on simodelne/pgas with title prefix [<consumer-slug>-ask]
+      and the 6-section body shape from § 11.2.
+
+DO NOT seek out-of-band coordination. GitHub issues bearing the sentinel
+are the entire surface area.
+
+---
+
+## pgas-new specifics (informational — added per § 5.1's "MAY add after the canonical content")
+
+- **Consumer slug:** `pgas-new`
+- **Onboarding date:** 2026-08-27
+- **Pattern:** canonical consumer (depends on `@simodelne/pgas-server`) but
+  **POD-LESS** — no backend, no container, no deploy target. Precedent for a
+  pod-less consumer is `pgas-sysadmin` and `pgas-coder` in § 9.
+- **Secrets required:** `CROSS_CANARY_PAT` **only**. There is no pod to SSH into
+  and no image to push, so this callable declares neither `POD_SSH_KEY` nor
+  `GHCR_TOKEN`.
+- **Archetype:** install the rc tarball, prove the rc is genuinely loaded, then
+  typecheck against the rc's published types and drive the render /
+  decision-only engine-coupled paths on real synthesized programs.
+- **Executor:** `qc/scripts/run-canary.sh` (exit-code mapping per § 2.2).
+- **Why pgas-new is a distinct release signal:** it is the only consumer that
+  *synthesizes* PGAS programs against the engine's declarative surface, so it
+  catches breaking changes to the authoring grammar and to the public `.d.ts`
+  that a running application would not notice.

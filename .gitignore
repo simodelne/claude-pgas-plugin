@@ -66,3 +66,6 @@ tests/sota/scorecard/verify-closegap*.md
 # DD-report-class synthesis experiment scratch (generated programs, live-drive
 # logs, verdicts). Per-run measurement output, never committed.
 .dd-report-exp/
+
+# canary evidence artifacts (uploaded, never committed)
+qc/evidence/
