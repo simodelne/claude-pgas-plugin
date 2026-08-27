@@ -132,11 +132,18 @@ jobs:
         run: |
           head_sha="$(git -C pgas-new rev-parse HEAD)"
           mkdir -p pgas-new/qc/evidence/${{ github.run_id }}
+          # Written INTO the single evidence log rather than as its own file:
+          # upload-artifact-htpc bounds observed directory entries at 3, and the
+          # canary script appends to this same file with `tee -a`. Creating it
+          # here also guarantees the evidence artifact is non-empty even if the
+          # script dies before its first write — always-upload stays meaningful.
           {
+            echo "=== provenance ==="
             echo "pgas_new_head=${head_sha}"
             echo "pgas_rc_tag=${{ inputs.pgas-rc-tag }}"
             echo "pgas_rc_sha=${{ inputs.pgas-rc-sha }}"
-          } > pgas-new/qc/evidence/${{ github.run_id }}/provenance.txt
+            echo "=================="
+          } > pgas-new/qc/evidence/${{ github.run_id }}/canary.log
           {
             echo "### Consumer bytes under test"
             echo ""
@@ -183,6 +190,13 @@ jobs:
 
       - name: Upload evidence
         # § 4.4: `always()`, so a fail/skip can be post-mortemed.
+        #
+        # The source directory holds exactly ONE file (canary.log). This is a
+        # hard constraint, not a preference: upload-artifact-htpc counts every
+        # entry it observes and fails past MAX_MEMBER_COUNT = 3. § 4.2's second
+        # required item (canary image build log) is N/A here — pgas-new is
+        # pod-less and builds no image — so one consolidated log satisfies the
+        # contract. Do not add sibling files to this directory.
         if: always()
         uses: ./pgas/.github/actions/upload-artifact-htpc
         with:

@@ -37,7 +37,23 @@ EVIDENCE_DIR="qc/evidence/${RUN_ID}"
 mkdir -p "$EVIDENCE_DIR"
 LOG="$EVIDENCE_DIR/canary.log"
 
-# Everything this script prints is evidence (§ 4.2).
+# ONE file in the evidence directory, deliberately.
+#
+# `upload-artifact-htpc` sets MAX_DIRECTORY_ENTRY_OBSERVATIONS = MAX_MEMBER_COUNT
+# = 3 and counts EVERY entry it observes while walking the source directory —
+# so a 4th file fails the upload with "source directory entry observations
+# exceed bound", even on an otherwise clean pass. That is exactly what happened
+# on the 6.1.2 RC1: the engine path returned CANARY_VERDICT=pass and the JOB
+# still failed, afterwards, on the upload.
+#
+# So every transient capture below goes to a SCRATCH dir outside the evidence
+# directory and is folded into this single log. Bound is 3; we use 1, which
+# leaves headroom rather than sitting one file away from the same failure.
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+# Everything this script prints is evidence (§ 4.2). `-a` appends, so the
+# provenance header the workflow writes before this script runs is preserved.
 exec > >(tee -a "$LOG") 2>&1
 
 emit_verdict() {
@@ -123,17 +139,18 @@ echo "=== preflight: can the test runner boot at all? ==="
 PREFLIGHT_TEST=tests/unit/version.test.ts   # tiny, imports no engine code
 preflight() { npx vitest run "$PREFLIGHT_TEST" --config tests/vitest.config.ts --pool=threads; }
 
-if ! preflight > "$EVIDENCE_DIR/preflight.log" 2>&1; then
+if ! preflight > "$SCRATCH/preflight.log" 2>&1; then
   echo "preflight failed — attempting the known npm optional-dependency repair"
-  if grep -q "Cannot find native binding\|Cannot find module '@rolldown/" "$EVIDENCE_DIR/preflight.log"; then
+  cat "$SCRATCH/preflight.log"
+  if grep -q "Cannot find native binding\|Cannot find module '@rolldown/" "$SCRATCH/preflight.log"; then
     # Targeted, and deliberately best-effort: reinstall the optional binaries npm
     # skipped. If this does not fix it, we skip rather than guess.
     npm install --no-save --no-audit --no-fund --force \
       "@rolldown/binding-$(node -p 'process.platform + "-" + process.arch')-gnu" 2>&1 | tail -3 || true
   fi
-  if ! preflight > "$EVIDENCE_DIR/preflight-retry.log" 2>&1; then
-    tail -20 "$EVIDENCE_DIR/preflight-retry.log" || true
-    skip "the vitest toolchain cannot boot in this environment — no conclusion about the rc is possible (see preflight logs in the evidence artifact)"
+  if ! preflight > "$SCRATCH/preflight-retry.log" 2>&1; then
+    cat "$SCRATCH/preflight-retry.log" || true
+    skip "the vitest toolchain cannot boot in this environment — no conclusion about the rc is possible (preflight output is inlined above)"
   fi
 fi
 echo "OK — the test runner boots; a red below is the ENGINE, not the environment."
@@ -172,9 +189,9 @@ for t in "${CANARY_TESTS[@]}"; do
   [ -f "$t" ] || skip "expected canary test '$t' is missing — the suite moved and this canary is measuring the wrong thing"
 done
 
-CANARY_OUT="$EVIDENCE_DIR/canary-tests.log"
+CANARY_OUT="$SCRATCH/canary-tests.log"
 if ! npx vitest run "${CANARY_TESTS[@]}" --config tests/vitest.config.ts --pool=threads > "$CANARY_OUT" 2>&1; then
-  tail -40 "$CANARY_OUT" || true
+  cat "$CANARY_OUT" || true
   # Distinguish once more (§ 2.3): if the runner died rather than a test failing,
   # that is still infra. Only an actual test failure is a regression.
   if grep -q "Cannot find native binding\|Cannot find module '@rolldown/\|ENOSPC\|ECONNRESET" "$CANARY_OUT"; then
