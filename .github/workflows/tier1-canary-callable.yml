@@ -72,8 +72,23 @@ jobs:
 
     steps:
       - name: Checkout pgas-new
+        # `repository` + `ref` + `token` are all REQUIRED here, not optional
+        # tidiness. In a cross-repo `workflow_call` the default checkout resolves
+        # `github.repository` to the CALLER (pgas), so a bare checkout would clone
+        # pgas into `pgas-new/` and the canary would never find its own executor.
+        # The simoneos reference documents the same trap (pgas publish run
+        # 26149949176). The caller-scope GITHUB_TOKEN cannot read another private
+        # repo, hence the pgas-mandated PAT.
+        #
+        # `ref: main` is DELIBERATE and is not a determinism gap: pinning the
+        # callable to a producer SHA freezes the reviewed workflow DEFINITION,
+        # while the canary's purpose is to test pgas-new AS IT IS NOW against the
+        # rc. The exact bytes tested are recorded below.
         uses: actions/checkout@v4
         with:
+          repository: simodelne/pgas-new
+          ref: main
+          token: ${{ secrets.CROSS_CANARY_PAT }}
           path: pgas-new
 
       - name: Checkout pgas (for the htpc artifact action + manifest verifier)
@@ -109,6 +124,24 @@ jobs:
             --run-id "${{ inputs.pgas-rc-run-id }}" \
             --rc-sha "${{ inputs.pgas-rc-sha }}" \
             --manifest-sha256 "${{ inputs.candidate-manifest-sha256 }}"
+
+      - name: Record exact consumer bytes under test
+        # Content-free provenance: with `ref: main` the consumer code can advance
+        # between runs, so every run states the exact pgas-new commit it tested.
+        # Emitted to the step summary AND to the evidence artifact.
+        run: |
+          head_sha="$(git -C pgas-new rev-parse HEAD)"
+          mkdir -p pgas-new/qc/evidence/${{ github.run_id }}
+          {
+            echo "pgas_new_head=${head_sha}"
+            echo "pgas_rc_tag=${{ inputs.pgas-rc-tag }}"
+            echo "pgas_rc_sha=${{ inputs.pgas-rc-sha }}"
+          } > pgas-new/qc/evidence/${{ github.run_id }}/provenance.txt
+          {
+            echo "### Consumer bytes under test"
+            echo ""
+            echo "- **pgas-new HEAD:** \`${head_sha}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Node
         uses: actions/setup-node@v4

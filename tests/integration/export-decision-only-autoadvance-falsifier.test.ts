@@ -282,39 +282,59 @@ describe('export decision-only auto-advance falsifier', () => {
         const result = JSON.parse(String(output.result_json)) as { docx_base64: string; docx_bytes: number; section_count: number };
         expect(result.docx_base64.length).toBeGreaterThan(0);
         expect(result.docx_bytes).toBeGreaterThan(0);
-        // ⚠ D-1 (DEFECT PINNED, simodelne/pgas#1087) — this count is WRONG, and it is
-        // asserted here deliberately so the defect is recorded rather than invisible.
+        // ⚠ D-1 — ENGINE-VERSION-AWARE. Green on BOTH sides of simodelne/pgas#1087.
         //
-        // The drive approves one section carrying APPROVED-OPINION-BODY, so the
-        // deliverable should contain exactly ONE section with that prose. Instead
-        // `section_count` is 3 and the bytes carry three identical copies of a raw
-        // stage-metadata dump, with the approved prose ABSENT entirely.
+        // Two INDEPENDENT defects meet in this drive, and conflating them is what
+        // made the earlier version of this block a release blocker:
         //
-        // Cause: the confirmation loop declares `storage.representation: indexed_array`,
-        // so `items_where_field_eq` over it hits
-        // `if (!Array.isArray(collection)) return []` (create-server.mjs:17369-17385)
-        // and EVERY `summary.confirmation_loop.status_buckets.*` is empty even though
-        // `work.opinion_sections.items.0.status === 'accepted'`. With no approved items,
-        // the emitted TS falls through to its domain-scan fallback and dumps stage
-        // metadata as "content".
+        //   (i)  ENGINE, #1087 — `items_where_field_eq` does
+        //        `if (!Array.isArray(collection)) return []`, and the confirmation
+        //        loop declares `storage.representation: indexed_array`, so every
+        //        `summary.confirmation_loop.status_buckets.*` is empty even though
+        //        `items.0.status === 'accepted'`. FIXED IN 6.1.2.
         //
-        // WHEN #1087 SHIPS THIS FAILS. That is the intended trigger for the render
-        // 0-TS migration: at that point bind `render: section_list` to the (now
-        // correctly populated) accepted bucket, delete the shape-mapping TS, and
-        // replace these assertions with the content assertions below.
-        expect(result.section_count, 'DEFECT: metadata dump, not the deliverable — see #1087').toBe(3);
-        expect(acceptedBucketOf(completed.domain), 'DEFECT: accepted bucket empty despite an accepted item')
-          .toEqual([]);
+        //   (ii) FOUNDRY, ours — `exportBodyField` in domain-synthesis.ts does
+        //        `final_text ?? approved_text ?? proposed_text`, and `stringField`
+        //        returns '' for an empty string while `??` only falls through on
+        //        null/undefined. On a real approved item `final_text` is '' and
+        //        `proposed_text` holds the prose, so '' SHADOWS the prose, the
+        //        caller skips the item as empty, and the export falls back to
+        //        dumping stage metadata. #1087 does NOT fix this — the emitted TS
+        //        never reads the derived bucket at all. Still open, foundry-owned.
+        //
+        // So (ii)'s assertions hold on BOTH engines; only (i)'s bucket flips. The
+        // branch below is keyed on OBSERVED BEHAVIOUR rather than on a version
+        // string, so it tracks the actual capability and cannot rot against a
+        // renumbered release.
         expect(String(completed.domain['work.opinion_sections.items.0.status']), 'the item really is accepted')
           .toBe('accepted');
 
-        // The strongest form of the pin: assert against the BYTES, not a count.
-        // The export writes STORE (uncompressed) OOXML, so authored text appears
-        // verbatim in the payload.
+        const acceptedBucket = acceptedBucketOf(completed.domain);
+        if (acceptedBucket.length === 0) {
+          // Pre-#1087 engine: the derived bucket cannot see an indexed_array.
+          expect(acceptedBucket, 'pre-#1087: accepted bucket empty despite an accepted item').toEqual([]);
+        } else {
+          // Post-#1087 engine. Assert #1087's ACCEPTANCE CRITERIA, not merely that
+          // the bucket is non-empty: it must carry WHOLE ITEM CONTENT, because a
+          // bucket of bare {id,status} would leave the declarative render binding
+          // with nothing to render.
+          expect(acceptedBucket, 'post-#1087: exactly the one accepted item').toHaveLength(1);
+          const [item] = acceptedBucket as Array<Record<string, unknown>>;
+          expect(item.status, 'post-#1087: the bucket filtered on status').toBe('accepted');
+          expect(item.title, 'post-#1087: whole item content preserved (title)').toBe('Opinion 1');
+          expect(item.proposed_text, 'post-#1087: whole item content preserved (prose)')
+            .toBe('APPROVED-OPINION-BODY');
+        }
+
+        // (ii) holds regardless of the engine — these pin the FOUNDRY defect, and
+        // they are what the render 0-TS migration must fix. Asserted against the
+        // BYTES, not a count: the export writes STORE (uncompressed) OOXML, so
+        // authored text appears verbatim in the payload.
+        expect(result.section_count, 'FOUNDRY DEFECT: metadata dump, not the deliverable').toBe(3);
         const docxText = Buffer.from(result.docx_base64, 'base64').toString('latin1');
-        expect(docxText, 'DEFECT: the approved prose is MISSING from the deliverable (#1087)')
+        expect(docxText, 'FOUNDRY DEFECT: the approved prose is MISSING from the deliverable')
           .not.toContain('APPROVED-OPINION-BODY');
-        expect(docxText, 'DEFECT: internal stage metadata is emitted as deliverable content (#1087)')
+        expect(docxText, 'FOUNDRY DEFECT: internal stage metadata is emitted as deliverable content')
           .toContain('drafting_status');
 
         // EXACTLY-ONCE, measured on the real confirmation-loop artifact with NO
