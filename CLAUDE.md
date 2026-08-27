@@ -131,3 +131,85 @@ opted into.
 - Use `apply_patch` for manual edits.
 - Do not revert unrelated user changes.
 - Run verification before claiming completion.
+
+```markdown
+## Cross-repo coordination with pgas (HANDOVER Rule 6 + Contract § 11)
+
+This repo is a registered consumer of `@simodelne/pgas-*`. When you need
+something from pgas that you cannot fix consumer-side, you MUST coordinate
+via the issue-sentinel protocol on `simodelne/pgas`. This is not optional
+— it's the only sanctioned channel between this session and the pgas
+curator session when the human is AFK.
+
+**Canonical spec:** read `pgas/CONSUMER-CANARY-CONTRACT.md` § 11 if you
+need detail beyond what's here. This summary is sufficient for filing
+asks.
+
+### Your sentinel
+
+Every cross-repo ask you file is on `simodelne/pgas` as a new issue with:
+
+- **Title prefix:** `[pgas-new-ask]`
+- **Body first line:** `<<<from-pgas-new-orchestrator-session>>>` followed by an ISO-8601 UTC timestamp
+- **Body sections (all 6, in this order):**
+
+  ```
+  ## What I need
+  ## Why (data-driven evidence)
+  ## Blocking what
+  ## What I've tried (consumer-side workarounds considered)
+  ## Acceptance check I'll run
+  ## Urgency        [BLOCKING | NICE_TO_HAVE | FUTURE]
+  ```
+
+### How pgas curator responds
+
+Every comment from the pgas curator starts with
+`<<<from-pgas-curator-session>>>` followed by a verdict
+(`accept`, `decline`, `need-more-info`, or `escalate`).
+
+- `accept` → curator opens a PR; comment includes URL; issue auto-closes on merge
+- `decline` → curator explains + proposes consumer-side workaround
+- `need-more-info` → curator asks a question; you answer in a follow-up comment with your sentinel
+- `escalate` → curator declined to act autonomously; human curator will handle
+
+### Polling
+
+Poll your open `[pgas-new-ask]` issues every 30 min:
+
+```
+gh issue list -R simodelne/pgas --search "in:title [pgas-new-ask] is:open"
+gh issue view <N> --comments
+```
+
+### Hard limits — DO NOT file asks for any of these
+
+The pgas curator will `escalate` any of these to the human curator, so
+filing them just wastes a polling cycle:
+
+1. MAJOR version bump of pgas (v2.x or higher)
+2. Public API surface changes (Rule 4)
+3. Asks for pgas to edit files in THIS repo (Rule 1)
+4. Architecturally-questionable workarounds (find the root cause first)
+5. Secret rotation, PAT minting, or GitHub UI actions
+
+### Silence as safe failure
+
+If 3+ polling cycles (≥ 90 min) pass without a curator response, STOP
+filing new asks. The human curator will review the thread on return.
+Do not attempt out-of-band coordination.
+
+### Helper script (if vendored)
+
+If `pgas-ask.sh` is present at this repo's root or `scripts/`, use it
+to file asks — it enforces the title prefix + sentinel + 6-section body
+automatically.
+
+### Identifying yourself when you are a sub-agent
+
+Every sub-agent dispatched from this session inherits Rule 6. The sub-agent
+brief MUST include this section verbatim (the propagation rule from
+HANDOVER § Sub-agent contract).
+
+`<<<END-CONSUMER-CLAUDE-MD-SNIPPET>>>`
+grep -qF "<<<BEGIN-CONSUMER-CLAUDE-MD-SNIPPET" CLAUDE.md && \
