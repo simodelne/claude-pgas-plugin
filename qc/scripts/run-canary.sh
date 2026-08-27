@@ -107,6 +107,37 @@ if [ "$INSTALLED" != "$TARBALL_VERSION" ]; then
 fi
 echo "OK — the engine under test IS the release candidate."
 
+# ------------------------------------------------------- TOOLCHAIN PREFLIGHT
+# Before any conclusion about the rc, prove the TEST RUNNER itself can boot in
+# this environment. Without this, an environment fault is indistinguishable from
+# an engine regression and gets reported as `fail` — a FALSE RED, which under
+# § 2.3 is exactly as harmful as a false green: it blocks a good release.
+#
+# This is not hypothetical. The first dry-run of this script reported `fail`
+# when the real cause was npm's long-standing optional-dependency bug
+# (https://github.com/npm/cli/issues/4828) silently omitting
+# `@rolldown/binding-linux-x64-gnu`, so vitest could not load vite at all and
+# ZERO tests executed.
+echo
+echo "=== preflight: can the test runner boot at all? ==="
+PREFLIGHT_TEST=tests/unit/version.test.ts   # tiny, imports no engine code
+preflight() { npx vitest run "$PREFLIGHT_TEST" --config tests/vitest.config.ts --pool=threads; }
+
+if ! preflight > "$EVIDENCE_DIR/preflight.log" 2>&1; then
+  echo "preflight failed — attempting the known npm optional-dependency repair"
+  if grep -q "Cannot find native binding\|Cannot find module '@rolldown/" "$EVIDENCE_DIR/preflight.log"; then
+    # Targeted, and deliberately best-effort: reinstall the optional binaries npm
+    # skipped. If this does not fix it, we skip rather than guess.
+    npm install --no-save --no-audit --no-fund --force \
+      "@rolldown/binding-$(node -p 'process.platform + "-" + process.arch')-gnu" 2>&1 | tail -3 || true
+  fi
+  if ! preflight > "$EVIDENCE_DIR/preflight-retry.log" 2>&1; then
+    tail -20 "$EVIDENCE_DIR/preflight-retry.log" || true
+    skip "the vitest toolchain cannot boot in this environment — no conclusion about the rc is possible (see preflight logs in the evidence artifact)"
+  fi
+fi
+echo "OK — the test runner boots; a red below is the ENGINE, not the environment."
+
 # ------------------------------------------------------------- the real work
 echo
 echo "=== step 4/4: exercise pgas-new's engine coupling against the rc ==="
@@ -141,9 +172,17 @@ for t in "${CANARY_TESTS[@]}"; do
   [ -f "$t" ] || skip "expected canary test '$t' is missing — the suite moved and this canary is measuring the wrong thing"
 done
 
-if ! npx vitest run "${CANARY_TESTS[@]}" --config tests/vitest.config.ts --pool=threads; then
+CANARY_OUT="$EVIDENCE_DIR/canary-tests.log"
+if ! npx vitest run "${CANARY_TESTS[@]}" --config tests/vitest.config.ts --pool=threads > "$CANARY_OUT" 2>&1; then
+  tail -40 "$CANARY_OUT" || true
+  # Distinguish once more (§ 2.3): if the runner died rather than a test failing,
+  # that is still infra. Only an actual test failure is a regression.
+  if grep -q "Cannot find native binding\|Cannot find module '@rolldown/\|ENOSPC\|ECONNRESET" "$CANARY_OUT"; then
+    skip "the test runner faulted mid-run (environment, not the rc)"
+  fi
   fail "the rc regressed pgas-new's render / decision-only engine coupling"
 fi
+cat "$CANARY_OUT"
 echo "OK — render + decision-only paths green against the rc."
 
 echo
