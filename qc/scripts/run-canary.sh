@@ -170,20 +170,36 @@ if ! npm run typecheck; then
 fi
 echo "OK — typechecks against the rc."
 
-# (b) THE RENDER / DECISION PATHS. These drive real synthesized programs
-#     end-to-end against the rc engine: capability: render + RenderProvider +
-#     ArtifactStore + RenderSectionList, and the author-less decision_only
-#     export stage with its AfterMutation-scoped dispatch. They are hermetic
-#     (scripted author, no provider, no GPU), which is what makes them a sound
-#     release gate — a red here is the engine, not model nondeterminism.
+# (b) THE RENDER / DECISION / DELEGATED-CHILD PATHS. These drive real
+#     synthesized programs end-to-end against the rc engine: capability: render
+#     + RenderProvider + ArtifactStore + RenderSectionList, the author-less
+#     decision_only export stage with its AfterMutation-scoped dispatch, and a
+#     DELEGATED CHILD REACHING A TERMINAL MODE. They are hermetic (scripted
+#     author, no provider, no GPU), which is what makes them a sound release
+#     gate — a red here is the engine, not model nondeterminism.
+#
+#     WHY THE DELEGATED-CHILD LEG EXISTS (simodelne/pgas#1116 — do not remove).
+#     PGAS 6.2.0 shipped GREEN through this canary while regressing delegated
+#     children: `hub-tools-falsifier` was NOT in this list, and none of the
+#     other five drives a child to a terminal mode. The generated child kept
+#     proposing its `work -> complete` hop, the engine rejected the completing
+#     call before translation (first-bad fe2c6d3e6 / pgas#1108 promoted a
+#     presentation-only JSON-schema sentinel into a runtime admission
+#     contract), so `work.done` was never written, the child burned its whole
+#     round cap and settled `SC-9 failed` with the parent `degraded`. A canary
+#     that cannot see that is not measuring the engine surface this foundry
+#     actually depends on. `tests/unit/canary-lane-governance.test.ts` fails if
+#     this entry is deleted.
 echo
-echo "--- (b) render + decision-only paths against the rc ---"
+echo "--- (b) render + decision-only + delegated-child paths against the rc ---"
 CANARY_TESTS=(
   tests/integration/render-section-list-falsifier.test.ts
   tests/integration/render-capability-falsifier.test.ts
   tests/integration/export-render-falsifier.test.ts
   tests/integration/export-decision-only-autoadvance-falsifier.test.ts
   tests/integration/pdf-report-export-falsifier.test.ts
+  # Delegated child -> terminal mode (pgas#1116). Governance-locked; see above.
+  tests/integration/hub-tools-falsifier.test.ts
 )
 for t in "${CANARY_TESTS[@]}"; do
   [ -f "$t" ] || skip "expected canary test '$t' is missing — the suite moved and this canary is measuring the wrong thing"
