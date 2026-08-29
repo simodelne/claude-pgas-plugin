@@ -63,7 +63,7 @@ jobs:
     # htpc self-hosted runner carries under the fleet's htpc-only CI policy.
     runs-on: [self-hosted, gpu-pod]
     # § 3 asks new consumers to target <15 minutes. pgas-new's canary is a
-    # typecheck plus five hermetic integration files, so this ceiling is
+    # typecheck plus six hermetic integration files, so this ceiling is
     # generous; it exists to bound a hang, not to budget the work.
     timeout-minutes: 20
     outputs:
@@ -217,5 +217,6 @@ jobs:
             echo ""
             echo "Archetype: install the rc tarball → prove the rc is genuinely loaded"
             echo "(RC-identity gate) → typecheck against the rc's published types →"
-            echo "drive the render / decision-only engine-coupled paths."
+            echo "drive the render / decision-only / delegated-child-terminal"
+            echo "engine-coupled paths."
           } >> "$GITHUB_STEP_SUMMARY"
