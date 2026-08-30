@@ -73,6 +73,16 @@ on:
       consumer-sha-tested:
         description: 'the exact consumer commit whose bytes were tested'
         value: ${{ jobs.canary.outputs.consumer-sha-tested }}
+      callable-definition-sha256:
+        # SHA-256 of THIS callable definition's bytes as checked out at
+        # `consumer-sha`. A called reusable workflow cannot introspect its own
+        # `uses:@SHA`, so this digest is how the CALLER — which does know its own
+        # pin — closes that leg: hash the definition at the SHA it pinned and
+        # require equality. Exporting it is the whole point; computing it without
+        # mapping it out (the defect in 535b9233) leaves the caller unable to
+        # receive or authenticate the value the contract tells it to check.
+        description: 'SHA-256 of the callable definition bytes at consumer-sha, for the caller to authenticate against its own uses:@SHA pin'
+        value: ${{ jobs.canary.outputs.callable-definition-sha256 }}
     secrets:
       # Pgas-mandated (§ 1.3). This is the ONLY secret pgas-new needs: no pod to
       # reach, no registry to push to.
@@ -93,6 +103,7 @@ jobs:
       evidence-artifact: ${{ steps.evidence-name.outputs.name }}
       classification: ${{ steps.verdict.outputs.classification }}
       consumer-sha-tested: ${{ steps.identity.outputs.actual_head }}
+      callable-definition-sha256: ${{ steps.identity.outputs.callable_definition_sha256 }}
 
     steps:
       - name: Checkout pgas-new
