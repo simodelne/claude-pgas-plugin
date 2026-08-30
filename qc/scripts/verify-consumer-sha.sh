@@ -104,6 +104,14 @@ else
     problems+=("callable definition '${CALLABLE_FILE}' is absent at the requested consumer SHA")
   else
     CALLABLE_DIGEST="$(sha256sum "$CALLABLE_FILE" | cut -d' ' -f1)"
+    # The digest is the value the CALLER authenticates its `uses:@SHA` pin
+    # against. There is no `set -e` here, so a failed or absent `sha256sum`
+    # yields an empty string; exporting that alongside classification=ok would
+    # let a caller treat it as "not provided" and skip the check. Fail closed.
+    if ! printf '%s' "$CALLABLE_DIGEST" | grep -Eq '^[0-9a-f]{64}$'; then
+      problems+=("callable definition digest is not a valid SHA-256 (got '${CALLABLE_DIGEST}'); the caller cannot authenticate its uses:@SHA pin")
+      CALLABLE_DIGEST="unavailable"
+    fi
     CHECKED_OUT_CONTRACT="$(sed -n 's/^[[:space:]]*CONSUMER_CANARY_CONTRACT:[[:space:]]*//p' "$CALLABLE_FILE" \
       | head -1 | tr -d '\r"'"'"'' | sed 's/[[:space:]]*$//')"
     if [ -z "$CHECKED_OUT_CONTRACT" ]; then

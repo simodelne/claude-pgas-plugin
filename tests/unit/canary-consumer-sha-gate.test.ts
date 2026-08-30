@@ -15,10 +15,12 @@
  * the workflow would keep passing if the gate logic rotted underneath it.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -30,9 +32,12 @@ const SHA_A = '5e521fc9d74480b9c8c87565296fddc7c8969be1';
 const SHA_B = '12f83d21760a5c86d3ff6f8daf9697c07dbb729b';
 
 /** Run the real gate; return its exit code and combined output. */
-function runGate(args: string[]): { code: number; out: string } {
+function runGate(args: string[], env?: Record<string, string>): { code: number; out: string } {
   try {
-    const out = execFileSync('bash', [GATE, ...args], { encoding: 'utf8', stdio: 'pipe' });
+    const out = execFileSync('bash', [GATE, ...args], {
+      encoding: 'utf8', stdio: 'pipe',
+      env: env === undefined ? process.env : { ...process.env, ...env },
+    });
     return { code: 0, out };
   } catch (error) {
     const e = error as { status?: number; stdout?: string; stderr?: string };
@@ -200,7 +205,13 @@ describe('contract 3.0.0 callable declaration', () => {
   it('binds the gate invocation to the declared inputs', () => {
     // A gate invoked with the wrong operands is a gate that cannot fail. Pin the
     // operands so the call cannot be quietly defanged into a no-op.
-    const step = callable.slice(callable.indexOf('bash pgas-new/qc/scripts/verify-consumer-sha.sh'));
+    // Bound the slice to THIS step. Slicing to end-of-file let a comment
+    // mentioning the canonical path anywhere later satisfy these assertions
+    // while the real invocation was repointed or defanged — the same
+    // assert-on-the-mention trap documented above.
+    const from = callable.indexOf('bash pgas-new/qc/scripts/verify-consumer-sha.sh');
+    const nextStep = callable.indexOf('\n      - name:', from);
+    const step = callable.slice(from, nextStep === -1 ? callable.length : nextStep);
     // Via env, never string-interpolated into `run:` — the validator must not be
     // the injection site for the value it validates.
     expect(step).toContain('--requested "$CONSUMER_SHA"');
@@ -212,6 +223,14 @@ describe('contract 3.0.0 callable declaration', () => {
     expect(step).toContain('--actual "$(git -C pgas-new rev-parse HEAD)"');
     expect(step).toContain('--contract "${CONSUMER_CANARY_CONTRACT}"');
     expect(step).toContain('--evidence');
+    // The digest the caller authenticates against must be of the CALLABLE
+    // DEFINITION. Repointing this operand at any other file still produces a
+    // well-formed digest, so PGAS would happily authenticate the wrong bytes and
+    // believe the uses:@SHA leg was closed. Pin the exact path.
+    expect(
+      step,
+      '--callable-file must hash the callable definition itself, not another file',
+    ).toContain('--callable-file pgas-new/.github/workflows/tier1-canary-callable.yml');
   });
 
   it('classifies an identity fault as config_infra and never as a product fail', () => {
@@ -254,6 +273,76 @@ describe('contract 3.0.0 callable declaration', () => {
     const gate = callable.indexOf('- name: Same-byte consumer identity gate');
     expect(pgasCheckout).toBeGreaterThan(-1);
     expect(pgasCheckout, 'pgas checkout must precede the identity gate').toBeLessThan(gate);
+  });
+
+
+  it('emits a digest that IS the sha256 of the callable definition bytes', () => {
+    // Provenance, not just presence. The caller authenticates its own
+    // `uses:@SHA` pin against this value, so it must be the digest of the
+    // definition bytes and nothing else. Computed at runtime, never hardcoded:
+    // editing this workflow changes its own digest, so a pinned literal would
+    // rot on the very next commit.
+    const bytes = readFileSync(join(repoRoot, CALLABLE));
+    const expected = createHash('sha256').update(bytes).digest('hex');
+    const { code, out } = runGate([
+      '--requested', SHA_A, '--actual', SHA_A,
+      '--contract', '3.0.0', '--callable-file', join(repoRoot, CALLABLE),
+    ]);
+    expect(code, out).toBe(0);
+    expect(out, 'emitted digest must equal sha256(callable definition bytes)')
+      .toContain(`callable_definition_sha256=${expected}`);
+  });
+
+  it('maps the digest out through BOTH the job and workflow_call outputs', () => {
+    // THE 535b9233 DEFECT. The gate computed callable_definition_sha256 and
+    // wrote it as a step output, but neither mapping existed — so a PGAS caller
+    // could never receive or authenticate it, and the documented way to close
+    // the uses:@SHA leg was unreachable. Both layers are required: the job
+    // output alone is invisible across workflow_call, and the workflow_call
+    // output alone has nothing to read.
+    expect(
+      callable,
+      'jobs.canary.outputs must expose the digest from the identity step',
+    ).toContain('callable-definition-sha256: ${{ steps.identity.outputs.callable_definition_sha256 }}');
+    expect(
+      callable,
+      'workflow_call.outputs must expose the digest from the job output',
+    ).toContain('value: ${{ jobs.canary.outputs.callable-definition-sha256 }}');
+  });
+
+  it('resolves both digest mappings structurally, not by text proximity', () => {
+    // Parsed, not pattern-matched. An earlier version bounded a regex by
+    // character distance between the key and its `value:`; that added no kill
+    // power over the exact assertions above and would go red on a
+    // documentation-only edit that lengthened the comment between them.
+    const doc = load(callable) as {
+      on: { workflow_call: { outputs: Record<string, { value: string }> } };
+      jobs: { canary: { outputs: Record<string, string> } };
+    };
+    expect(
+      doc.on.workflow_call.outputs['callable-definition-sha256']?.value,
+      'workflow_call output must read the canary job digest, not another job output',
+    ).toBe('${{ jobs.canary.outputs.callable-definition-sha256 }}');
+    expect(
+      doc.jobs.canary.outputs['callable-definition-sha256'],
+      'job output must read the identity step digest, not another step output',
+    ).toBe('${{ steps.identity.outputs.callable_definition_sha256 }}');
+  });
+
+  it('refuses to export a digest it could not actually compute', () => {
+    // Fail-open guard: an unvalidated `sha256sum` result yields an empty string,
+    // and a caller doing `[ -n "$d" ] && [ "$d" != "$expected" ] && fail` reads
+    // empty as "not provided" and skips the uses:@SHA authentication entirely.
+    const shimDir = mkdtempSync(join(tmpdir(), 'pgas-new-shim-'));
+    writeFileSync(join(shimDir, 'sha256sum'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+    const { code, out } = runGate(
+      ['--requested', SHA_A, '--actual', SHA_A,
+       '--contract', '3.0.0', '--callable-file', join(repoRoot, CALLABLE)],
+      { PATH: `${shimDir}:${process.env.PATH ?? ''}` },
+    );
+    expect(code, out).toBe(3);
+    expect(out).toContain('classification=config_infra');
+    expect(out, 'an uncomputable digest must never be exported as empty').not.toMatch(/^callable_definition_sha256=$/m);
   });
 
   it('keeps the merged pgas#1116 delegated-child probe', () => {
