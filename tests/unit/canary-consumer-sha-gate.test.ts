@@ -303,11 +303,11 @@ describe('contract 3.0.0 callable declaration', () => {
     expect(
       callable,
       'jobs.canary.outputs must expose the digest from the identity step',
-    ).toContain('callable-definition-sha256: ${{ steps.identity.outputs.callable_definition_sha256 }}');
+    ).toContain('callable_definition_sha256: ${{ steps.identity.outputs.callable_definition_sha256 }}');
     expect(
       callable,
       'workflow_call.outputs must expose the digest from the job output',
-    ).toContain('value: ${{ jobs.canary.outputs.callable-definition-sha256 }}');
+    ).toContain('value: ${{ jobs.canary.outputs.callable_definition_sha256 }}');
   });
 
   it('resolves both digest mappings structurally, not by text proximity', () => {
@@ -319,14 +319,24 @@ describe('contract 3.0.0 callable declaration', () => {
       on: { workflow_call: { outputs: Record<string, { value: string }> } };
       jobs: { canary: { outputs: Record<string, string> } };
     };
+    // EXACT UNDERSCORE KEY, step -> job -> workflow_call. PGAS consumes
+    // `needs.<callable>.outputs.callable_definition_sha256`; a hyphenated public
+    // key resolves to EMPTY there rather than erroring — the caller would read
+    // "not provided" and skip authenticating its uses:@SHA pin. Naming is part
+    // of the interface, not cosmetics.
     expect(
-      doc.on.workflow_call.outputs['callable-definition-sha256']?.value,
-      'workflow_call output must read the canary job digest, not another job output',
-    ).toBe('${{ jobs.canary.outputs.callable-definition-sha256 }}');
+      doc.on.workflow_call.outputs['callable_definition_sha256']?.value,
+      'workflow_call output must use the exact underscore key and read the canary job digest',
+    ).toBe('${{ jobs.canary.outputs.callable_definition_sha256 }}');
     expect(
-      doc.jobs.canary.outputs['callable-definition-sha256'],
-      'job output must read the identity step digest, not another step output',
+      doc.jobs.canary.outputs['callable_definition_sha256'],
+      'job output must use the exact underscore key and read the identity step digest',
     ).toBe('${{ steps.identity.outputs.callable_definition_sha256 }}');
+    expect(
+      doc.on.workflow_call.outputs['callable-definition-sha256'],
+      'the hyphenated key must not survive anywhere in the public interface',
+    ).toBeUndefined();
+    expect(doc.jobs.canary.outputs['callable-definition-sha256']).toBeUndefined();
   });
 
   it('refuses to export a digest it could not actually compute', () => {
@@ -343,6 +353,59 @@ describe('contract 3.0.0 callable declaration', () => {
     expect(code, out).toBe(3);
     expect(out).toContain('classification=config_infra');
     expect(out, 'an uncomputable digest must never be exported as empty').not.toMatch(/^callable_definition_sha256=$/m);
+  });
+
+
+  it('never interpolates an expression into a run: block', () => {
+    // STANDING INVARIANT. Every `${{ ... }}` inside `run:` is shell SOURCE
+    // substituted before bash sees it, so a caller-controlled value there
+    // executes on a self-hosted runner. Routing through `env:` makes the same
+    // value inert data. Expressions in action `with:` fields are not implicated
+    // and are deliberately left alone.
+    //
+    // PARSED, not line-scanned. An earlier line scanner armed only on
+    // `^ {8}run:`, so a shorthand `- run: ...` step written without a `name:`
+    // key — valid YAML and an ordinary way to add a step — was never inspected
+    // at all. Walking the parsed step objects closes that hole.
+    //
+    // DELIBERATE: an expression inside a SHELL COMMENT within a `run:` block
+    // still counts as a violation. GitHub substitutes `${{ ... }}` textually
+    // into the whole run string BEFORE bash parses it, so `#` affords no
+    // protection — a value containing a newline ends the comment and the
+    // remainder executes. Exempting comment lines would reopen the class this
+    // test exists to close. YAML comments OUTSIDE a run block are stripped by
+    // the parser and are correctly not flagged, which is why this file can go
+    // on describing the anti-pattern in prose.
+    const doc = load(callable) as {
+      jobs: Record<string, { steps?: Array<{ name?: string; run?: string }> }>;
+    };
+    const violations: string[] = [];
+    for (const [jobId, job] of Object.entries(doc.jobs)) {
+      for (const [index, step] of (job.steps ?? []).entries()) {
+        if (typeof step.run === 'string' && step.run.includes('${{')) {
+          violations.push(`${jobId}.steps[${index}] (${step.name ?? '<unnamed>'})`);
+        }
+      }
+    }
+    expect(
+      violations,
+      `caller-controlled expressions must reach the shell via env:, not interpolation:\n${violations.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('routes every declared input that the shell needs through env', () => {
+    // The env bindings are the mechanism above; pin the ones the run blocks
+    // actually consume so a binding cannot be dropped while its use remains.
+    for (const binding of [
+      'CONSUMER_SHA: ${{ inputs.consumer-sha }}',
+      'PGAS_RC_REPO: ${{ inputs.pgas-rc-repo }}',
+      'PGAS_RC_TAG: ${{ inputs.pgas-rc-tag }}',
+      'PGAS_RC_RUN_ID: ${{ inputs.pgas-rc-run-id }}',
+      'PGAS_RC_SHA: ${{ inputs.pgas-rc-sha }}',
+      'CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate-manifest-sha256 }}',
+    ]) {
+      expect(callable, `missing env binding: ${binding}`).toContain(binding);
+    }
   });
 
   it('keeps the merged pgas#1116 delegated-child probe', () => {
