@@ -16,9 +16,25 @@
 # that a running application would never notice.
 name: pgas-new tier-1 canary (callable)
 
+# Consumer-canary contract version this callable DEFINITION implements.
+# `qc/scripts/verify-consumer-sha.sh` greps this exact key out of the definition
+# checked out at `consumer-sha`; a skew between the running definition and that
+# one means the caller's `uses:@SHA` and `consumer-sha:` disagree.
+env:
+  CONSUMER_CANARY_CONTRACT: 3.0.0
+
 on:
   workflow_call:
     inputs:
+      # ---- contract 3.0.0 (pgas#1122 / pgas-new#335) ----
+      # REQUIRED and deliberately NOT defaulted. A default would silently
+      # reintroduce contract 2.x's mutable-`main` behaviour the first time a
+      # caller forgot to pass it, which is the exact failure this contract
+      # exists to remove. Absent input => GitHub rejects the call at graph build.
+      consumer-sha:
+        description: 'Exact full 40-hex pgas-new commit SHA to test (immutable; never a branch or tag)'
+        required: true
+        type: string
       # NOTE for the pgas-side caller: the § 5.4 template lists only the first
       # three. The simoneos reference and `qc/verify-candidate-manifest.mjs`
       # both require `pgas-rc-sha` and `candidate-manifest-sha256` as well —
@@ -51,6 +67,12 @@ on:
       evidence-artifact:
         description: 'name of the uploaded evidence artifact'
         value: ${{ jobs.canary.outputs.evidence-artifact }}
+      classification:
+        description: 'ok | config_infra — a consumer-sha/callable identity fault is a release-plumbing fault, never a consumer product regression (pgas#1122)'
+        value: ${{ jobs.canary.outputs.classification }}
+      consumer-sha-tested:
+        description: 'the exact consumer commit whose bytes were tested'
+        value: ${{ jobs.canary.outputs.consumer-sha-tested }}
     secrets:
       # Pgas-mandated (§ 1.3). This is the ONLY secret pgas-new needs: no pod to
       # reach, no registry to push to.
@@ -69,6 +91,8 @@ jobs:
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}
       evidence-artifact: ${{ steps.evidence-name.outputs.name }}
+      classification: ${{ steps.verdict.outputs.classification }}
+      consumer-sha-tested: ${{ steps.identity.outputs.actual_head }}
 
     steps:
       - name: Checkout pgas-new
@@ -80,14 +104,17 @@ jobs:
         # 26149949176). The caller-scope GITHUB_TOKEN cannot read another private
         # repo, hence the pgas-mandated PAT.
         #
-        # `ref: main` is DELIBERATE and is not a determinism gap: pinning the
-        # callable to a producer SHA freezes the reviewed workflow DEFINITION,
-        # while the canary's purpose is to test pgas-new AS IT IS NOW against the
-        # rc. The exact bytes tested are recorded below.
+        # CONTRACT 3.0.0: `ref` is the caller-declared immutable `consumer-sha`,
+        # NOT `main`. Under 2.x this said `ref: main` and argued that testing
+        # "pgas-new as it is now" was the point; that made a `pass` certify a
+        # moment rather than an artifact, because the same pinned callable could
+        # test different consumer bytes on two runs. PGAS now binds `uses:@HEAD`
+        # and `consumer-sha: HEAD` to the same value, and the identity gate below
+        # refuses to run the product tests if disk disagrees with the request.
         uses: actions/checkout@v4
         with:
           repository: simodelne/pgas-new
-          ref: main
+          ref: ${{ inputs.consumer-sha }}
           token: ${{ secrets.CROSS_CANARY_PAT }}
           path: pgas-new
 
@@ -95,6 +122,13 @@ jobs:
         # In a cross-repo workflow_call the default token cannot read the pgas
         # repo, so the pgas-mandated PAT is used here as well as for the
         # artifact download itself.
+        #
+        # ORDERED BEFORE THE IDENTITY GATE DELIBERATELY. `Upload evidence` uses a
+        # LOCAL action from `./pgas/.github/actions/upload-artifact-htpc`. If this
+        # checkout ran after the gate, an identity fault would leave `pgas/`
+        # absent, the `always()` upload would die resolving its own action, and
+        # the durable tuple the gate writes before exiting would be discarded —
+        # losing the evidence on exactly the failure the gate exists to record.
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.pgas-rc-repo }}
@@ -102,7 +136,40 @@ jobs:
           token: ${{ secrets.CROSS_CANARY_PAT }}
           path: pgas
 
+      - name: Same-byte consumer identity gate (contract 3.0.0)
+        id: identity
+        # See FIX-1 note in the verdict step: an identity fault must not fail the
+        # JOB, or GitHub drops this callable's outputs and the caller can never
+        # read verdict=skip / classification=config_infra.
+        continue-on-error: true
+        env:
+          # Interpolating `${{ inputs.consumer-sha }}` straight into `run:` would
+          # execute caller-controlled text on a self-hosted runner BEFORE the
+          # validation below can reject it — the validator would be the injection
+          # site. Via env it is inert data.
+          CONSUMER_SHA: ${{ inputs.consumer-sha }}
+        # RUNS BEFORE THE RC IS EVEN FETCHED. A consumer-identity fault must not
+        # burn a product test run, and must never be able to produce a product
+        # signal at all — if we cannot say WHICH bytes we tested, any pass/fail
+        # from those bytes is uninterpretable.
+        #
+        # The gate lives in a script rather than inline YAML so the retained
+        # kill-proof in tests/unit/canary-consumer-sha-gate.test.ts executes the
+        # EXACT bytes this step runs, instead of asserting against a YAML string
+        # that could drift away from the logic it claims to describe.
+        #
+        # Exit 3 => config_infra (release-plumbing fault). Never exit 1, which is
+        # reserved for a genuine consumer product regression (pgas#1122).
+        run: |
+          bash pgas-new/qc/scripts/verify-consumer-sha.sh \
+            --requested "$CONSUMER_SHA" \
+            --actual "$(git -C pgas-new rev-parse HEAD)" \
+            --contract "${CONSUMER_CANARY_CONTRACT}" \
+            --callable-file pgas-new/.github/workflows/tier1-canary-callable.yml \
+            --evidence "pgas-new/qc/evidence/${{ github.run_id }}/canary.log"
+
       - name: Download pgas rc tarballs (from htpc — pgas#442)
+        if: steps.identity.outcome == 'success'
         # pgas#442 migrated rc tarballs off GitHub's artifact store onto htpc.
         # Reading the GitHub store here would silently find nothing.
         uses: ./pgas/.github/actions/download-artifact-htpc
@@ -113,6 +180,7 @@ jobs:
           source-repository: ${{ inputs.pgas-rc-repo }}
 
       - name: Verify exact candidate manifest and packages
+        if: steps.identity.outcome == 'success'
         # IMMUTABILITY GATE. Proves the tarballs are byte-for-byte the ones the
         # rc run produced, bound to that exact commit SHA and manifest digest —
         # so a `pass` certifies a specific artifact, not merely a tag name.
@@ -126,9 +194,13 @@ jobs:
             --manifest-sha256 "${{ inputs.candidate-manifest-sha256 }}"
 
       - name: Record exact consumer bytes under test
-        # Content-free provenance: with `ref: main` the consumer code can advance
-        # between runs, so every run states the exact pgas-new commit it tested.
-        # Emitted to the step summary AND to the evidence artifact.
+        if: steps.identity.outcome == 'success'
+        # Content-free provenance. Under contract 3.0.0 the commit is declared by
+        # the caller rather than discovered, but it is still recorded here so the
+        # evidence artifact stands alone. APPENDS: the identity gate above
+        # already created canary.log and wrote the durable identity tuple into
+        # it, and truncating here would destroy exactly the record a mismatch
+        # post-mortem needs.
         run: |
           head_sha="$(git -C pgas-new rev-parse HEAD)"
           mkdir -p pgas-new/qc/evidence/${{ github.run_id }}
@@ -143,7 +215,7 @@ jobs:
             echo "pgas_rc_tag=${{ inputs.pgas-rc-tag }}"
             echo "pgas_rc_sha=${{ inputs.pgas-rc-sha }}"
             echo "=================="
-          } > pgas-new/qc/evidence/${{ github.run_id }}/canary.log
+          } >> pgas-new/qc/evidence/${{ github.run_id }}/canary.log
           {
             echo "### Consumer bytes under test"
             echo ""
@@ -159,6 +231,7 @@ jobs:
           node-version: '22.12.0'
 
       - name: Run canary script
+        if: steps.identity.outcome == 'success'
         id: canary
         working-directory: pgas-new
         env:
@@ -176,12 +249,27 @@ jobs:
         # outside 0/1/2), the verdict defaults to `skip` — never `pass`. An
         # unexplained crash is by definition not evidence that the rc is good.
         run: |
+          # CONTRACT 3.0.0, pgas#1122 binding amendment: an identity fault is a
+          # configuration/infrastructure class and must NEVER be reported as
+          # `fail`. `skip` still blocks the release under the strict aggregate,
+          # so nothing ships on a mismatch — but the block is attributed to the
+          # release plumbing rather than slandering the consumer's product.
+          classification='${{ steps.identity.outputs.classification }}'
+          [ -n "$classification" ] || classification=config_infra
+          if [ '${{ steps.identity.outcome }}' != 'success' ]; then
+            echo "consumer identity gate did not pass (outcome='${{ steps.identity.outcome }}') — verdict=skip, classification=config_infra"
+            echo "verdict=skip" >> "$GITHUB_OUTPUT"
+            echo "classification=config_infra" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           v='${{ steps.canary.outputs.verdict }}'
           case "$v" in
             pass|fail|skip) ;;
             *) echo "no/unrecognized verdict from the canary script ('$v') — defaulting to skip"; v=skip ;;
           esac
           echo "verdict=$v" >> "$GITHUB_OUTPUT"
+          echo "classification=$classification" >> "$GITHUB_OUTPUT"
 
       - name: Evidence artifact name
         id: evidence-name
@@ -211,6 +299,9 @@ jobs:
             echo "## pgas-new tier-1 canary verdict"
             echo ""
             echo "- **Verdict:** ${{ steps.verdict.outputs.verdict }}"
+            echo "- **Classification:** \`${{ steps.verdict.outputs.classification }}\` (config_infra = release-plumbing fault, NOT a product regression)"
+            echo "- **consumer-sha requested:** \`${{ inputs.consumer-sha }}\`"
+            echo "- **consumer HEAD tested:** \`${{ steps.identity.outputs.actual_head }}\`"
             echo "- **rc tag:** \`${{ inputs.pgas-rc-tag }}\`"
             echo "- **rc sha:** \`${{ inputs.pgas-rc-sha }}\`"
             echo "- **Evidence:** \`${{ steps.evidence-name.outputs.name }}\`"
