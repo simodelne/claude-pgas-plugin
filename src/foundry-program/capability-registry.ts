@@ -237,7 +237,7 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     status: 'refuses',
     evidence: 'native OOXML track changes (w:ins/w:del) are not implemented anywhere on the platform.',
     since_version: '3.22.0',
-    gap_note: 'BLOCKED at platform level (simoneos#1738: current "track changes" is a [Deleted] text-marker simulation). Declare + host-required; not synthesizable until the host implements native revisions.',
+    gap_note: 'BLOCKED at platform level (simoneos#1738, CLOSED NOT_PLANNED 2026-07-28 as a design decision — contract-revision ships plain DOCX; native OOXML w:ins/w:del remains unimplemented, so the current "track changes" is still a [Deleted] text-marker simulation). Declare + host-required; not synthesizable until the host implements native revisions.',
   },
   {
     capability: 'loop_reset',
