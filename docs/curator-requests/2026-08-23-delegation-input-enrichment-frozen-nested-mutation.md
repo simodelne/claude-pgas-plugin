@@ -1,6 +1,9 @@
 # Delegation `inputEnrichment` Mutates A Frozen Nested Payload Object
 
-Status: observed against `@simodelne/pgas-server@5.6.0`. Filed as
+Status: RESOLVED — SHIPPED in `@simodelne/pgas-server@5.7.0` (simodelne/pgas#1044 CLOSED completed 2026-08-24; closing comment: "Shipped and registry-verified in v5.7.0: delegation input enrichment is copy-on-write across frozen nested author payloads", tag `fcbeb1eb`). Recorded 2026-09-05.
+Resolution: `enrichInput`/`setNestedPath` no longer mutate the frozen nested payload; the sibling record `2026-08-24-delegation-request-record-no-longer-retro-enriched.md` documents the behavioral consequence.
+
+Originally observed against `@simodelne/pgas-server@5.6.0`. Filed as
 [`simodelne/pgas#1044`](https://github.com/simodelne/pgas/issues/1044) (write-side
 sibling of the v5.6.0 `readMapPath()` copy-on-write task).
 

@@ -4,6 +4,8 @@
 - **Upstream:** `@simodelne/pgas-server` (engine monorepo `simodelne/pgas`); active ask coordinated with pgas
 - **Origin:** pgas-new governed-logic enforcement Phase 1, Task 2
 - **pgas-new version:** 3.27.2 · engine 3.27.2
+- **Status:** RESOLVED — LANDED in `@simodelne/pgas-server@3.29.0` as `keyed_by` (primitive #3 of the simodelne/pgas#831 roadmap; #831 CLOSED completed 2026-08-07; `engine-primitive-registry.ts` records `since_engine_version: '3.29.0'`, status `landed`; `Specification.keyed_collections` is `emitted` by the foundry, aligned to the v5.6.0 #993 element-typed upsert). Recorded 2026-09-05.
+- **Resolution:** the "active ask" notes below are historical.
 
 ## Why this is upstream (engine boundary)
 Collection identity, idempotent writes, and duplicate suppression are engine-governed computation semantics. pgas-new is a

@@ -1,6 +1,9 @@
 # Declarative render dispatch from an AUTHOR-LESS stage (`decision_only` / integration hook)
 
-**Status:** **HALF-SHIPPED in 6.0.0 — pgas#1054 landed the `IntegrationHook.payload`
+**Status:** RESOLVED — the payload half SHIPPED in `@simodelne/pgas-server@6.0.0` (simodelne/pgas#1054 CLOSED completed 2026-08-24; commit `114be2e7` "feat: enable author-less capability hooks"), and the residual scope half was RESOLVED WITH EXISTING GRAMMAR (simodelne/pgas#1086 CLOSED not-planned 2026-08-26 after an exhaustive audit: bind the hook `AfterMutation` to the one-shot `<stage>.render_pending` write). No engine blocker remains; what is left is foundry-side emission (`EngineCapability.render` stays `adopt_backlog` for that reason only). Recorded 2026-09-05.
+**Resolution:** see `2026-08-25-integration-hook-transition-scoping.md` and the `EngineCapability.render` registry note. The paragraph below is the superseded 2026-08-25 status, kept as history.
+
+**Superseded status (2026-08-25):** **HALF-SHIPPED in 6.0.0 — pgas#1054 landed the `IntegrationHook.payload`
 field asked for below, and it WORKS (reproduced hermetically: an author-less
 `decision_only` stage now mints a first-class `artifactType:"render"` docx — `P-1` in
 `tests/integration/render-section-list-falsifier.test.ts`). The `render:`-tier

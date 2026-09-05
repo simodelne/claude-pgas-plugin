@@ -322,8 +322,9 @@ export function modularSpecFilesFor(spec: Record<string, unknown>): SynthesizedS
     importMap[block] = path;
     // Prepend a human-readable banner ABOVE the real block content. The banner
     // is comments only, but the file is never comment-only (empty blocks are
-    // skipped above), so the 5.6.0 import resolver still parses each fragment to
-    // a YAML mapping. Comments compile to nothing, so behavior is unchanged.
+    // skipped above), so the engine's strict import resolver (5.6.0+, pinned at
+    // 6.6.1 today) still parses each fragment to a YAML mapping. Comments compile
+    // to nothing, so behavior is unchanged.
     blockFiles.push({ path, content: `${blockBannerFor(block)}\n${dump(content, yamlOptions())}` });
   }
 

@@ -63,9 +63,34 @@ internals.
 
 
 
-## Current State - 2026-07-18 (v3.22.0, engine `@simodelne/pgas-server` 3.21.0)
+## Current State - 2026-09-05 (v3.35.0, engine `@simodelne/pgas-server` 6.6.1)
 
-> NOTE: the narrative below is a historical v3.10.1-era snapshot (2026-07-03). The foundry has since advanced through v3.22.0 — upload intake, deterministic DOCX/PDF text extraction, DOCX/HTML export, child-session/research-agent delegation, per-item confirmation loops, and manifest-driven connector reuse of existing repo programs. See the git tags / GitHub releases for current state.
+- Engine pin: `PGAS_SERVER_VERSION = "6.6.1"` (`package.json` `^6.6.1`), landing on branch
+  `feat/adopt-engine-6.6.1` (6.0.0 → 6.6.1). Suite on 6.6.1 (`npm test` exit 0): typecheck clean · manifest 25/25 · unit 142 files /
+  1010 passed / 15 skipped / 0 failed · static 9/9 incl. generated-scaffold install/test.
+- PGAS's consumer canary lock (`qc/canary-lock.json` in simodelne/pgas) pins pgas-new at commit
+  `83afd360`, profile `pgas-new-interim-v6`. `tests/integration/` is therefore byte-pinned — do not
+  edit those files outside a coordinated lock bump.
+- Same-byte callable contract 3.0.0 accepted at `83afd360` (pgas#1122 / pgas-new#335; PRs #336–#338).
+  The canary lane gates delegated-child terminal completion (PR #334): pgas#1116 (6.2.0 regression)
+  CLOSED, fixed in engine 6.2.1 (published 2026-08-29).
+- The parked branch `feat/adopt-engine-6.2.0` (`9bc59552`, HELD on pgas#1116) is superseded by this
+  adoption and can be deleted.
+- The tracked dangling `node_modules` symlink (mode 120000 → a deleted worktree path) is removed from
+  git in the 3.35.0 PR.
+- Local dev notes: vitest 4 / vite 8 need node ≥ 22.12 (CI uses node 24). `npm install` into an empty
+  tree can skip the `@rolldown/binding-linux-x64-gnu` optional dep — fix with `npm ci`, and if still
+  missing `npm install --no-save @rolldown/binding-linux-x64-gnu@<locked version>` (1.0.3 in the
+  current lockfile). Unit and static suites must NOT run concurrently:
+  `lead-research-hermetic-smoke.test.ts` rmSyncs the shared
+  `.dd-report-exp/lead-research/.domain-cache` (ENOENT race observed 2026-09-05).
+- The "Current State - 2026-07-18" and "2026-06-19" sections below are **historical**; retained for
+  reference.
+
+## Current State - 2026-07-18 (v3.22.0, engine `@simodelne/pgas-server` 3.21.0) — historical
+
+> NOTE: this whole section is historical (superseded by the 2026-09-05 section above; the engine
+> target it names, 3.21.0, is no longer current). The narrative below is a v3.10.1-era snapshot (2026-07-03). The foundry has since advanced through v3.22.0 — upload intake, deterministic DOCX/PDF text extraction, DOCX/HTML export, child-session/research-agent delegation, per-item confirmation loops, and manifest-driven connector reuse of existing repo programs. See the git tags / GitHub releases for current state.
 
 - Latest release **v3.10.1** — `main` @ `6acb0ba2`, annotated tag `v3.10.1` (== origin/main HEAD),
   GitHub release published. npm publish N/A (`package.json` is `private: true`). PATCH over v3.10.0.
@@ -94,7 +119,7 @@ internals.
 - Standalone AND attached-repo graduation are clean end-to-end and live-proven (attached: v3.9.0;
   standalone: v3.9.1; rebase-status normalization #112). Gates: typecheck clean · unit 432/5-skip
   · static 9/0.
-- Current server target: latest checked published `@simodelne/pgas-server` is `3.21.0`.
+- Server target at the time of this snapshot: `@simodelne/pgas-server` `3.21.0` (historical — see the 2026-09-05 section for the current 6.6.1 pin).
 - **Merged-branch cleanup (2026-07-03, authorized, merged-only):** deleted 13 merged remote
   branches (chore/v3.9.0-3.10.0-bump, docs/llm-reasoning-synthesis-spec, feat/sota-facet-c-graduation,
   fix/issue-81/95/100, fix/standalone-graduation-106-107, fix/standalone-llm-stage-planning,

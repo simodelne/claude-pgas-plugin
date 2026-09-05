@@ -2,6 +2,9 @@
 
 **From:** pgas-new curator  **To:** pgas engine curator  **Date:** 2026-08-11  **Priority:** MEDIUM (unblocks "purely declarative programs")
 
+**Status:** RESOLVED — SHIPPED in `@simodelne/pgas-server@4.3.0` (simodelne/pgas#884 CLOSED completed 2026-08-13; pgas PR #905 "feat(engine): declarative view: → server-tier ViewProfile replacing projectionBuilder (pgas#884)"; closing comment: "Shipped in v4.3.0 … bare tag `v4.3.0`@`dca3f54`"). Recorded 2026-09-05.
+**Resolution:** the declarative `view:` block replaces per-program `projection.ts`.
+
 ## Goal
 Owner mandate: foundry-generated PGAS programs must be **purely declarative — no business/control logic in per-program
 `.ts` files.** The foundry now enforces a ratchet (no new logic file can be introduced; all logic-bearing emitted

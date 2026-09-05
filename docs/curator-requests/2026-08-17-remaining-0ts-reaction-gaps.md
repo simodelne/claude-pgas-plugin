@@ -1,6 +1,6 @@
 # Remaining 0-TS Reaction Gaps
 
-Status: confirmed against `@simodelne/pgas-server@5.2.0`.
+Status: STILL OPEN on 6.6.1 (re-verified 2026-09-05). Originally confirmed against `@simodelne/pgas-server@5.2.0`. simodelne/pgas#921 (shipped 4.9.0) covers stage-result object typing and was already present when this was written; the gap below — a spec-level `action_map.<action>.result_schema` key — is still absent from 6.6.1 grammar (`result_schema?` appears only in the raw delegation-channel block, `_shared-types.d.ts:3140`). Not re-driven against 6.6.1; grammar check only.
 
 ## Stage-Output Result Schema Materialization
 

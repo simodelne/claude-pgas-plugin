@@ -3,7 +3,7 @@
 `pgas-new` is a PGAS-specific foundry for creating TypeScript/Node PGAS programs. It is not a general coding assistant and it does not scaffold frontend, auth, database, or persistence services beyond explicit attachment points.
 
 The generated code targets the public `@simodelne/pgas-server` surfaces checked by
-`PGAS_SERVER_VERSION` in `src/pgas-new/version.ts` (currently 3.27.2). Generated
+`PGAS_SERVER_VERSION` in `src/pgas-new/version.ts` (currently 6.6.1; foundry v3.35.0). Generated
 package specs use the compatible npm range `^${PGAS_SERVER_VERSION}`:
 
 - `@simodelne/pgas-server/plugin.js`
