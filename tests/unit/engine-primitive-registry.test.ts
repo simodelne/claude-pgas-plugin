@@ -175,7 +175,7 @@ describe('engine-primitive-registry', () => {
     for (const e of ENGINE_PRIMITIVE_REGISTRY) expect(e.request_ref).toMatch(/^docs\/curator-requests\/.+\.md$/);
   });
 
-  it('tracks v4.2.0 through v5.6.0 declaration adoption status', () => {
+  it('tracks v4.2.0 through v6.6.1 declaration adoption status', () => {
     const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
 
     expect(awarenessByConstruct.get('action_map.arg_schema')).toMatchObject({
@@ -270,8 +270,9 @@ describe('engine-primitive-registry', () => {
     });
     expect(awarenessByConstruct.get('ProgramDelegationPolicy.inputEnrichment')?.note).toContain('v5.3.1 #986');
 
-    // v5.6.0 register-only acknowledgements (their consumers are pgas-rag/infra
-    // programs, not foundry-synthesized ones): none is adopt-now.
+    // v5.6.0-era register-only acknowledgements (their consumers are pgas-rag/infra
+    // programs, not foundry-synthesized ones): none is adopt-now, re-verified
+    // against the installed 6.6.1 declaration surface.
     expect(awarenessByConstruct.get('Predicate.FieldKeyedSourceSpan')).toMatchObject({
       status: 'available_unused',
     });
@@ -329,6 +330,82 @@ describe('engine-primitive-registry', () => {
     expect(awarenessByConstruct.get('Specification.keyed_collections')?.note).toContain('#993');
     expect(awarenessByConstruct.get('Specification.schema_invariants')?.note).toContain('#976');
     expect(awarenessByConstruct.get('Specification.view')?.note).toContain('#1014/#1023');
+
+    // pgas#922 (per-item delegation fan-out) CLOSED 2026-08-24, shipped v5.7.0:
+    // the pure:strict notes must record the shipped primitive and must NOT rot
+    // back to claiming fan-out programs wait on an engine ask.
+    for (const construct of ['Specification.pure:strict', 'Feature.pure_strict'] as const) {
+      const note = awarenessByConstruct.get(construct)?.note ?? '';
+      expect(note, `${construct} must cite the shipped fan-out ask`).toContain('#922');
+      expect(note, `${construct} must record the shipping version`).toContain('v5.7.0');
+      expect(note, `${construct} must not claim an open engine ask`).not.toMatch(/wait(s)? for the per-item|blocked on the per-item/i);
+    }
+
+    // Anchors that could not be located by identifier in 6.6.1 say so explicitly
+    // instead of citing a line that does not exist.
+    expect(awarenessByConstruct.get('EngineCapability.document_extraction')?.note).toContain('0 grep hits');
+    expect(awarenessByConstruct.get('collections.invariant_require_on')?.note).toContain('_shared-types.d.ts:3583');
+    expect(awarenessByConstruct.get('collections.invariant_require_on')?.note).toContain('0 grep hits');
+
+    // Confirmed engine fixes recorded on the constructs they affected.
+    expect(awarenessByConstruct.get('derived_paths.items_where_field_eq')?.note).toContain('aea4f7ac');
+    expect(awarenessByConstruct.get('derived_paths.items_where_field_eq')?.note).toContain('v6.1.2');
+    expect(awarenessByConstruct.get('action_map.arg_schema')?.note).toContain('d4d85188');
+    expect(awarenessByConstruct.get('action_map.arg_schema')?.note).toContain('v6.2.1');
+
+    // No note may still cite a pre-6.6.1 line anchor for a construct that moved.
+    for (const entry of ENGINE_DECLARATION_AWARENESS) {
+      expect(entry.note, `${entry.construct} carries a stale PredicateKind/Feature anchor`).not.toMatch(/_shared-types\.d\.ts:(104|141|146)\b/);
+    }
+  });
+
+  it('tracks 6.0.0 through 6.6.1 grammar additions with source-pinned notes', () => {
+    const awarenessByConstruct = new Map(ENGINE_DECLARATION_AWARENESS.map((entry) => [entry.construct, entry]));
+    const expected: ReadonlyArray<readonly [construct: string, status: string, pgasRef: string]> = [
+      ['Specification.fan_out_delegations', 'adopt_backlog', '#922'],
+      ['Feature.fan_out_delegation', 'adopt_backlog', '#922'],
+      ['action_map.mutations.MReplace', 'adopt_backlog', '#1185'],
+      ['action_map.mset_must_change', 'available_unused', '#1209'],
+      ['EnableNotebookOptions.preconditions', 'adopt_backlog', '#1209'],
+      ['action_map.result_collection', 'adopt_backlog', '#1061'],
+      ['Feature.result_collection', 'adopt_backlog', '#1061'],
+      ['ProgramEntry.manifest', 'adopt_backlog', '#1144'],
+      ['ProgramEntry.presentation', 'adopt_backlog', '#1144'],
+      ['ConventionProgramFamilyLoad.registrations', 'available_unused', '#1144'],
+      ['PgasServerConfig.capabilityConfigs', 'adopt_backlog', '#1132'],
+      ['PgasServerConfig.telemetry.authorSink', 'available_unused', '#1115'],
+      ['Predicate.ClaimsSupportedBySource', 'available_unused', '#1083'],
+      ['Predicate.StringTrimmedLengthAtLeast', 'available_unused', '_shared-types.d.ts:268'],
+      ['derived_paths.offset_of/product_of/quotient_of', 'available_unused', '#844.4'],
+      ['Feature.sync_out_resilience', 'available_unused', '_shared-types.d.ts:315'],
+    ];
+
+    for (const [construct, status, pgasRef] of expected) {
+      const entry = awarenessByConstruct.get(construct);
+      expect(entry, `${construct} missing from ENGINE_DECLARATION_AWARENESS`).toBeDefined();
+      expect(entry).toMatchObject({ status });
+      // Source-pinned: every 6.x addition cites a 6.6.1 d.ts anchor and its origin.
+      expect(entry?.note, `${construct} must cite a _shared-types.d.ts anchor`).toMatch(/_shared-types\.d\.ts:\d+/);
+      expect(entry?.note, `${construct} must cite its origin`).toContain(pgasRef);
+      // Every non-emitted addition says whether the foundry emits it today.
+      expect(entry?.note, `${construct} must state emission status`).toMatch(/not emitted|N-A today/i);
+    }
+
+    // The construct set is unique — a duplicated construct would make the
+    // Map-based lookups above silently pick the last writer.
+    const constructs = ENGINE_DECLARATION_AWARENESS.map((entry) => entry.construct);
+    expect(new Set(constructs).size).toBe(constructs.length);
+
+    // MReplace is the typed replacement for the whole-array MAppend / any-typed
+    // MSet escape hatch the foundry emits today; the note must name both so the
+    // emission opportunity cannot rot into a bare acknowledgement.
+    expect(awarenessByConstruct.get('action_map.mutations.MReplace')?.note).toContain('MAppend');
+    expect(awarenessByConstruct.get('action_map.mutations.MReplace')?.note).toContain('synthesizer/topology.ts');
+    // Notebook preconditions are relevant because the governed-attach profile
+    // calls enableNotebook without them.
+    expect(awarenessByConstruct.get('EnableNotebookOptions.preconditions')?.note).toContain('governed-attach-profile.ts:352');
+    // result_collection is relevant because result_path is emitted everywhere.
+    expect(awarenessByConstruct.get('action_map.result_collection')?.note).toContain('result_path');
   });
 
   it('requires backlog, available-unused, and held awareness notes', () => {

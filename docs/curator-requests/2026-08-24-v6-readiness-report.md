@@ -1,5 +1,7 @@
 # pgas-new → v6.0.0 scope-lock readiness
 
+**Status:** SUPERSEDED (recorded 2026-09-05) — this was a point-in-time readiness report to the pgas curator ahead of the 6.0.0 scope lock. Engine 6.0.0 shipped and pgas-new has since adopted 6.0.0 → 6.6.1 (foundry v3.35.0); the "CONDITION B … still OPEN" window in § 5 is closed by that adoption.
+
 **From:** pgas-new (foundry consumer) · 2026-08-24
 **Source-pinned at:** branch `feat/v57-render-sectionlist` @ `7b0fe97e`, engine `@simodelne/pgas-server` **5.7.1**
 **Suite state at that pin:** typecheck + `npm run test:unit` → 134 files / **903 passed / 0 failed** / 14 skipped; `tests/sota` verified explicitly 3 files / 7 passed.

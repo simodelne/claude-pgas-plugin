@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.35.0 — 2026-09-05
+
+- Engine alignment: `PGAS_SERVER_VERSION` 6.0.0 → 6.6.1; generated scaffolds now target `@simodelne/pgas-server@^6.6.1`. Adopts the 6.2.1 fix for the delegated-child terminal regression (pgas#1116, bisected to 6.2.0) and the 6.3–6.6 public grammar. The interim `feat/adopt-engine-6.2.0` branch (held on pgas#1116) is superseded.
+- Canary lane: gate engine releases on delegated-child terminal completion (`tests/integration/hub-tools-falsifier.test.ts`, pgas#1116) (#334).
+- Canary lane: same-byte callable contract 3.0.0 (pgas#1122, pgas-new#335) — callable definition bytes bound to the release; `callable_definition_sha256` exposed to the caller; exact underscore digest key and env-mediated `run:` input on every run (#336, #337, #338). PGAS's consumer canary lock pins pgas-new at `83afd360` (profile `pgas-new-interim-v6`).
+- Repo hygiene: removed the tracked dangling `node_modules` symlink (mode 120000 → a deleted worktree path).
+- Docs: architecture/README/MEMORY version headers refreshed to 6.6.1 / 3.35.0; stale `docs/curator-requests/*` status lines reconciled against closed pgas issues (#884, #921, #922, #1044, #1054, #1055, #1086, #825, #831).
+- Verification on 6.6.1: typecheck clean; manifest 25/25; unit 142 files / 1010 passed / 15 skipped / 0 failed; static 9/9 incl. generated-scaffold install/typecheck/test against the published 6.6.1 package.
+
 ## v3.27.2
 
 - Engine alignment: generated scaffolds now target `@simodelne/pgas-server@3.27.2`.

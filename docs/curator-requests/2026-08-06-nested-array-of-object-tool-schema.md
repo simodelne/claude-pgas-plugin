@@ -5,6 +5,8 @@
 - **Origin:** pgas-new graduated program `lead-research-agent` (v3.26.0); curator repo
   `/home/simone/pgas-intelligence`, flag **F-1** in that repo's `docs/handover/FOUNDRY-FLAGS.md`.
 - **pgas-new version:** 3.26.0 · engine 3.26.0
+- **Status:** RESOLVED — SHIPPED in `@simodelne/pgas-server@3.27.2` (simodelne/pgas#825 CLOSED completed 2026-08-06; pgas PR #827 "release: pgas v3.27.2 — PATCH: nested record-array tool params (items:{object,properties} + array→MAppend fan-out) (pgas#825)"). Recorded 2026-09-05.
+- **Resolution:** the foundry's `reasoning-contract.ts` `record_array` field type landed in pgas-new v3.27.2 on top of it (see `CHANGELOG.md`).
 
 ## Why this is upstream (engine boundary)
 Native tool schema emission (`buildUnifiedTools`) and the tool-arg → state mutation path (MSet / `from_arg`

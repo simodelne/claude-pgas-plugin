@@ -1,11 +1,18 @@
 # PGAS-New Architecture
 
-Status: v3.27.2 foundry release candidate; checked engine version
-`PGAS_SERVER_VERSION` is `@simodelne/pgas-server@3.27.2`.
+Status: v3.35.0 foundry; checked engine version
+`PGAS_SERVER_VERSION` is `@simodelne/pgas-server@6.6.1`.
 
 ## Changelog
 
-### Since v3.1.0 (current foundry: v3.27.2, checked engine 3.27.2)
+### v3.35.0 — engine 6.6.1 alignment
+
+- Engine pin `PGAS_SERVER_VERSION` 6.0.0 → 6.6.1; generated scaffolds now depend on `^6.6.1`. Why: adopt the 6.2.1 fix for the delegated-child terminal regression (simodelne/pgas#1116, bisected to 6.2.0) and the 6.3–6.6 public grammar the engine-primitive registry tracks; no mode of the 12-mode flow changes.
+- Canary lane (`tests/integration/`, pinned by PGAS's consumer canary lock at commit `83afd360`, profile `pgas-new-interim-v6`) now gates delegated-child terminal completion (PR #334) and the same-byte callable contract 3.0.0 (PRs #336–#338, pgas#1122 / pgas-new#335). Why: a release of the engine must not ship while the foundry's generated delegation topology cannot commit its terminal hop.
+- Removed the tracked `node_modules` symlink (mode 120000 → a deleted worktree path). Why: it made fresh clones and `npm ci` fail closed on a dangling link; dependencies are never tracked.
+- Verification on 6.6.1: typecheck clean; manifest 25/25; unit 142 files / 1010 passed / 15 skipped / 0 failed; static 9/9 incl. generated-scaffold install/typecheck/test against the published 6.6.1 package.
+
+### Since v3.1.0 (foundry v3.27.2, checked engine 3.27.2 at the time of writing)
 
 - This doc tracks the foundry architecture, not every release; per-version history lives in the git tags / GitHub releases. Major additions since v3.1.0: real LLM-reasoning domain synthesis; `repo_targeting` + existing-repo attachment; per-item confirmation loops; child-session + research-agent delegation; document upload intake + deterministic DOCX/PDF text extraction; DOCX/HTML export (artifacts are first-class `SessionArtifactRecord`s); and manifest-driven connector reuse of existing repo programs.
 
@@ -33,7 +40,7 @@ The legacy `--template pgas-new-foundry` value is retained only as a hidden comp
 ## PGAS Contract
 
 Generated consumers target the `@simodelne/pgas-server` version recorded by
-`PGAS_SERVER_VERSION` (3.27.2 today; dependency specs use `^${PGAS_SERVER_VERSION}`)
+`PGAS_SERVER_VERSION` (6.6.1 today; dependency specs use `^${PGAS_SERVER_VERSION}`)
 and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`

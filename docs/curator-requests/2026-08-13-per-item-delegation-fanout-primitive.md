@@ -3,6 +3,8 @@
 Filed: 2026-08-13
 Confirmed against: `@simodelne/pgas-server@5.1.0`
 Tracking: pgas #922
+Status: RESOLVED — SHIPPED in `@simodelne/pgas-server@5.7.0` (simodelne/pgas#922 CLOSED completed 2026-08-24; closing comment: "Shipped and registry-verified in v5.7.0: declarative fan-out delegation is in the published engine bundle", tag `fcbeb1eb`). Recorded 2026-09-05.
+Resolution: `Specification.fan_out_delegations` / `Feature.fan_out_delegation` exist in the engine; the "remain non-0-TS until #922 lands" caveat below is historical.
 
 ## Request
 

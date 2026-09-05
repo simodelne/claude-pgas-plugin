@@ -53,6 +53,13 @@ ships the foundry keeps emitting `renderDocxExportStageBody` /
 `approvedContentSectionsFromDomain`, and `EngineCapability.render` stays
 `adopt_backlog`.
 
+**Update (2026-08-26, recorded 2026-09-05):** the "THIRD gap" above did NOT need an engine
+change — simodelne/pgas#1086 was CLOSED (not-planned) after an exhaustive existing-grammar
+audit found the route: bind the hook `AfterMutation` to the one-shot `<stage>.render_pending`
+write (see `2026-08-25-integration-hook-transition-scoping.md`). No engine blocker remains;
+the remaining work is foundry-side emission only, which is why `EngineCapability.render`
+is still `adopt_backlog`. The 2026-08-25 paragraph above is superseded.
+
 ---
 
 ## Original request (2026-08-23, against 5.6.0)
@@ -156,6 +163,9 @@ cannot migrate to declarative `render:`.
 > (`docs/curator-requests/2026-08-25-integration-hook-transition-scoping.md`).
 > `EngineCapability.render` therefore remains `adopt_backlog` for a DIFFERENT, narrower
 > reason than the one described above.
+> **Superseded 2026-08-26 (recorded 2026-09-05):** pgas#1086 CLOSED with no engine change —
+> the scope gap is resolved with the existing `AfterMutation` hook event. Nothing upstream
+> blocks emission any more.
 
 Cross-linked from the `EngineCapability.render` awareness entry in
 `src/foundry-program/engine-primitive-registry.ts` and the

@@ -2,6 +2,9 @@
 
 **From:** pgas-new curator  **To:** pgas engine curator  **Date:** 2026-08-13  **Priority:** HIGH — escalated to PRIMARY (blocks view:/render:/sub-field reactions across the 0-`.ts` campaign)
 
+**Status:** RESOLVED — SHIPPED in `@simodelne/pgas-server@4.9.0` (simodelne/pgas#921 CLOSED completed 2026-08-14; pgas PR #929 "release: pgas v4.9.0 — pgas#921 stage-result object-typing (G1 materialization + G2 view nested read)"). Recorded 2026-09-05.
+**Resolution:** G1 `result_schema` flat-materialization + G2 `view:` nested-read fallback; delegation/tool/child results are readable at typed sub-paths without `parseJsonObject(result_json)`.
+
 ## Escalation
 This was filed as a "secondary residual" in `2026-08-13-per-item-delegation-fanout-primitive.md` (the JSON-string
 explode). A Phase-B baseline measuring the foundry's actual `view:` migration surface **escalates it to a primary

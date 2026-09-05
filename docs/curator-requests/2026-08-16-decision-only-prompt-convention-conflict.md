@@ -2,6 +2,9 @@
 
 **From:** pgas-new curator  **To:** pgas engine curator  **Date:** 2026-08-16  **Priority:** LOW-MED (forces a tiny consumer shim in generated servers)
 
+**Status:** RESOLVED — filed upstream as simodelne/pgas#1055 (CLOSED completed 2026-08-24, same closing timestamp as pgas#1054, the v6.0.0 clean-slate stream); shipped in `@simodelne/pgas-server@6.0.0`. Recorded 2026-09-05.
+**Resolution:** the 6.0.0 bundle's `assertDeclarativePrompts` skips `decisionOnly === true` modes, so the registry no longer requires what the compiler forbids; see the "Second-order note — RESOLVED by pgas#1055" in `2026-08-25-integration-hook-transition-scoping.md`.
+
 ## The conflict
 Adopting `registerProgramByConvention`/`loadProgramByConvention` (#924, 4.12.3) to delete `registration.ts` surfaced a
 compiler-vs-registry inconsistency for **decision-only modes**:

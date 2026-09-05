@@ -53,3 +53,9 @@ the scanned collection. #3 is both the linchpin and the largest gated class. Pri
 Phase 1 enforcement SHIPPED (the mechanism). Phase 2 (migrate emitters declare-or-refuse + expand the registry/gate to the
 full family) and Phase 3 (adopt each primitive as it lands, flip capabilities to `synthesizes`) are gated on the pgas
 5-primitive family. Coordinate cadence: #3 first, then #4/#2, then #1(usable)/#5.
+
+**Footer (2026-09-05): ALL FIVE PRIMITIVES LANDED.** The table above is a historical coordination record; the
+"building"/"asked" cells are stale. simodelne/pgas#831 CLOSED completed 2026-08-07 (closing comment: "Shipped in
+pgas-server v3.30.0 … #4 = numeric-comparison predicates … #5 = recovery_steers"); #2/#3 landed in 3.29.0 and #4/#5
+in 3.30.0 per `src/foundry-program/engine-primitive-registry.ts` (`since_engine_version`), which marks every row
+`landed`. Current engine pin: 6.6.1.
